@@ -11,9 +11,31 @@
 // consultoria, e é ela que faz o segundo cliente não exigir reescrita.
 // ============================================================
 
+import { firstNameForGreeting } from '@/lib/cdl/names'
+
 import { holidayName } from './holidays'
 
 export type DeliveryChannel = 'auto' | 'whatsapp' | 'email' | 'both'
+
+export type CollectionTemplateKind = 'collection' | 'reminder' | 'due_today' | 'new_charge' | 'manual'
+export const COLLECTION_TEMPLATE_KINDS: readonly CollectionTemplateKind[] = ['collection', 'reminder', 'due_today', 'new_charge', 'manual']
+export const COLLECTION_TEMPLATE_KIND_LABELS: Record<CollectionTemplateKind, string> = {
+  collection: 'Cobrança da régua (vencida)',
+  reminder: 'Lembrete antes de vencer',
+  due_today: 'Aviso no dia do vencimento',
+  new_charge: 'Aviso de cobrança nova',
+  manual: 'Cobrar pelo WhatsApp (à mão)',
+}
+export interface CollectionTemplateRef {
+  name: string
+  language: string | null
+  /** Variáveis do corpo, na ordem — aceitam as chaves de TEMPLATE_VARS. */
+  params: string[]
+}
+/** O que pode ir numa variável de template; o executor troca pelos dados da cobrança. */
+export const TEMPLATE_VARS = ['{nome}', '{valor}', '{link}', '{dias}', '{parcelas}'] as const
+/** Preço público do Asaas por aviso de WhatsApp (R$), 09/2026. */
+export const ASAAS_WHATSAPP_FEE_DEFAULT = 0.55
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -56,8 +78,16 @@ export interface CollectionsSettings {
    */
   templateName: string | null
   templateLanguage: string | null
-  /** Variáveis do corpo, na ordem. Aceita `{nome}`. */
+  /** Variáveis do corpo, na ordem. Aceita `{nome}`, `{valor}`, `{link}`, `{dias}`, `{parcelas}` (ver TEMPLATE_VARS). */
   templateParams: string[]
+  /**
+   * Template por TIPO de mensagem (23/09, Rafael Odonto: "criei vários
+   * templates, como o agente sabe qual usar?"). Cada tipo pode ter o seu;
+   * sem entrada, vale o template padrão acima. Chaves: collection (cobrança
+   * da régua), reminder (lembrete antes de vencer), due_today (aviso do dia),
+   * new_charge (aviso de cobrança nova), manual (Cobrar pelo WhatsApp).
+   */
+  templatesByKind: Partial<Record<CollectionTemplateKind, CollectionTemplateRef>>
   /**
    * Por onde cobrar. auto = WhatsApp quando o contato tem telefone, senão
    * e-mail; both = os dois no mesmo toque (boleto no e-mail, lembrete no zap).
@@ -77,6 +107,12 @@ export interface CollectionsSettings {
   emailChannelId: string | null
   /** Status do Asaas que contam como vencido nesta conta. */
   overdueStatuses: string[]
+  /**
+   * Quanto o Asaas cobra por aviso de WhatsApp que ELE manda (R$). Base da
+   * faixa "economia no Asaas" (23/09, ideia do Rafael): cada aviso que sai
+   * pelo CRM é um que o Asaas não cobrou. Padrão = tabela pública do Asaas.
+   */
+  asaasWhatsAppFee: number
   /**
    * Depois de N toques sem o devedor responder, a régua PARA nele e avisa o
    * time. Cobrar para sempre a cada 3 dias é o caminho mais curto para o
@@ -195,10 +231,12 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   templateName: null,
   templateLanguage: null,
   templateParams: [],
+  templatesByKind: {},
   channel: 'auto',
   channelId: null,
   emailChannelId: null,
   overdueStatuses: ['OVERDUE'],
+  asaasWhatsAppFee: ASAAS_WHATSAPP_FEE_DEFAULT,
   maxTouches: 8,
   tone: '',
   emitMaxValue: 500,
@@ -256,10 +294,15 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
     templateParams: Array.isArray(r.templateParams)
       ? r.templateParams.filter((x): x is string => typeof x === 'string').slice(0, 10)
       : [],
+    templatesByKind: normalizeTemplatesByKind(r.templatesByKind),
     channel: r.channel === 'whatsapp' || r.channel === 'email' || r.channel === 'both' ? r.channel : 'auto',
     channelId: typeof r.channelId === 'string' && UUID_RE.test(r.channelId) ? r.channelId : null,
     emailChannelId: typeof r.emailChannelId === 'string' && UUID_RE.test(r.emailChannelId) ? r.emailChannelId : null,
     overdueStatuses: statuses.length ? statuses : [...COLLECTIONS_DEFAULTS.overdueStatuses],
+    asaasWhatsAppFee: (() => {
+      const n = typeof r.asaasWhatsAppFee === 'number' ? r.asaasWhatsAppFee : Number.NaN
+      return Number.isFinite(n) ? Math.min(20, Math.max(0, Math.round(n * 100) / 100)) : ASAAS_WHATSAPP_FEE_DEFAULT
+    })(),
     maxTouches: int(r.maxTouches, 8, 1, 50),
     tone: typeof r.tone === 'string' ? r.tone.slice(0, 600) : '',
     emitMaxValue: (() => {
@@ -1091,4 +1134,94 @@ export function duplicateSuspects(
     byKey.set(k, seen)
   }
   return false
+}
+
+function normalizeTemplatesByKind(raw: unknown): Partial<Record<CollectionTemplateKind, CollectionTemplateRef>> {
+  const out: Partial<Record<CollectionTemplateKind, CollectionTemplateRef>> = {}
+  if (!raw || typeof raw !== 'object') return out
+  for (const kind of COLLECTION_TEMPLATE_KINDS) {
+    const v = (raw as Record<string, unknown>)[kind]
+    if (!v || typeof v !== 'object') continue
+    const name = (v as { name?: unknown }).name
+    if (typeof name !== 'string' || !name.trim()) continue
+    const language = (v as { language?: unknown }).language
+    const params = (v as { params?: unknown }).params
+    out[kind] = {
+      name: name.trim().slice(0, 200),
+      language: typeof language === 'string' && language.trim() ? language.trim().slice(0, 20) : null,
+      params: Array.isArray(params) ? params.filter((x): x is string => typeof x === 'string').slice(0, 10) : [],
+    }
+  }
+  return out
+}
+
+/**
+ * Qual template vale para este tipo de mensagem: o do tipo, senão o padrão,
+ * senão nenhum (a régua recusa e explica, em vez de gravar texto que a Meta
+ * descarta). Puro.
+ */
+export function templateForKind(s: Pick<CollectionsSettings, 'templateName' | 'templateLanguage' | 'templateParams' | 'templatesByKind'>, kind: CollectionTemplateKind): CollectionTemplateRef | null {
+  const own = s.templatesByKind[kind]
+  if (own?.name) return own
+  if (s.templateName) return { name: s.templateName, language: s.templateLanguage, params: s.templateParams }
+  return null
+}
+
+/** O `payload.kind` do pedido → tipo de template. Sem kind = cobrança da régua. */
+export function templateKindOf(kind: unknown): CollectionTemplateKind {
+  return kind === 'reminder' || kind === 'due_today' || kind === 'new_charge' || kind === 'manual' ? kind : 'collection'
+}
+
+export interface TemplateVars {
+  nome: string
+  /** Total já formatado em reais ("R$ 1.234,50"); vazio quando a conta esconde valores. */
+  valor?: string
+  link?: string
+  /** Dias de atraso (régua) ou até vencer (lembrete); "hoje" no aviso do dia. */
+  dias?: string
+  parcelas?: string
+}
+
+/** Troca as chaves de TEMPLATE_VARS pelos dados da cobrança; chave sem dado vira vazio (a Meta rejeita `{valor}` literal). */
+export function fillTemplateParams(params: readonly string[], vars: TemplateVars): string[] {
+  const map: Record<string, string> = {
+    nome: vars.nome,
+    valor: vars.valor ?? '',
+    link: vars.link ?? '',
+    dias: vars.dias ?? '',
+    parcelas: vars.parcelas ?? '',
+  }
+  return params.map((p) => p.replace(/\{(nome|valor|link|dias|parcelas)\}/gi, (_m, k: string) => map[k.toLowerCase()] ?? ''))
+}
+
+/**
+ * Nome da saudação da cobrança (23/09, João/GoLink: "Olá Clínica Jump… pra
+ * ficar Olá Jessica preciso trocar tudo no CRM?"). Regra: nome de PESSOA no
+ * Asaas manda; se o Asaas tem empresa e o contato do CRM parece pessoa, vale
+ * o primeiro nome do contato; senão a empresa como está no Asaas (decisão de
+ * 10/09 continua: o apelido do celular nunca substitui um nome de pessoa do Asaas).
+ */
+export function collectionGreetingName(asaasName: string | null | undefined, crmName: string | null | undefined): string | null {
+  const asaas = (asaasName ?? '').trim()
+  if (asaas && firstNameForGreeting(asaas)) return greetingName(asaas)
+  const crm = firstNameForGreeting(crmName)
+  if (crm) return crm
+  return greetingName(asaas || crmName)
+}
+
+/** Variáveis do template a partir do payload do pedido (régua, lembrete, aviso do dia, cobrança nova). */
+export function templateVarsFromPayload(p: Record<string, unknown>): Omit<TemplateVars, 'nome'> {
+  const total = typeof p.total === 'number' && Number.isFinite(p.total) ? p.total : null
+  const links = Array.isArray(p.links) ? p.links.filter((u): u is string => typeof u === 'string' && !!u) : []
+  const charges = typeof p.charges === 'number' ? p.charges : null
+  let dias = ''
+  if (p.kind === 'due_today') dias = 'hoje'
+  else if (typeof p.dueIn === 'number') dias = String(p.dueIn)
+  else if (typeof p.maxDaysLate === 'number') dias = String(p.maxDaysLate)
+  return {
+    valor: total != null ? total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '',
+    link: links[0] ?? '',
+    dias,
+    parcelas: charges != null ? String(charges) : '',
+  }
 }

@@ -73,11 +73,11 @@ import {
   normalizeSettings,
   reminderKindFor,
   freshReminderItems,
-  greetingName,
   linksInstruction,
   remindedByContact,
   type CollectionsSettings,
   type UpcomingLine,
+  collectionGreetingName,
 } from './rules'
 import { localDayKey, localDayStartIso } from './stale'
 import { seedFrom, tooSimilar } from './variation'
@@ -753,7 +753,7 @@ export async function queueUpcomingReminders(args: {
     )
     // Nome como está no Asaas prevalece (10/09); o contato só cobre o vazio.
     const fullName = (cand.name ?? '').trim() || contact.name || null
-    const firstName = greetingName(fullName)
+    const firstName = collectionGreetingName(cand.name, contact.name)
     const seed = seedFrom(cand.contactId, 0, args.dayKey)
     const text = await draftReminder({
       accountId: args.accountId,

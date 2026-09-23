@@ -57,10 +57,10 @@ import {
   debtorHold,
   fallbackMessage,
   formatDebtSummary,
-  greetingName,
   normalizeSettings,
   type ChargeLine,
   type CollectionsSettings,
+  collectionGreetingName,
 } from './rules'
 import { localDayKey } from './stale'
 import { seedFrom } from './variation'
@@ -274,7 +274,7 @@ export async function prepareManualCollectCore(accountId: string, userId: string
 
   const summary = formatDebtSummary(ctx.charges, { showValues: ctx.settings.showValues })
   const touchCount = ctx.touch?.touchCount ?? 0
-  const text = fallbackMessage(greetingName(ctx.asaasName ?? ctx.contact.name), summary, touchCount, seedFrom(contactId, touchCount, utcDayKey()), {
+  const text = fallbackMessage(collectionGreetingName(ctx.asaasName, ctx.contact.name), summary, touchCount, seedFrom(contactId, touchCount, utcDayKey()), {
     offerDate: ctx.settings.offerDateNegotiation,
   })
   const hold = debtorHold(ctx.touch, null)
@@ -328,7 +328,7 @@ export async function draftManualCollectWithAiCore(accountId: string, contactId:
   const { hour, weekday } = localParts(ctx.tz)
   const maxLate = Math.max(...ctx.charges.map((c) => c.daysLate ?? -1))
   const customerName = ctx.asaasName ?? ctx.contact.name
-  const firstName = greetingName(customerName)
+  const firstName = collectionGreetingName(ctx.asaasName, ctx.contact.name)
   // Semente nova a cada clique: "reescrever" de novo tem que dar outra variação.
   const seed = seedFrom(contactId, touch, utcDayKey(), MANUAL_COLLECT_KIND, Date.now())
   const args = { offerDate: ctx.settings.offerDateNegotiation }
@@ -405,6 +405,7 @@ export async function sendManualCollectCore(accountId: string, userId: string, i
   let sentAsTemplate = false
   let adoptedFromEcho = false
   const outgoingText = signManualCollectText(text, senderName, ctx.signatureEnabled)
+  const summaryForTemplate = formatDebtSummary(ctx.charges, { showValues: ctx.settings.showValues })
   // 📬 O WAHA às vezes devolve erro e ENTREGA (14/09, régua). Um clique que
   // "falhou" há instantes pode já estar na conversa: o mesmo texto para o
   // mesmo devedor, pelo mesmo número, dentro de 2 min, nunca é reenvio
@@ -415,7 +416,15 @@ export async function sendManualCollectCore(accountId: string, userId: string, i
   const copyOf = () =>
     findDeliveredWhatsAppCopy(accountId, { contactId: ctx.contact.id, createdAt: lookbackIso, suggestedText: text }, { conversationId }).catch(() => null)
   try {
-    const gate = await officialTemplateGate(accountId, conversationId)
+    const gate = await officialTemplateGate(accountId, conversationId, {
+      kind: 'manual',
+      vars: {
+        valor: ctx.settings.showValues ? summaryForTemplate.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '',
+        link: summaryForTemplate.links[0] ?? '',
+        dias: String(Math.max(0, ...ctx.charges.map((c) => c.daysLate ?? 0))),
+        parcelas: String(ctx.charges.length),
+      },
+    })
     // A flag vem ANTES do await: se o template lançar, o catch precisa saber
     // que foi template — o texto do rascunho nunca reconhece um template.
     sentAsTemplate = gate.needsTemplate

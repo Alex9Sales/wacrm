@@ -2851,6 +2851,20 @@ export interface SendsReport {
    */
   month: { sent: number; clients: number; repliedClients: number; expired: number }
   rows: SendAuditRow[]
+  /**
+   * 💰 Economia estimada no Asaas (23/09, ideia do Rafael): cada aviso de
+   * WhatsApp que sai pelo CRM é um que o Asaas não cobra (R$ `fee` cada, na
+   * tabela pública dele). Só vale de fato com "O CRM assume os avisos" ligado —
+   * senão o Asaas continua mandando (e cobrando) os dele.
+   */
+  savings: {
+    fee: number
+    notificationsOff: boolean
+    today: { count: number; brl: number }
+    month: { count: number; brl: number }
+    /** Por conta do Asaas, no mês (pedido com parcelas de mais de uma conta entra em "várias contas"). */
+    byConnection: { label: string; count: number; brl: number }[]
+  }
 }
 
 /** Teto de segurança da lista do DIA. Dia normal da GoLink tem ~40. */
@@ -2883,6 +2897,7 @@ export async function getSendsReport(): Promise<SendsReport> {
     today: { sent: 0, failed: 0, waiting: 0, expired: 0, replied: 0, delivered: 0, firstAt: null, lastAt: null, cap: null },
     month: { sent: 0, clients: 0, repliedClients: 0, expired: 0 },
     rows: [],
+    savings: { fee: s.asaasWhatsAppFee, notificationsOff: s.asaasNotificationsOff, today: { count: 0, brl: 0 }, month: { count: 0, brl: 0 }, byConnection: [] },
   }
 
   // O dia e o mês no fuso da conta, como instantes — o banco compara em UTC.
@@ -2974,15 +2989,36 @@ export async function getSendsReport(): Promise<SendsReport> {
   }
   type MesRaw = { enviados: number; clientes: number; clientes_resp: number; expirados: number }
 
+  // 💰 Avisos de WhatsApp que saíram pelo CRM (hoje e no mês), por conta do
+  // Asaas. `result.sentVia` é o que de fato saiu; `payload.connectionId` só
+  // existe quando as parcelas do pedido são de UMA conta.
+  const economia = sql`
+    SELECT coalesce(ac.label, CASE WHEN r.payload->>'connectionId' IS NULL THEN '(várias contas)' ELSE '(conta removida)' END) AS conta,
+           count(*) FILTER (WHERE coalesce(r.executed_at, r.created_at) >= ${inicioDia})::int AS hoje,
+           count(*)::int AS mes
+      FROM agent_action_requests r
+      LEFT JOIN asaas_connections ac ON ac.id::text = r.payload->>'connectionId'
+     WHERE r.account_id = ${accountId}
+       AND r.action_type = 'collect_charges'
+       AND r.status = 'sent'
+       AND r.result->'sentVia' ? 'whatsapp'
+       AND coalesce(r.executed_at, r.created_at) >= ${inicioMes}
+     GROUP BY 1
+     ORDER BY 3 DESC
+  `
+  type EconomiaRaw = { conta: string; hoje: number; mes: number }
+
   const linhasDe = <T,>(res: unknown): T[] =>
     (Array.isArray(res) ? res : ((res as { rows?: unknown[] }).rows ?? [])) as T[]
 
   let raw: Raw[] = []
   let mesRaw: MesRaw[] = []
+  let economiaRaw: EconomiaRaw[] = []
   try {
-    const [a, b] = await Promise.all([db.execute(lista), db.execute(mes)])
+    const [a, b, c] = await Promise.all([db.execute(lista), db.execute(mes), db.execute(economia)])
     raw = linhasDe<Raw>(a as unknown)
     mesRaw = linhasDe<MesRaw>(b as unknown)
+    economiaRaw = linhasDe<EconomiaRaw>(c as unknown)
   } catch (err) {
     // Painel de leitura nunca derruba a tela da carteira.
     console.error('[cobranças] relatório de envios falhou:', err instanceof Error ? err.message : err)
@@ -3047,6 +3083,19 @@ export async function getSendsReport(): Promise<SendsReport> {
       expired: mesRow?.expirados ?? 0,
     },
     rows,
+    savings: (() => {
+      const fee = s.asaasWhatsAppFee
+      const brl = (n: number) => Math.round(n * fee * 100) / 100
+      const hoje = economiaRaw.reduce((acc, r) => acc + (Number(r.hoje) || 0), 0)
+      const mesN = economiaRaw.reduce((acc, r) => acc + (Number(r.mes) || 0), 0)
+      return {
+        fee,
+        notificationsOff: s.asaasNotificationsOff,
+        today: { count: hoje, brl: brl(hoje) },
+        month: { count: mesN, brl: brl(mesN) },
+        byConnection: economiaRaw.map((r) => ({ label: r.conta, count: Number(r.mes) || 0, brl: brl(Number(r.mes) || 0) })),
+      }
+    })(),
   }
 }
 

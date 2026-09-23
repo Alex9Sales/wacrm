@@ -36,7 +36,19 @@ import { NEW_CHARGE_LINK_SENT_ERROR } from '@/lib/collections/new-charge-rules'
 import { resolveCollectionTargets } from '@/lib/collections/outreach'
 import { reminderStillPending } from '@/lib/collections/reminders'
 import { localDayKey, localDayStartIso } from '@/lib/collections/stale'
-import { countsAsCollectionTouch, debtorHold, DUE_TODAY_LINK_SENT_ERROR, holdRefusal, normalizeSettings } from '@/lib/collections/rules'
+import {
+  countsAsCollectionTouch,
+  debtorHold,
+  DUE_TODAY_LINK_SENT_ERROR,
+  fillTemplateParams,
+  holdRefusal,
+  normalizeSettings,
+  templateForKind,
+  templateKindOf,
+  templateVarsFromPayload,
+  type CollectionTemplateKind,
+  type TemplateVars,
+} from '@/lib/collections/rules'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { planStageFollowUp } from '@/lib/ai/followup'
@@ -354,7 +366,10 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
           // primeiro. Com template configurado em Ajustar, manda o template;
           // sem template, recusa dizendo o que resolver, em vez de gravar uma
           // mensagem que a Meta descarta em silêncio.
-          const gate = await officialTemplateGate(input.accountId, targets.whatsapp.conversationId)
+          const gate = await officialTemplateGate(input.accountId, targets.whatsapp.conversationId, {
+            kind: templateKindOf(kind),
+            vars: templateVarsFromPayload(input.payload),
+          })
           if (gate.needsTemplate) {
             if (!gate.templateName) {
               return {
@@ -806,6 +821,8 @@ export async function recordCollectionTouch(accountId: string, contactId: string
 export async function officialTemplateGate(
   accountId: string,
   conversationId: string,
+  /** Tipo da mensagem (template por tipo, 23/09) e os dados para as variáveis. */
+  opts: { kind?: CollectionTemplateKind; vars?: Omit<TemplateVars, 'nome'> } = {},
 ): Promise<{ needsTemplate: boolean; templateName: string | null; templateLanguage: string | null; params: string[] }> {
   const vazio = { needsTemplate: false, templateName: null, templateLanguage: null, params: [] as string[] }
   try {
@@ -835,11 +852,13 @@ export async function officialTemplateGate(
 
     const s = normalizeSettings((await getAccountSettings(accountId)).collections)
     const nome = (row.contactName ?? '').trim().split(/\s+/)[0] || 'cliente'
+    const tpl = templateForKind(s, opts.kind ?? 'collection')
+    if (!tpl) return { needsTemplate: true, templateName: null, templateLanguage: null, params: [] }
     return {
       needsTemplate: true,
-      templateName: s.templateName,
-      templateLanguage: s.templateLanguage,
-      params: s.templateParams.map((p) => p.replace(/\{nome\}/gi, nome)),
+      templateName: tpl.name,
+      templateLanguage: tpl.language,
+      params: fillTemplateParams(tpl.params, { nome, ...(opts.vars ?? {}) }),
     }
   } catch (err) {
     console.error('[cobranca] checagem de template oficial falhou:', err instanceof Error ? err.message : err)

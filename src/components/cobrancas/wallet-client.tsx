@@ -116,7 +116,16 @@ import { SendsPanel } from '@/components/cobrancas/sends-panel';
 import { UpcomingPanel } from '@/components/cobrancas/upcoming-panel';
 import { ManualCollectDialog } from '@/components/cobrancas/manual-collect-dialog';
 import { unlinkDebtorText } from '@/lib/collections/upcoming-unmatched';
-import { CHARGEABLE_STATUSES, WEEKDAY_SHORT, describeWeekdays, type CollectionsSettings } from '@/lib/collections/rules';
+import {
+  CHARGEABLE_STATUSES,
+  COLLECTION_TEMPLATE_KINDS,
+  COLLECTION_TEMPLATE_KIND_LABELS,
+  TEMPLATE_VARS,
+  WEEKDAY_SHORT,
+  describeWeekdays,
+  type CollectionsSettings,
+  type CollectionTemplateKind,
+} from '@/lib/collections/rules';
 import { pauseSourceLabel } from '@/lib/collections/pause-rules';
 import { listApprovedTemplates } from '@/app/(dashboard)/inbox/actions';
 import type { MessageTemplate } from '@/types';
@@ -2125,7 +2134,7 @@ function RulePanel({
     }
   }
 
-  const num = (k: keyof CollectionsSettings, label: string, hint: string, min: number, max: number) => (
+  const num = (k: keyof CollectionsSettings, label: string, hint: string, min: number, max: number, step?: number) => (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={`rule-${String(k)}`}>{label}</Label>
       <Input
@@ -2133,6 +2142,7 @@ function RulePanel({
         type="number"
         min={min}
         max={max}
+        step={step}
         value={String(draft[k] ?? '')}
         onChange={(e) => setDraft({ ...draft, [k]: Number(e.target.value) })}
         className="w-28"
@@ -2207,6 +2217,7 @@ function RulePanel({
             {num('dailyCap', 'Máximo por dia', 'Teto de devedores cobrados por dia.', 1, 500)}
             {num('maxTouches', 'Parar depois de', 'Toques sem resposta antes de devolver para uma pessoa.', 1, 50)}
             {num('emitMaxValue', 'IA pode cobrar até (R$)', 'Teto da ferramenta "Gerar cobrança no Asaas": acima disso a IA não cria sozinha — avisa uma pessoa.', 1, 100000)}
+            {num('asaasWhatsAppFee', 'O Asaas cobra por aviso (R$)', 'Quanto o Asaas cobra por aviso de WhatsApp que ELE manda (tabela pública: R$ 0,55). É a base da faixa "Economia no Asaas" em Envios da régua.', 0, 20, 0.01)}
             {num('reminderDaysBefore', 'Lembrar antes de vencer (dias)', '0 = desligado. Com 3, quem tem parcela vencendo nos próximos 3 dias recebe um aviso leve — não é cobrança. Passa pela mesma fila e teto.', 0, 15)}
             <label className="flex max-w-[16rem] items-start gap-2 text-sm">
               <input type="checkbox" className="mt-1" checked={draft.remindOnDueDate} onChange={(e) => setDraft({ ...draft, remindOnDueDate: e.target.checked })} />
@@ -2352,6 +2363,61 @@ function RulePanel({
               escolhido a régua manda o template; sem ele, ela recusa e explica, em vez de gravar uma mensagem que a Meta descarta.
               Em número não oficial isto é ignorado.
             </p>
+            {draft.templateName && (
+              <TemplateParamsInput
+                id="tpl-cobranca-params"
+                value={draft.templateParams}
+                onChange={(params) => setDraft({ ...draft, templateParams: params })}
+              />
+            )}
+            {templates.length > 0 && (
+              <details className="mt-1">
+                <summary className="cursor-pointer text-xs font-medium text-primary">Template por tipo de mensagem (opcional)</summary>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Cada tipo pode ter o seu template; sem escolha, vale o padrão acima.
+                </p>
+                <div className="mt-2 flex flex-col gap-3">
+                  {COLLECTION_TEMPLATE_KINDS.map((kind) => {
+                    const cur = draft.templatesByKind[kind] ?? null;
+                    return (
+                      <div key={kind} className="flex flex-col gap-1">
+                        <Label htmlFor={`tpl-${kind}`} className="text-xs">
+                          {COLLECTION_TEMPLATE_KIND_LABELS[kind]}
+                        </Label>
+                        <select
+                          id={`tpl-${kind}`}
+                          className="h-8 w-full rounded-md border bg-background px-2 text-sm"
+                          value={cur?.name ?? ''}
+                          onChange={(e) => {
+                            const escolhido = templates.find((x) => x.name === e.target.value);
+                            const next = { ...draft.templatesByKind } as Partial<Record<CollectionTemplateKind, { name: string; language: string | null; params: string[] }>>;
+                            if (escolhido) next[kind] = { name: escolhido.name, language: escolhido.language ?? null, params: cur?.params ?? [] };
+                            else delete next[kind];
+                            setDraft({ ...draft, templatesByKind: next });
+                          }}
+                        >
+                          <option value="">Usar o template padrão</option>
+                          {templates.map((tpl) => (
+                            <option key={tpl.id} value={tpl.name}>
+                              {tpl.name} ({tpl.language})
+                            </option>
+                          ))}
+                        </select>
+                        {cur && (
+                          <TemplateParamsInput
+                            id={`tpl-${kind}-params`}
+                            value={cur.params}
+                            onChange={(params) =>
+                              setDraft({ ...draft, templatesByKind: { ...draft.templatesByKind, [kind]: { ...cur, params } } })
+                            }
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </details>
+            )}
             {!templates.length && (
               <p className="text-xs text-amber-700 dark:text-amber-400">
                 Nenhum template aprovado nesta conta. Eles vêm do WhatsApp Manager depois da aprovação da Meta.
@@ -2864,6 +2930,37 @@ function PromotionPanel({ promo, onChanged }: { promo: PromotionView; onChanged:
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+
+/**
+ * Variáveis do template, na ordem do corpo ({{1}}, {{2}}…), separadas por "|".
+ * Aceitam {nome}, {valor}, {link}, {dias} e {parcelas} — o executor troca
+ * pelos dados da cobrança na hora do envio.
+ */
+function TemplateParamsInput({ id, value, onChange }: { id: string; value: string[]; onChange: (params: string[]) => void }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <Input
+        id={id}
+        value={value.join(' | ')}
+        onChange={(e) =>
+          onChange(
+            e.target.value
+              .split('|')
+              .map((s) => s.trim())
+              .filter(Boolean)
+              .slice(0, 10),
+          )
+        }
+        placeholder="Variáveis na ordem do template, separadas por | — ex.: {nome} | {valor} | {link}"
+        className="h-8 text-sm"
+      />
+      <p className="text-[11px] text-muted-foreground">
+        Uma por variável do template ({'{{1}}'}, {'{{2}}'}…). Aceita {TEMPLATE_VARS.join(', ')}; texto fixo também vale.
+      </p>
     </div>
   );
 }

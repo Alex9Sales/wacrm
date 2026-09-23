@@ -38,13 +38,13 @@ import {
   fallbackMessage,
   formatDebtSummary,
   formatDebtTotal,
-  greetingName,
   linksInstruction,
   normalizeSettings,
   withinWindow,
   type ChargeLine,
   type CollectionsSettings,
   type SkipReason,
+  collectionGreetingName,
 } from './rules'
 import { withAutoSend } from './auto-send'
 
@@ -392,7 +392,8 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
     // no celular ("Loja 77") ou o "primeiro nome" de uma empresa ("Drogaria")
     // saía errado na saudação.
     const customerName = d.asaasName ?? d.name
-    const firstName = greetingName(customerName)
+    // 23/09: empresa no Asaas + pessoa no CRM → cumprimenta a pessoa (collectionGreetingName).
+    const firstName = collectionGreetingName(d.asaasName, d.name)
     const text = await draftCollectionMessage({
       accountId,
       agentId: agent?.id ?? null,

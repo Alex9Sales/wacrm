@@ -76,7 +76,9 @@ import {
 } from './new-charge-rules'
 import { resolveCollectionTargets } from './outreach'
 import { paymentRefsPayload } from './payment-refs'
-import { collectionEmail, dayBlockedReason, duplicateSuspects, greetingName, type CollectionsSettings } from './rules'
+import { collectionEmail, dayBlockedReason, duplicateSuspects, type CollectionsSettings,
+  collectionGreetingName,
+} from './rules'
 import { localDayKey } from './stale'
 
 /**
@@ -537,10 +539,10 @@ export async function queueNewChargeNotices(args: {
       continue
     }
 
-    // Nome como está no Asaas prevalece (decisão 10/09); a ficha só cobre o vazio.
-    const nomeCompleto = (cand.nomeAsaas ?? '').trim() || ficha.name || null
+    // Nome de pessoa no Asaas prevalece (10/09); empresa no Asaas + pessoa na
+    // ficha → cumprimenta a pessoa (23/09, collectionGreetingName).
     const texto = newChargesMessage(
-      greetingName(nomeCompleto),
+      collectionGreetingName(cand.nomeAsaas, ficha.name),
       linhas.map((l) => l.line),
       { showValues: s.showValues },
     )

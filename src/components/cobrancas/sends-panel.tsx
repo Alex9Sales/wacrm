@@ -65,7 +65,8 @@ export function SendsPanel({ timezone = 'America/Sao_Paulo' }: { timezone?: stri
 
   if (!data) return null
 
-  const { today, month, rows } = data
+  const { today, month, rows, savings } = data
+  const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
   const inicio = fmtHora(today.firstAt, timezone)
   const fim = fmtHora(today.lastAt, timezone)
   const nadaHoje = today.sent === 0 && today.waiting === 0 && today.failed === 0
@@ -128,6 +129,32 @@ export function SendsPanel({ timezone = 'America/Sao_Paulo' }: { timezone?: stri
               o número levava a crer que 70 pessoas ficaram sem cobrar. */}
         </span>
       </div>
+
+      {/* 💰 Economia no Asaas (23/09, ideia do Rafael): bem na cara — o cliente
+          vê quanto deixou de pagar ao Asaas antes de reclamar do CRM. */}
+      {savings.month.count > 0 && (
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-border px-4 py-2 text-sm">
+          <span className="font-medium text-emerald-700 dark:text-emerald-400">
+            Economia no Asaas: {brl(savings.month.brl)} no mês
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {savings.month.count} {savings.month.count === 1 ? 'aviso de WhatsApp saiu' : 'avisos de WhatsApp saíram'} pelo CRM
+            {savings.today.count > 0 ? ` · hoje ${savings.today.count} (${brl(savings.today.brl)})` : ''}
+            {' · '}
+            {brl(savings.fee)} cada no Asaas
+          </span>
+          {savings.byConnection.length > 1 && (
+            <span className="text-xs text-muted-foreground">
+              {savings.byConnection.map((c) => `${c.label}: ${brl(c.brl)}`).join(' · ')}
+            </span>
+          )}
+          {!savings.notificationsOff && (
+            <span className="text-xs text-amber-600 dark:text-amber-400">
+              Estimativa: o Asaas ainda manda (e cobra) os avisos dele — ligue &ldquo;O CRM assume os avisos&rdquo; em Ajustar.
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Auditoria: fechada por padrão. Quem quer conferir, abre. */}
       <div className="flex items-center gap-2 border-t border-border px-4 py-2">
