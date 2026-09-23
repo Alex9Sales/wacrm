@@ -61,6 +61,7 @@ import {
   type ChargeLine,
   type CollectionsSettings,
   collectionGreetingName,
+  templateFactsFrom,
 } from './rules'
 import { localDayKey } from './stale'
 import { seedFrom } from './variation'
@@ -197,6 +198,7 @@ async function loadDebtor(accountId: string, contactId: string): Promise<ManualC
       interestValue: asaasCharges.interestValue,
       dueDate: asaasCharges.dueDate,
       invoiceUrl: asaasCharges.invoiceUrl,
+      description: asaasCharges.description,
       open: asaasCharges.open,
       connectionLabel: asaasConnections.label,
     })
@@ -221,6 +223,7 @@ async function loadDebtor(accountId: string, contactId: string): Promise<ManualC
       document: r.cpfCnpj,
       customerName: r.customerName,
       value: Number(r.value ?? 0),
+      description: r.description,
       interestValue: r.interestValue != null ? Number(r.interestValue) : null,
       dueDate: r.dueDate,
       daysLate: late,
@@ -431,6 +434,10 @@ export async function sendManualCollectCore(accountId: string, userId: string, i
         link: summaryForTemplate.links[0] ?? '',
         dias: String(Math.max(0, ...ctx.charges.map((c) => c.daysLate ?? 0))),
         parcelas: String(ctx.charges.length),
+        ...(() => {
+          const f = templateFactsFrom(ctx.charges)
+          return { vencimento: f.dueDateText, descricao: f.descriptionText }
+        })(),
       },
     })
     // A flag vem ANTES do await: se o template lançar, o catch precisa saber
@@ -451,6 +458,7 @@ export async function sendManualCollectCore(accountId: string, userId: string, i
         templateName: gate.templateName,
         templateLanguage: gate.templateLanguage,
         templateParams: gate.params,
+        ...(gate.buttonParams ? { templateMessageParams: { body: gate.params, buttonParams: gate.buttonParams } } : {}),
       })
     } else {
       const already = await copyOf()
@@ -503,6 +511,7 @@ export async function sendManualCollectCore(accountId: string, userId: string, i
         lines: summary.lines,
         links: summary.links,
         now: nowIso,
+        ...templateFactsFrom(ctx.charges),
         refs: ctx.charges.map((c) => ({ asaasId: c.asaasId ?? '', connectionId: c.connectionId ?? '' })).filter((r) => r.asaasId && r.connectionId),
       }),
     )

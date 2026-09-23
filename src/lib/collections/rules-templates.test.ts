@@ -7,6 +7,7 @@ import {
   missingTemplateVars,
   normalizeSettings,
   templateForKind,
+  templateFactsFrom,
   templateKindOf,
   templateVarsFromPayload,
 } from './rules'
@@ -43,6 +44,16 @@ describe('templates por tipo de mensagem (23/09)', () => {
     expect(templateKindOf('qualquer')).toBe('collection')
   })
 
+  it('templateFactsFrom: vencimento da parcela mais antiga e a 1ª descrição', () => {
+    expect(
+      templateFactsFrom([
+        { dueDate: '2026-09-25', description: null },
+        { dueDate: '2026-08-10', description: 'RA Play Master' },
+      ]),
+    ).toEqual({ dueDateText: '10/08/2026', descriptionText: 'RA Play Master' })
+    expect(templateFactsFrom([])).toEqual({ dueDateText: '', descriptionText: '' })
+  })
+
   it('fillTemplateParams troca as chaves e zera as sem dado (a Meta rejeita chave literal)', () => {
     expect(fillTemplateParams(['{nome}', 'Parcela de {valor}', '{link}', '{DIAS}', 'fixo'], { nome: 'Ana', valor: 'R$ 10,00', link: 'https://x' })).toEqual([
       'Ana',
@@ -64,12 +75,19 @@ describe('templates por tipo de mensagem (23/09)', () => {
       // Intl usa espaço inflexível entre "R$" e o número.
       valor: (1234.5).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }),
       link: 'https://a',
+      vencimento: '',
+      descricao: '',
       dias: '7',
       parcelas: '2',
     })
     expect(templateVarsFromPayload({ kind: 'reminder', dueIn: 3 }).dias).toBe('3')
     expect(templateVarsFromPayload({ kind: 'due_today', dueIn: 0 }).dias).toBe('hoje')
-    expect(templateVarsFromPayload({})).toEqual({ valor: '', link: '', dias: '', parcelas: '' })
+    expect(templateVarsFromPayload({})).toEqual({ valor: '', link: '', vencimento: '', descricao: '', dias: '', parcelas: '' })
+    // Vencimento e descrição vêm prontos do pedido (templateFactsFrom).
+    expect(templateVarsFromPayload({ dueDateText: '25/09/2026', descriptionText: 'RA Play Master' })).toMatchObject({
+      vencimento: '25/09/2026',
+      descricao: 'RA Play Master',
+    })
   })
 })
 
@@ -123,5 +141,27 @@ describe('asaasWhatsAppFee', () => {
   })
   it('ajuste pontual nunca zera o padrão de quem não mexeu', () => {
     expect(normalizeSettings({ templateName: 'x' }).asaasWhatsAppFee).toBe(ASAAS_WHATSAPP_FEE_DEFAULT)
+  })
+})
+
+// 23/09 (Rafael): botão "Pagar agora" com URL https://www.asaas.com/i/{{1}} —
+// a Meta quer só o código do link, não a URL inteira.
+import { templateButtonValue } from './rules'
+
+describe('templateButtonValue — parâmetro do botão do template', () => {
+  const BTN = 'https://www.asaas.com/i/{{1}}'
+  it('prefixo igual → manda só o sufixo (o código da cobrança)', () => {
+    expect(templateButtonValue(BTN, 'https://www.asaas.com/i/u8d4zbxp23hjsukh')).toBe('u8d4zbxp23hjsukh')
+  })
+  it('outro domínio/sandbox → o último pedaço do link', () => {
+    expect(templateButtonValue(BTN, 'https://sandbox.asaas.com/i/abc123')).toBe('abc123')
+    expect(templateButtonValue(BTN, 'https://www.asaas.com/i/abc123?utm=x')).toBe('abc123')
+  })
+  it('sem link → null (o gate recusa em vez de estourar no envio)', () => {
+    expect(templateButtonValue(BTN, null)).toBeNull()
+    expect(templateButtonValue(BTN, '')).toBeNull()
+  })
+  it('{{1}} no meio da URL → null (não dá para montar com segurança)', () => {
+    expect(templateButtonValue('https://x.com/{{1}}/pagar', 'https://x.com/abc/pagar')).toBeNull()
   })
 })

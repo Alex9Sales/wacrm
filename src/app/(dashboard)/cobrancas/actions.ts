@@ -2859,11 +2859,13 @@ export interface SendsReport {
    * senão o Asaas continua mandando (e cobrando) os dele.
    */
   savings: {
+    /** R$ por aviso que o Asaas cobra: WhatsApp e e-mail (o CRM manda os dois). */
     fee: number
+    emailFee: number
     notificationsOff: boolean
-    /** Avisos = PARCELAS avisadas (o Asaas cobra por cobrança, não por mensagem). Só canal NÃO oficial. */
-    today: { count: number; brl: number }
-    month: { count: number; brl: number }
+    /** Avisos = PARCELAS avisadas (o Asaas cobra por cobrança, não por mensagem), WhatsApp não oficial + e-mail. */
+    today: { count: number; brl: number; whatsapp: number; email: number }
+    month: { count: number; brl: number; whatsapp: number; email: number }
     /** Por conta do Asaas: mês e hoje. */
     byConnection: { label: string; count: number; brl: number; today: { count: number; brl: number } }[]
     /** Parcelas avisadas pela API OFICIAL no mês — a Meta cobra a conversa, então não entram na economia. */
@@ -2901,7 +2903,15 @@ export async function getSendsReport(): Promise<SendsReport> {
     today: { sent: 0, failed: 0, waiting: 0, expired: 0, replied: 0, delivered: 0, firstAt: null, lastAt: null, cap: null },
     month: { sent: 0, clients: 0, repliedClients: 0, expired: 0 },
     rows: [],
-    savings: { fee: s.asaasWhatsAppFee, notificationsOff: s.asaasNotificationsOff, today: { count: 0, brl: 0 }, month: { count: 0, brl: 0 }, byConnection: [], officialMonth: 0 },
+    savings: {
+      fee: s.asaasWhatsAppFee,
+      emailFee: s.asaasEmailFee,
+      notificationsOff: s.asaasNotificationsOff,
+      today: { count: 0, brl: 0, whatsapp: 0, email: 0 },
+      month: { count: 0, brl: 0, whatsapp: 0, email: 0 },
+      byConnection: [],
+      officialMonth: 0,
+    },
   }
 
   // O dia e o mês no fuso da conta, como instantes — o banco compara em UTC.
@@ -3014,6 +3024,7 @@ export async function getSendsReport(): Promise<SendsReport> {
              '(sem conta)'
            ) AS conta,
            (chn.provider IN (${sql.join(oficiais.map((p) => sql`${p}`), sql`, `)})) AS oficial,
+           (r.result->'sentVia' ? 'email') AS por_email,
            sum(${parcelas}) FILTER (WHERE coalesce(r.executed_at, r.created_at) >= ${inicioDia})::int AS hoje,
            sum(${parcelas})::int AS mes
       FROM agent_action_requests r
@@ -3023,12 +3034,12 @@ export async function getSendsReport(): Promise<SendsReport> {
      WHERE r.account_id = ${accountId}
        AND r.action_type = 'collect_charges'
        AND r.status = 'sent'
-       AND r.result->'sentVia' ? 'whatsapp'
+       AND (r.result->'sentVia' ? 'whatsapp' OR r.result->'sentVia' ? 'email')
        AND coalesce(r.executed_at, r.created_at) >= ${inicioMes}
-     GROUP BY 1, 2
-     ORDER BY 4 DESC
+     GROUP BY 1, 2, 3
+     ORDER BY 5 DESC
   `
-  type EconomiaRaw = { conta: string; oficial: boolean | null; hoje: number; mes: number }
+  type EconomiaRaw = { conta: string; oficial: boolean | null; por_email: boolean | null; hoje: number; mes: number }
 
   const linhasDe = <T,>(res: unknown): T[] =>
     (Array.isArray(res) ? res : ((res as { rows?: unknown[] }).rows ?? [])) as T[]
@@ -3107,24 +3118,42 @@ export async function getSendsReport(): Promise<SendsReport> {
     rows,
     savings: (() => {
       const fee = s.asaasWhatsAppFee
-      const brl = (n: number) => Math.round(n * fee * 100) / 100
-      const gratis = economiaRaw.filter((r) => r.oficial !== true)
-      const hoje = gratis.reduce((acc, r) => acc + (Number(r.hoje) || 0), 0)
-      const mesN = gratis.reduce((acc, r) => acc + (Number(r.mes) || 0), 0)
-      const porConta = new Map<string, { mes: number; hoje: number }>()
-      for (const r of gratis) {
-        const cur = porConta.get(r.conta) ?? { mes: 0, hoje: 0 }
-        porConta.set(r.conta, { mes: cur.mes + (Number(r.mes) || 0), hoje: cur.hoje + (Number(r.hoje) || 0) })
+      const emailFee = s.asaasEmailFee
+      // Cada linha é (conta, oficial?, por e-mail?). A parcela que saiu no
+      // WhatsApp E no e-mail conta nos dois — o Asaas cobraria os dois avisos.
+      const linhaVale = (r: EconomiaRaw) => (r.por_email === true ? emailFee : r.oficial === true ? 0 : fee)
+      const vale = (rs: EconomiaRaw[], campo: 'hoje' | 'mes') =>
+        Math.round(rs.reduce((acc, r) => acc + (Number(r[campo]) || 0) * linhaVale(r), 0) * 100) / 100
+      // Parcelas que entram na conta: e-mail sempre, WhatsApp só não oficial.
+      const conta = economiaRaw.filter((r) => r.por_email === true || r.oficial !== true)
+      const somaDe = (rs: EconomiaRaw[], campo: 'hoje' | 'mes') => rs.reduce((acc, r) => acc + (Number(r[campo]) || 0), 0)
+      const porWa = conta.filter((r) => r.por_email !== true)
+      const porEmail = conta.filter((r) => r.por_email === true)
+      const porConta = new Map<string, { mes: number; hoje: number; brlMes: number; brlHoje: number }>()
+      for (const r of conta) {
+        const cur = porConta.get(r.conta) ?? { mes: 0, hoje: 0, brlMes: 0, brlHoje: 0 }
+        porConta.set(r.conta, {
+          mes: cur.mes + (Number(r.mes) || 0),
+          hoje: cur.hoje + (Number(r.hoje) || 0),
+          brlMes: cur.brlMes + (Number(r.mes) || 0) * linhaVale(r),
+          brlHoje: cur.brlHoje + (Number(r.hoje) || 0) * linhaVale(r),
+        })
       }
       return {
         fee,
+        emailFee,
         notificationsOff: s.asaasNotificationsOff,
-        today: { count: hoje, brl: brl(hoje) },
-        month: { count: mesN, brl: brl(mesN) },
+        today: { count: somaDe(conta, 'hoje'), brl: vale(conta, 'hoje'), whatsapp: somaDe(porWa, 'hoje'), email: somaDe(porEmail, 'hoje') },
+        month: { count: somaDe(conta, 'mes'), brl: vale(conta, 'mes'), whatsapp: somaDe(porWa, 'mes'), email: somaDe(porEmail, 'mes') },
         byConnection: [...porConta.entries()]
-          .sort((a, b) => b[1].mes - a[1].mes)
-          .map(([label, v]) => ({ label, count: v.mes, brl: brl(v.mes), today: { count: v.hoje, brl: brl(v.hoje) } })),
-        officialMonth: economiaRaw.filter((r) => r.oficial === true).reduce((acc, r) => acc + (Number(r.mes) || 0), 0),
+          .sort((a, b) => b[1].brlMes - a[1].brlMes)
+          .map(([label, v]) => ({
+            label,
+            count: v.mes,
+            brl: Math.round(v.brlMes * 100) / 100,
+            today: { count: v.hoje, brl: Math.round(v.brlHoje * 100) / 100 },
+          })),
+        officialMonth: economiaRaw.filter((r) => r.oficial === true && r.por_email !== true).reduce((acc, r) => acc + (Number(r.mes) || 0), 0),
       }
     })(),
   }

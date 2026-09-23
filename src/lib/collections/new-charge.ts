@@ -78,6 +78,7 @@ import { resolveCollectionTargets } from './outreach'
 import { paymentRefsPayload } from './payment-refs'
 import { collectionEmail, dayBlockedReason, duplicateSuspects, type CollectionsSettings,
   collectionGreetingName,
+  templateFactsFrom,
 } from './rules'
 import { localDayKey } from './stale'
 
@@ -598,6 +599,7 @@ export async function queueNewChargeNotices(args: {
           links: linhas.map((l) => l.line.url),
           charges: linhas.length,
           greetingName: saudacao,
+          ...templateFactsFrom(linhas.map((l) => ({ dueDate: l.line.dueDate, description: l.line.description })), { pick: 'nearest' }),
           total: linhas.reduce((acc, l) => acc + l.line.value, 0),
           touch: 0,
           delivery: delivery.label,

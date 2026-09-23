@@ -45,6 +45,7 @@ import {
   type CollectionsSettings,
   type SkipReason,
   collectionGreetingName,
+  templateFactsFrom,
 } from './rules'
 import { withAutoSend } from './auto-send'
 
@@ -158,6 +159,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       interestValue: asaasCharges.interestValue,
       dueDate: asaasCharges.dueDate,
       invoiceUrl: asaasCharges.invoiceUrl,
+      description: asaasCharges.description,
       connectionLabel: asaasConnections.label,
       lastTouchAt: collectionsTouches.lastTouchAt,
       touchCount: collectionsTouches.touchCount,
@@ -247,6 +249,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       document: r.cpfCnpj,
       customerName: r.customerName,
       value: Number(r.value ?? 0),
+      description: r.description,
       interestValue: r.interestValue != null ? Number(r.interestValue) : null,
       dueDate: r.dueDate,
       daysLate: late,
@@ -465,6 +468,8 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
         delivery: delivery.label,
         // Saudação já decidida (pessoa × empresa): o template da API oficial usa em {nome}.
         greetingName: firstName,
+        // Vencimento e descrição para as variáveis {vencimento}/{descricao}.
+        ...templateFactsFrom(d.charges),
         // 23/09: a conta do Asaas de cada parcela — a faixa "Economia no Asaas"
         // quebra por conta (`connectionId` só quando todas são da mesma).
         connectionIds: [...new Set(d.charges.map((c) => c.connectionId).filter((x): x is string => !!x))],

@@ -139,9 +139,11 @@ export function SendsPanel({ timezone = 'America/Sao_Paulo' }: { timezone?: stri
           </span>
           <span className="text-xs text-muted-foreground">
             {savings.month.count} {savings.month.count === 1 ? 'aviso de cobrança saiu' : 'avisos de cobrança saíram'} pelo CRM
+            {savings.month.whatsapp > 0 || savings.month.email > 0
+              ? ` (${savings.month.whatsapp} no WhatsApp a ${brl(savings.fee)} · ${savings.month.email} por e-mail a ${brl(savings.emailFee)})`
+              : ''}
             {savings.today.count > 0 ? ` · hoje ${savings.today.count} (${brl(savings.today.brl)})` : ''}
-            {' · '}
-            {brl(savings.fee)} cada no Asaas (estimativa)
+            {' · estimativa'}
           </span>
           {savings.byConnection.length > 1 && (
             <span className="text-xs text-muted-foreground">

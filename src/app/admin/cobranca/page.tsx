@@ -86,7 +86,7 @@ export default async function AdminCobrancaPage() {
           label="Economia no Asaas (mês)"
           value={brl(d.totals.savingsMonthBrl)}
           tone="good"
-          hint={`${d.totals.savingsMonthCount} parcela(s) avisada(s) pelo CRM${d.totals.officialMonth > 0 ? ` · ${d.totals.officialMonth} pela API oficial (fora da conta)` : ''}`}
+          hint={`${d.totals.savingsMonthCount} aviso(s) de cobrança pelo CRM — WhatsApp e e-mail${d.totals.officialMonth > 0 ? ` · ${d.totals.officialMonth} pela API oficial (fora da conta)` : ''}`}
         />
         <Stat label="Ainda vencido na carteira" value={brl(d.totals.openValue)} hint="o que a régua ainda tem para trazer" />
       </div>
@@ -144,7 +144,9 @@ export default async function AdminCobrancaPage() {
                         {a.savings.todayCount > 0 ? `${brl(a.savings.todayBrl)} · ${a.savings.todayCount}` : '—'}
                       </td>
                       <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
-                        {a.savings.monthCount > 0 ? `${brl(a.savings.monthBrl)} · ${a.savings.monthCount}` : '—'}
+                        {a.savings.monthCount > 0
+                          ? `${brl(a.savings.monthBrl)} · ${a.savings.whatsappMonth} zap + ${a.savings.emailMonth} e-mail`
+                          : '—'}
                         {a.officialMonth > 0 ? <span className="block text-[11px]">+{a.officialMonth} oficial</span> : null}
                       </td>
                       <td className="px-4 py-2.5 text-right tabular-nums">
@@ -169,8 +171,9 @@ export default async function AdminCobrancaPage() {
       <p className="text-xs text-muted-foreground">
         Como o número é feito: <b>recuperado</b> soma as parcelas que o Asaas marcou como pagas (RECEIVED/CONFIRMED) e que tiveram uma
         cobrança nossa enviada nos 45 dias antes de saírem da carteira — parcela apagada no Asaas nunca entra. <b>Economia</b> conta
-        parcelas avisadas pelo CRM (o Asaas cobra por cobrança, não por mensagem) × a taxa configurada em Cobranças → Ajustar, e só vale de
-        fato com &ldquo;O CRM assume os avisos&rdquo; ligado. Envio pela API oficial fica fora: lá quem cobra a conversa é a Meta.
+        os avisos de cobrança que saíram pelo CRM (o Asaas cobra por cobrança, não por mensagem): WhatsApp × a taxa de WhatsApp e e-mail ×
+        a taxa de e-mail, as duas configuradas em Cobranças → Ajustar (padrão R$ 0,55 e R$ 0,99). Só vale de fato com &ldquo;O CRM assume os
+        avisos&rdquo; ligado. Envio pela API oficial fica fora: lá quem cobra a conversa é a Meta.
       </p>
     </div>
   )

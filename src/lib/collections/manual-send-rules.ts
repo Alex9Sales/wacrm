@@ -141,6 +141,9 @@ export interface ManualCollectRequestArgs {
   links: string[]
   /** ISO de agora. */
   now: string
+  /** Vencimento (dd/mm/aaaa) e descrição da parcela — variáveis do template. */
+  dueDateText?: string
+  descriptionText?: string
   /** Parcelas (asaasId + conta) — a faixa "Economia no Asaas" quebra por conta. */
   refs?: { asaasId: string; connectionId: string }[]
 }
@@ -193,6 +196,8 @@ export function manualCollectRequestValues(a: ManualCollectRequestArgs): ManualC
       touch: a.touch,
       lines: a.lines,
       links: a.links,
+      ...(a.dueDateText ? { dueDateText: a.dueDateText } : {}),
+      ...(a.descriptionText ? { descriptionText: a.descriptionText } : {}),
       delivery: 'whatsapp',
     },
     suggestedText: a.text,

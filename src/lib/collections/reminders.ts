@@ -78,6 +78,7 @@ import {
   type CollectionsSettings,
   type UpcomingLine,
   collectionGreetingName,
+  templateFactsFrom,
 } from './rules'
 import { localDayKey, localDayStartIso } from './stale'
 import { seedFrom, tooSimilar } from './variation'
@@ -320,7 +321,14 @@ export async function scanUpcoming(args: { accountId: string; settings: Collecti
       if (!cand.name && cust?.name) cand.name = cust.name
       if (!cand.doc && cust?.cpfCnpj) cand.doc = cust.cpfCnpj
       if (!cand.email && cust?.email) cand.email = collectionEmail(cust.email)
-      cand.lines.push({ value: Number(p.value ?? 0), dueDate: p.dueDate ? p.dueDate.slice(0, 10) : null, daysUntil, connectionLabel: c.label, invoiceUrl: p.invoiceUrl ?? null })
+      cand.lines.push({
+        value: Number(p.value ?? 0),
+        description: p.description ?? null,
+        dueDate: p.dueDate ? p.dueDate.slice(0, 10) : null,
+        daysUntil,
+        connectionLabel: c.label,
+        invoiceUrl: p.invoiceUrl ?? null,
+      })
       cand.asaasIds.push(p.id)
       cand.connectionIds.push(c.id)
     }
@@ -825,6 +833,7 @@ export async function queueUpcomingReminders(args: {
           touch: 0,
           delivery: delivery.label,
           greetingName: firstName,
+          ...templateFactsFrom(fresh.map((x) => x.line), { pick: 'nearest' }),
           // O executor usa se o contato continuar sem e-mail na hora do envio.
           ...(cand.email ? { asaasEmail: cand.email } : {}),
         },

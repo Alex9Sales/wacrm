@@ -35,9 +35,11 @@ export interface CollectionTemplateRef {
   params: string[]
 }
 /** O que pode ir numa variável de template; o executor troca pelos dados da cobrança. */
-export const TEMPLATE_VARS = ['{nome}', '{valor}', '{link}', '{dias}', '{parcelas}'] as const
+export const TEMPLATE_VARS = ['{nome}', '{valor}', '{link}', '{vencimento}', '{descricao}', '{dias}', '{parcelas}'] as const
 /** Preço público do Asaas por aviso de WhatsApp (R$), 09/2026. */
 export const ASAAS_WHATSAPP_FEE_DEFAULT = 0.55
+/** Preço do Asaas por aviso de E-MAIL (R$) — o que o Alex vê na fatura (23/09). */
+export const ASAAS_EMAIL_FEE_DEFAULT = 0.99
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -115,6 +117,12 @@ export interface CollectionsSettings {
    * pelo CRM é um que o Asaas não cobrou. Padrão = tabela pública do Asaas.
    */
   asaasWhatsAppFee: number
+  /**
+   * Quanto o Asaas cobra por aviso de E-MAIL (R$). O CRM também manda os
+   * e-mails de cobrança, então cada um é mais um que o Asaas não cobrou —
+   * entra na mesma faixa de economia (23/09, Alex: "e-mail é 0,99").
+   */
+  asaasEmailFee: number
   /**
    * Depois de N toques sem o devedor responder, a régua PARA nele e avisa o
    * time. Cobrar para sempre a cada 3 dias é o caminho mais curto para o
@@ -239,6 +247,7 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   emailChannelId: null,
   overdueStatuses: ['OVERDUE'],
   asaasWhatsAppFee: ASAAS_WHATSAPP_FEE_DEFAULT,
+  asaasEmailFee: ASAAS_EMAIL_FEE_DEFAULT,
   maxTouches: 8,
   tone: '',
   emitMaxValue: 500,
@@ -305,6 +314,10 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
       const n = typeof r.asaasWhatsAppFee === 'number' ? r.asaasWhatsAppFee : Number.NaN
       // 0 ou vazio (campo apagado na tela) não é "grátis": volta ao padrão.
       return Number.isFinite(n) && n > 0 ? Math.min(20, Math.round(n * 100) / 100) : ASAAS_WHATSAPP_FEE_DEFAULT
+    })(),
+    asaasEmailFee: (() => {
+      const n = typeof r.asaasEmailFee === 'number' ? r.asaasEmailFee : Number.NaN
+      return Number.isFinite(n) && n > 0 ? Math.min(20, Math.round(n * 100) / 100) : ASAAS_EMAIL_FEE_DEFAULT
     })(),
     maxTouches: int(r.maxTouches, 8, 1, 50),
     tone: typeof r.tone === 'string' ? r.tone.slice(0, 600) : '',
@@ -742,6 +755,8 @@ export interface ChargeLine {
    *  um cadastro (mesma pessoa, duas empresas; João/GoLink 10/09). */
   customerName?: string | null
   value: number
+  /** Descrição da parcela no Asaas — vai para a variável {descricao} do template. */
+  description?: string | null
   /** Juros + multa já calculados pelo Asaas (vencida). null/0 = não mostra. */
   interestValue?: number | null
   dueDate: string | null
@@ -851,6 +866,8 @@ export function linksInstruction(summary: { items: SummaryItem[]; links: string[
 
 export interface UpcomingLine {
   value: number
+  /** Descrição da parcela no Asaas — vai para a variável {descricao} do template. */
+  description?: string | null
   dueDate: string | null
   /** Dias até vencer (0 = hoje). */
   daysUntil: number | null
@@ -1182,6 +1199,10 @@ export interface TemplateVars {
   /** Total já formatado em reais ("R$ 1.234,50"); vazio quando a conta esconde valores. */
   valor?: string
   link?: string
+  /** Vencimento em dd/mm/aaaa — a parcela mais antiga (régua) ou a mais próxima (lembrete). */
+  vencimento?: string
+  /** Descrição da parcela no Asaas ("RA Play Master") — o "{{2}}" dos templates do cliente. */
+  descricao?: string
   /** Dias de atraso (régua) ou até vencer (lembrete); "hoje" no aviso do dia. */
   dias?: string
   parcelas?: string
@@ -1189,14 +1210,7 @@ export interface TemplateVars {
 
 /** Troca as chaves de TEMPLATE_VARS pelos dados da cobrança; chave sem dado vira vazio (a Meta rejeita `{valor}` literal). */
 export function fillTemplateParams(params: readonly string[], vars: TemplateVars): string[] {
-  const map: Record<string, string> = {
-    nome: vars.nome,
-    valor: vars.valor ?? '',
-    link: vars.link ?? '',
-    dias: vars.dias ?? '',
-    parcelas: vars.parcelas ?? '',
-  }
-  return params.map((p) => p.replace(/\{(nome|valor|link|dias|parcelas)\}/gi, (_m, k: string) => map[k.toLowerCase()] ?? ''))
+  return params.map((p) => p.replace(TEMPLATE_VAR_RE, (_m, k: string) => templateVarMap(vars)[k.toLowerCase()] ?? ''))
 }
 
 /**
@@ -1241,13 +1255,27 @@ export function collectionGreetingName(
   return asaas ? greetingName(asaas) : null
 }
 
+const TEMPLATE_VAR_RE = /\{(nome|valor|link|vencimento|descricao|dias|parcelas)\}/gi
+
+function templateVarMap(vars: TemplateVars): Record<string, string> {
+  return {
+    nome: vars.nome,
+    valor: vars.valor ?? '',
+    link: vars.link ?? '',
+    vencimento: vars.vencimento ?? '',
+    descricao: vars.descricao ?? '',
+    dias: vars.dias ?? '',
+    parcelas: vars.parcelas ?? '',
+  }
+}
+
 /** Variáveis do template que ficaram VAZIAS depois da troca — a Meta recusa parâmetro vazio ("missing text value"). */
 export function missingTemplateVars(params: readonly string[], vars: TemplateVars): string[] {
-  const map: Record<string, string> = { nome: vars.nome, valor: vars.valor ?? '', link: vars.link ?? '', dias: vars.dias ?? '', parcelas: vars.parcelas ?? '' }
+  const map = templateVarMap(vars)
   // Chave sem dado dentro do parâmetro ("Vence em {dias} dias" → "Vence em  dias")
   // também conta: a Meta aceita, mas o cliente lê um buraco na frase.
   return params.filter((p) => {
-    const keys = [...p.matchAll(/\{(nome|valor|link|dias|parcelas)\}/gi)].map((m) => m[1].toLowerCase())
+    const keys = [...p.matchAll(TEMPLATE_VAR_RE)].map((m) => m[1].toLowerCase())
     return keys.some((k) => (map[k] ?? '').trim() === '')
   })
 }
@@ -1257,6 +1285,8 @@ export function templateVarsFromPayload(p: Record<string, unknown>): Omit<Templa
   const total = typeof p.total === 'number' && Number.isFinite(p.total) ? p.total : null
   const links = Array.isArray(p.links) ? p.links.filter((u): u is string => typeof u === 'string' && !!u) : []
   const charges = typeof p.charges === 'number' ? p.charges : null
+  const venc = typeof p.dueDateText === 'string' ? p.dueDateText : ''
+  const desc = typeof p.descriptionText === 'string' ? p.descriptionText : ''
   let dias = ''
   if (p.kind === 'due_today') dias = 'hoje'
   else if (typeof p.dueIn === 'number') dias = String(p.dueIn)
@@ -1264,7 +1294,54 @@ export function templateVarsFromPayload(p: Record<string, unknown>): Omit<Templa
   return {
     valor: total != null ? total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '',
     link: links[0] ?? '',
+    vencimento: venc,
+    descricao: desc,
     dias,
     parcelas: charges != null ? String(charges) : '',
   }
+}
+
+/**
+ * O que o template precisa além do nome e do valor: o VENCIMENTO (dd/mm/aaaa)
+ * e a DESCRIÇÃO da parcela no Asaas — os templates de cobrança do cliente
+ * falam "a parcela do {{2}}, de {{3}}, venceu em {{4}}". Régua: a parcela mais
+ * antiga; lembrete: a mais próxima. Vai no payload do pedido como
+ * `dueDateText`/`descriptionText`, pronto para o envio.
+ */
+export function templateFactsFrom(
+  lines: readonly { dueDate: string | null; description?: string | null }[],
+  opts: { pick?: 'oldest' | 'nearest' } = {},
+): { dueDateText: string; descriptionText: string } {
+  const comData = lines.filter((l) => !!l.dueDate).sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))
+  const escolhida = opts.pick === 'nearest' ? comData[0] : comData[0]
+  const desc = lines.map((l) => (l.description ?? '').trim()).find(Boolean) ?? ''
+  return {
+    dueDateText: escolhida?.dueDate ? br(escolhida.dueDate) : '',
+    descriptionText: desc.slice(0, 120),
+  }
+}
+
+/**
+ * O que vai no BOTÃO do template. Os templates de cobrança costumam ter um
+ * botão "Pagar agora" com URL `https://www.asaas.com/i/{{1}}` — a Meta espera
+ * só o SUFIXO (o código do link), não a URL inteira. Fora desse formato, ou
+ * sem link, devolve null e quem chamou decide (recusar, não estourar).
+ */
+export function templateButtonValue(buttonUrl: string | null | undefined, invoiceUrl: string | null | undefined): string | null {
+  // A query string nunca faz parte do código da cobrança (?utm=…).
+  const link = (invoiceUrl ?? '').trim().split('?')[0].replace(/\/+$/, '')
+  if (!link) return null
+  const tpl = (buttonUrl ?? '').trim()
+  // Botão com {{1}} no fim = prefixo fixo + sufixo variável.
+  const m = /^(.*?)\{\{\s*1\s*\}\}\s*$/.exec(tpl)
+  if (m) {
+    const prefixo = m[1]
+    if (prefixo && link.startsWith(prefixo)) return link.slice(prefixo.length) || null
+    // Prefixo diferente (outro domínio do Asaas, encurtador): manda o último
+    // pedaço do link, que é o código da cobrança.
+    const code = link.split('/').pop() ?? ''
+    return code || null
+  }
+  // {{1}} no meio da URL (raro): sem como montar com segurança.
+  return null
 }

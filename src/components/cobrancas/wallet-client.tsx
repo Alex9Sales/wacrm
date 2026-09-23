@@ -2218,6 +2218,7 @@ function RulePanel({
             {num('maxTouches', 'Parar depois de', 'Toques sem resposta antes de devolver para uma pessoa.', 1, 50)}
             {num('emitMaxValue', 'IA pode cobrar até (R$)', 'Teto da ferramenta "Gerar cobrança no Asaas": acima disso a IA não cria sozinha — avisa uma pessoa.', 1, 100000)}
             {num('asaasWhatsAppFee', 'O Asaas cobra por aviso (R$)', 'Quanto o Asaas cobra por aviso de WhatsApp que ELE manda (tabela pública: R$ 0,55). É a base da faixa "Economia no Asaas" em Envios da régua.', 0.01, 20, 0.01)}
+            {num('asaasEmailFee', 'O Asaas cobra por e-mail (R$)', 'Quanto o Asaas cobra por e-mail de cobrança que ELE manda. O CRM também manda os e-mails, então cada um entra na mesma economia.', 0.01, 20, 0.01)}
             {num('reminderDaysBefore', 'Lembrar antes de vencer (dias)', '0 = desligado. Com 3, quem tem parcela vencendo nos próximos 3 dias recebe um aviso leve — não é cobrança. Passa pela mesma fila e teto.', 0, 15)}
             <label className="flex max-w-[16rem] items-start gap-2 text-sm">
               <input type="checkbox" className="mt-1" checked={draft.remindOnDueDate} onChange={(e) => setDraft({ ...draft, remindOnDueDate: e.target.checked })} />

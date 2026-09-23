@@ -24,7 +24,7 @@ import { sql } from 'drizzle-orm'
 
 import { db } from '@/db'
 import { CAPABILITIES } from '@/lib/channels/provider'
-import { ASAAS_WHATSAPP_FEE_DEFAULT } from '@/lib/collections/rules'
+import { ASAAS_EMAIL_FEE_DEFAULT, ASAAS_WHATSAPP_FEE_DEFAULT } from '@/lib/collections/rules'
 
 export interface CollectionsAccountRow {
   orgId: string
@@ -33,15 +33,16 @@ export interface CollectionsAccountRow {
   connections: string[]
   ruleEnabled: boolean
   autoSend: boolean
-  /** R$ por aviso que o Asaas cobra, como a conta configurou. */
+  /** R$ por aviso que o Asaas cobra, como a conta configurou (WhatsApp e e-mail). */
   fee: number
+  emailFee: number
   /** O CRM assumiu os avisos do Asaas (senão a economia é só potencial). */
   notificationsOff: boolean
   recovered: { today: number; month: number; total: number }
   /** Pago sem nenhum toque nosso antes — fica à parte, nunca somado ao mérito. */
   recoveredNoTouch: { month: number; total: number }
-  /** Parcelas avisadas pelo CRM (canal NÃO oficial) e o que isso vale em R$. */
-  savings: { todayCount: number; todayBrl: number; monthCount: number; monthBrl: number }
+  /** Parcelas avisadas pelo CRM (WhatsApp não oficial + e-mail) e o que isso vale em R$. */
+  savings: { todayCount: number; todayBrl: number; monthCount: number; monthBrl: number; whatsappMonth: number; emailMonth: number }
   /** Parcelas avisadas pela API oficial no mês (a Meta cobra a conversa). */
   officialMonth: number
   /** Carteira vencida em aberto agora. */
@@ -116,6 +117,14 @@ export async function getCollectionsSuccess(): Promise<CollectionsSuccessDashboa
        AND rr.executed_at > coalesce(ch.closed_at, ch.updated_at) - interval '45 days'
   )`
   const pagas = sql`ch.status IN ('RECEIVED','CONFIRMED')`
+  // Conta do Asaas do pedido: a gravada (a partir de 23/09) ou, nos antigos, a
+  // que tem mais cobranças daquele devedor.
+  const contaDoPedido = sql`coalesce(
+    r.payload->>'connectionId',
+    (SELECT ch2.connection_id::text FROM asaas_charges ch2
+      WHERE ch2.account_id = r.account_id AND ch2.contact_id = r.contact_id
+      GROUP BY ch2.connection_id ORDER BY count(*) DESC LIMIT 1)
+  )`
 
   const rows = toRows(
     await db.execute(sql`
@@ -123,6 +132,7 @@ export async function getCollectionsSuccess(): Promise<CollectionsSuccessDashboa
         o.id AS org_id,
         o.name,
         coalesce(st.settings->'collections'->>'asaasWhatsAppFee', NULL)::numeric AS fee,
+        coalesce(st.settings->'collections'->>'asaasEmailFee', NULL)::numeric AS email_fee,
         (st.settings->'collections'->>'enabled' = 'true') AS rule_enabled,
         (st.settings->'collections'->>'autoSend' = 'true') AS auto_send,
         (st.settings->'collections'->>'asaasNotificationsOff' = 'true') AS notifications_off,
@@ -151,14 +161,22 @@ export async function getCollectionsSuccess(): Promise<CollectionsSuccessDashboa
           WHERE r.account_id = o.id AND r.action_type = 'collect_charges' AND r.status = 'sent'
             AND r.result->'sentVia' ? 'whatsapp'
             AND (chn.provider IS NULL OR chn.provider NOT IN (${oficiaisSql}))
-            AND coalesce(r.executed_at, r.created_at) >= ${inicioDia}) AS sav_today,
+            AND coalesce(r.executed_at, r.created_at) >= ${inicioDia}) AS wa_today,
         (SELECT coalesce(sum(${parcelas}), 0)::int FROM agent_action_requests r
            LEFT JOIN conversations cv ON cv.id = coalesce((r.result->>'conversationId')::uuid, r.conversation_id)
            LEFT JOIN channels chn ON chn.id = cv.channel_id
           WHERE r.account_id = o.id AND r.action_type = 'collect_charges' AND r.status = 'sent'
             AND r.result->'sentVia' ? 'whatsapp'
             AND (chn.provider IS NULL OR chn.provider NOT IN (${oficiaisSql}))
-            AND coalesce(r.executed_at, r.created_at) >= ${inicioMes}) AS sav_month,
+            AND coalesce(r.executed_at, r.created_at) >= ${inicioMes}) AS wa_month,
+        (SELECT coalesce(sum(${parcelas}), 0)::int FROM agent_action_requests r
+          WHERE r.account_id = o.id AND r.action_type = 'collect_charges' AND r.status = 'sent'
+            AND r.result->'sentVia' ? 'email'
+            AND coalesce(r.executed_at, r.created_at) >= ${inicioDia}) AS mail_today,
+        (SELECT coalesce(sum(${parcelas}), 0)::int FROM agent_action_requests r
+          WHERE r.account_id = o.id AND r.action_type = 'collect_charges' AND r.status = 'sent'
+            AND r.result->'sentVia' ? 'email'
+            AND coalesce(r.executed_at, r.created_at) >= ${inicioMes}) AS mail_month,
         (SELECT coalesce(sum(${parcelas}), 0)::int FROM agent_action_requests r
            LEFT JOIN conversations cv ON cv.id = coalesce((r.result->>'conversationId')::uuid, r.conversation_id)
            LEFT JOIN channels chn ON chn.id = cv.channel_id
@@ -175,8 +193,13 @@ export async function getCollectionsSuccess(): Promise<CollectionsSuccessDashboa
 
   const accounts: CollectionsAccountRow[] = rows.map((r) => {
     const fee = num(r.fee) > 0 ? num(r.fee) : ASAAS_WHATSAPP_FEE_DEFAULT
-    const todayCount = num(r.sav_today)
-    const monthCount = num(r.sav_month)
+    const emailFee = num(r.email_fee) > 0 ? num(r.email_fee) : ASAAS_EMAIL_FEE_DEFAULT
+    const waToday = num(r.wa_today)
+    const waMonth = num(r.wa_month)
+    const mailToday = num(r.mail_today)
+    const mailMonth = num(r.mail_month)
+    const todayCount = waToday + mailToday
+    const monthCount = waMonth + mailMonth
     return {
       orgId: String(r.org_id),
       name: String(r.name ?? ''),
@@ -184,14 +207,17 @@ export async function getCollectionsSuccess(): Promise<CollectionsSuccessDashboa
       ruleEnabled: r.rule_enabled === true,
       autoSend: r.auto_send === true,
       fee,
+      emailFee,
       notificationsOff: r.notifications_off === true,
       recovered: { today: num(r.rec_today), month: num(r.rec_month), total: num(r.rec_total) },
       recoveredNoTouch: { month: num(r.notouch_month), total: num(r.notouch_total) },
       savings: {
         todayCount,
-        todayBrl: Math.round(todayCount * fee * 100) / 100,
+        todayBrl: Math.round((waToday * fee + mailToday * emailFee) * 100) / 100,
         monthCount,
-        monthBrl: Math.round(monthCount * fee * 100) / 100,
+        monthBrl: Math.round((waMonth * fee + mailMonth * emailFee) * 100) / 100,
+        whatsappMonth: waMonth,
+        emailMonth: mailMonth,
       },
       officialMonth: num(r.official_month),
       openValue: num(r.open_value),
@@ -217,13 +243,13 @@ export async function getCollectionsSuccess(): Promise<CollectionsSuccessDashboa
           WHERE r.account_id = o.id AND r.action_type = 'collect_charges' AND r.status = 'sent'
             AND r.result->'sentVia' ? 'whatsapp'
             AND (chn.provider IS NULL OR chn.provider NOT IN (${oficiaisSql}))
-            AND coalesce(
-                  r.payload->>'connectionId',
-                  (SELECT ch2.connection_id::text FROM asaas_charges ch2
-                    WHERE ch2.account_id = r.account_id AND ch2.contact_id = r.contact_id
-                    GROUP BY ch2.connection_id ORDER BY count(*) DESC LIMIT 1)
-                ) = ac.id::text
-            AND coalesce(r.executed_at, r.created_at) >= ${inicioMes}) AS sav_month
+            AND ${contaDoPedido} = ac.id::text
+            AND coalesce(r.executed_at, r.created_at) >= ${inicioMes}) AS sav_wa,
+        (SELECT coalesce(sum(${parcelas}), 0)::int FROM agent_action_requests r
+          WHERE r.account_id = o.id AND r.action_type = 'collect_charges' AND r.status = 'sent'
+            AND r.result->'sentVia' ? 'email'
+            AND ${contaDoPedido} = ac.id::text
+            AND coalesce(r.executed_at, r.created_at) >= ${inicioMes}) AS sav_mail
       FROM asaas_connections ac
       JOIN organization o ON o.id = ac.account_id
       JOIN account_settings st ON st.account_id = o.id
@@ -231,11 +257,13 @@ export async function getCollectionsSuccess(): Promise<CollectionsSuccessDashboa
       ORDER BY o.name, ac.created_at
     `),
   )
-  const feeOf = new Map(accounts.map((a) => [a.orgId, a.fee]))
+  const feeOf = new Map(accounts.map((a) => [a.orgId, { wa: a.fee, mail: a.emailFee }]))
   const connections: CollectionsConnectionRow[] = connRows.map((r) => {
     const orgId = String(r.org_id)
-    const fee = feeOf.get(orgId) ?? ASAAS_WHATSAPP_FEE_DEFAULT
-    const count = num(r.sav_month)
+    const fee = feeOf.get(orgId) ?? { wa: ASAAS_WHATSAPP_FEE_DEFAULT, mail: ASAAS_EMAIL_FEE_DEFAULT }
+    const wa = num(r.sav_wa)
+    const mail = num(r.sav_mail)
+    const count = wa + mail
     return {
       orgId,
       orgName: String(r.org_name ?? ''),
@@ -243,7 +271,7 @@ export async function getCollectionsSuccess(): Promise<CollectionsSuccessDashboa
       label: String(r.label ?? ''),
       recoveredMonth: num(r.rec_month),
       savingsMonthCount: count,
-      savingsMonthBrl: Math.round(count * fee * 100) / 100,
+      savingsMonthBrl: Math.round((wa * fee.wa + mail * fee.mail) * 100) / 100,
       openValue: num(r.open_value),
     }
   })

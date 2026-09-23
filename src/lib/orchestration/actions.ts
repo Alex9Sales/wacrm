@@ -25,8 +25,7 @@ import {
   tasks,
   asaasCharges,
   collectionsTouches,
-  user,
-} from '@/db'
+  user, messageTemplates } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { cancelEnrollment, enrollContactInCadence } from '@/lib/cadences/cadence'
 import { publishEvent } from '@/lib/events/publish'
@@ -45,6 +44,7 @@ import {
   holdRefusal,
   missingTemplateVars,
   normalizeSettings,
+  templateButtonValue,
   templateForKind,
   templateKindOf,
   templateVarsFromPayload,
@@ -387,6 +387,7 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
               templateName: gate.templateName,
               templateLanguage: gate.templateLanguage,
               templateParams: gate.params,
+              ...(gate.buttonParams ? { templateMessageParams: { body: gate.params, buttonParams: gate.buttonParams } } : {}),
             })
             sentVia.push('whatsapp')
           } else {
@@ -826,7 +827,15 @@ export async function officialTemplateGate(
   conversationId: string,
   /** Tipo da mensagem (template por tipo, 23/09) e os dados para as variáveis (`nome` = saudação já decidida; sem ele, o primeiro nome do contato). */
   opts: { kind?: CollectionTemplateKind; vars?: Partial<TemplateVars> } = {},
-): Promise<{ needsTemplate: boolean; templateName: string | null; templateLanguage: string | null; params: string[]; error?: string }> {
+): Promise<{
+  needsTemplate: boolean
+  templateName: string | null
+  templateLanguage: string | null
+  params: string[]
+  /** Valor de cada botão que pede parâmetro (URL com {{1}}) — a Meta recusa o envio sem ele. */
+  buttonParams?: Record<number, string>
+  error?: string
+}> {
   const vazio = { needsTemplate: false, templateName: null, templateLanguage: null, params: [] as string[] }
   try {
     const { CAPABILITIES } = await import('@/lib/channels/provider')
@@ -881,11 +890,44 @@ export async function officialTemplateGate(
         error: `A variável ${faltando.map((v) => `"${v}"`).join(', ')} do template "${tpl.name}" ficou sem valor nesta cobrança (ex.: valores escondidos em Ajustar, parcela sem link). Troque por texto fixo ou ajuste em Cobranças → Ajustar.`,
       }
     }
+    // 🔘 Botão "Pagar agora" com URL variável (caso Rafael 23/09): a Meta
+    // EXIGE o parâmetro do botão; sem ele o envio estoura no builder. Lê os
+    // botões do template aprovado e monta com o link da cobrança.
+    const buttonParams: Record<number, string> = {}
+    let botaoSemLink: string | null = null
+    try {
+      const tplRow = firstOrNull(
+        await db
+          .select({ buttons: messageTemplates.buttons })
+          .from(messageTemplates)
+          .where(and(eq(messageTemplates.accountId, accountId), eq(messageTemplates.name, tpl.name)))
+          .limit(1),
+      )
+      const botoes = Array.isArray(tplRow?.buttons) ? (tplRow.buttons as { type?: string; url?: string }[]) : []
+      botoes.forEach((b, i) => {
+        if (b?.type !== 'URL' || !/\{\{\s*1\s*\}\}/.test(b.url ?? '')) return
+        const valor = templateButtonValue(b.url, vars.link)
+        if (valor) buttonParams[i] = valor
+        else botaoSemLink = tpl.name
+      })
+    } catch (err) {
+      console.error('[cobranca] ler botões do template falhou:', err instanceof Error ? err.message : err)
+    }
+    if (botaoSemLink) {
+      return {
+        needsTemplate: true,
+        templateName: null,
+        templateLanguage: null,
+        params: [],
+        error: `O template "${tpl.name}" tem um botão com link variável e esta cobrança não tem link de pagamento — escolha um template sem botão de link em Cobranças → Ajustar.`,
+      }
+    }
     return {
       needsTemplate: true,
       templateName: tpl.name,
       templateLanguage: tpl.language,
       params: fillTemplateParams(tpl.params, vars),
+      ...(Object.keys(buttonParams).length ? { buttonParams } : {}),
     }
   } catch (err) {
     console.error('[cobranca] checagem de template oficial falhou:', err instanceof Error ? err.message : err)
