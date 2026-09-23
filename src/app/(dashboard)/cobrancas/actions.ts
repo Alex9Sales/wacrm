@@ -33,6 +33,7 @@ import {
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
+import { hasMinRole } from '@/lib/auth/roles'
 import { getAccountSettings, updateAccountSettings } from '@/lib/settings/account-settings'
 import { runCollectionsForAccount } from '@/lib/collections/engine'
 import { refreshUpcomingForAccount, UPCOMING_HORIZON_DAYS } from '@/lib/collections/reminders'
@@ -137,7 +138,7 @@ export interface ConnectionView {
 }
 
 export async function listConnections(): Promise<ConnectionView[]> {
-  const { accountId } = await getCurrentAccount()
+  const { accountId } = await requireRole('supervisor')
 
   const rows = await db
     .select({
@@ -497,7 +498,7 @@ function phoneDiff(
  * Ver a tela já nesse formato mostra hoje o que vai sair depois.
  */
 export async function getWallet(): Promise<WalletSummary> {
-  const { accountId } = await getCurrentAccount()
+  const { accountId } = await requireRole('supervisor')
 
   const rows = await db
     .select({
@@ -988,7 +989,7 @@ export async function unlinkDebtor(debtorKey: string): Promise<ActionResult> {
 
 /** Cobranças que saíram da carteira desde a última rodada (pagas/apagadas). */
 export async function listRecentlyClosed(limit = 20) {
-  const { accountId } = await getCurrentAccount()
+  const { accountId } = await requireRole('supervisor')
   return db
     .select({
       id: asaasCharges.id,
@@ -1012,7 +1013,7 @@ export async function listRecentlyClosed(limit = 20) {
  * não em código: é o que faz o segundo cliente não exigir reescrita.
  */
 export async function getCollectionsSettings(): Promise<CollectionsSettings> {
-  const { accountId } = await getCurrentAccount()
+  const { accountId } = await requireRole('supervisor')
   const s = await getAccountSettings(accountId)
   return normalizeSettings(s.collections)
 }
@@ -1161,7 +1162,15 @@ export interface ContactCollectionStatus {
  * invisível para sempre (Reboque Modelo).
  */
 export async function getContactCollectionStatus(contactId: string): Promise<ContactCollectionStatus | null> {
-  const { accountId } = await getCurrentAccount()
+  const ctx = await getCurrentAccount()
+  // 🔒 23/09 (João): "o Vitor consegue ver a parte de cobrança?" A ABA já era
+  // de supervisor para cima, mas este bloco aparecia na ficha do contato
+  // dentro do Inbox — com o que o cliente deve, quantas cobranças saíram e os
+  // botões de pausar/zerar. Mesma regra da tela: quem atende não vê. Devolve
+  // null (o bloco some) em vez de lançar, senão toda ficha aberta por um
+  // atendente vira erro no console.
+  if (!hasMinRole(ctx.role, 'supervisor')) return null
+  const { accountId } = ctx
   const rows = await db
     .select({ value: asaasCharges.value, dueDate: asaasCharges.dueDate })
     .from(asaasCharges)
@@ -1231,7 +1240,7 @@ export interface HeldDebtor {
  * movido no Asaas (caso Lúcia).
  */
 export async function listHeldDebtors(): Promise<HeldDebtor[]> {
-  const { accountId } = await getCurrentAccount()
+  const { accountId } = await requireRole('supervisor')
   const settings = normalizeSettings((await getAccountSettings(accountId)).collections)
   const rows = await db
     .select({
