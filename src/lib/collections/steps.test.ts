@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   COLLECTIONS_DEFAULTS,
+  formatDebtSummary,
+  formatDebtBody,
   debtorHold,
   eligibility,
   MAX_COLLECTION_STEPS,
@@ -140,5 +142,42 @@ describe('texto do degrau', () => {
 
   it('chave sem dado vira vazio — nunca "{valor}" na cara do devedor', () => {
     expect(renderStepText('Deve {valor} desde {vencimento}.', { nome: '' })).toBe('Deve  desde .')
+  })
+})
+
+describe('mensagem de quem acumulou parcelas (João, 23/09)', () => {
+  const s = normalizeSettings({
+    manyChargesMin: 3,
+    manyChargesText: 'São {parcelas} parcelas em aberto, {nome} — total {valor}. Precisamos acertar ao menos 2 para manter o serviço:\n{lista}\nSe já pagou, responda "já paguei".',
+  })
+
+  it('o ajuste é guardado com o mínimo de parcelas', () => {
+    expect(s.manyChargesMin).toBe(3)
+    expect(s.manyChargesText).toContain('{lista}')
+    // Padrão: desligado, com mínimo de 3.
+    expect(normalizeSettings({}).manyChargesText).toBe('')
+    expect(normalizeSettings({}).manyChargesMin).toBe(3)
+    // Mínimo fora da faixa é puxado de volta.
+    expect(normalizeSettings({ manyChargesMin: 1 }).manyChargesMin).toBe(2)
+    expect(normalizeSettings({ manyChargesMin: 99 }).manyChargesMin).toBe(20)
+  })
+
+  it('{lista} traz as parcelas com os links, como no texto de sempre', () => {
+    const resumo = formatDebtSummary([
+      { value: 100, dueDate: '2026-06-20', daysLate: 95, invoiceUrl: 'https://pag/1', connectionLabel: 'Asaas' },
+      { value: 100, dueDate: '2026-07-20', daysLate: 65, invoiceUrl: 'https://pag/2', connectionLabel: 'Asaas' },
+      { value: 100, dueDate: '2026-08-20', daysLate: 34, invoiceUrl: 'https://pag/3', connectionLabel: 'Asaas' },
+    ])
+    const texto = renderStepText(s.manyChargesText, {
+      nome: 'Center Pisos',
+      parcelas: '3',
+      valor: 'R$ 300,00',
+      lista: formatDebtBody(resumo),
+    })
+    expect(texto).toContain('São 3 parcelas em aberto, Center Pisos')
+    expect(texto).toContain('R$ 300,00')
+    expect(texto).toContain('https://pag/1')
+    expect(texto).toContain('https://pag/3')
+    expect(texto).not.toContain('{')
   })
 })

@@ -156,6 +156,21 @@ export interface CollectionsSettings {
    * migrado sem pedir.
    */
   steps: CollectionStep[]
+  /**
+   * 🔴 Mensagem para quem ACUMULOU parcelas. A partir de `manyChargesMin`
+   * parcelas vencidas, a régua manda ESTE texto em vez do de sempre.
+   *
+   * 23/09 (João/GoLink): "está faltando aquela mensagem mais incisiva quando
+   * está com 3 vencidas". Quem deve três meses não responde ao mesmo lembrete
+   * educado de quem atrasou uma semana — ali o assunto é acordo, e a mensagem
+   * que funcionava na mão dele dizia o que acontece se não houver acordo.
+   *
+   * Vazio = desligado (a régua segue com o texto normal). Aceita as mesmas
+   * chaves dos templates, e `{lista}` traz as parcelas com os links.
+   */
+  manyChargesText: string
+  /** A partir de quantas parcelas vencidas vale o texto acima. */
+  manyChargesMin: number
   /** Instrução de tom, no vocabulário do negócio (vai para a IA). */
   tone: string
   /**
@@ -277,6 +292,8 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   asaasEmailFee: ASAAS_EMAIL_FEE_DEFAULT,
   maxTouches: 8,
   steps: [],
+  manyChargesText: '',
+  manyChargesMin: 3,
   tone: '',
   emitMaxValue: 500,
   asaasNotificationsOff: false,
@@ -349,6 +366,8 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
     })(),
     maxTouches: int(r.maxTouches, 8, 1, 50),
     steps: normalizeSteps(r.steps),
+    manyChargesText: typeof r.manyChargesText === 'string' ? r.manyChargesText.trim().slice(0, 900) : '',
+    manyChargesMin: int(r.manyChargesMin, 3, 2, 20),
     tone: typeof r.tone === 'string' ? r.tone.slice(0, 600) : '',
     emitMaxValue: (() => {
       const n = typeof r.emitMaxValue === 'number' ? r.emitMaxValue : Number.NaN
@@ -1296,6 +1315,8 @@ export interface TemplateVars {
   /** Dias de atraso (régua) ou até vencer (lembrete); "hoje" no aviso do dia. */
   dias?: string
   parcelas?: string
+  /** As parcelas com os links, uma por linha (`formatDebtBody`). Só no texto livre. */
+  lista?: string
 }
 
 /** Troca as chaves de TEMPLATE_VARS pelos dados da cobrança; chave sem dado vira vazio (a Meta rejeita `{valor}` literal). */
@@ -1464,7 +1485,7 @@ export function renderStepText(text: string, vars: TemplateVars): string {
   return fillTemplateParams([text], vars)[0] ?? ''
 }
 
-const TEMPLATE_VAR_RE = /\{(nome|valor|link|vencimento|descricao|dias|parcelas)\}/gi
+const TEMPLATE_VAR_RE = /\{(nome|valor|link|vencimento|descricao|dias|parcelas|lista)\}/gi
 
 function templateVarMap(vars: TemplateVars): Record<string, string> {
   return {
@@ -1475,6 +1496,7 @@ function templateVarMap(vars: TemplateVars): Record<string, string> {
     descricao: vars.descricao ?? '',
     dias: vars.dias ?? '',
     parcelas: vars.parcelas ?? '',
+    lista: vars.lista ?? '',
   }
 }
 

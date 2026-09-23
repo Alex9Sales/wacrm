@@ -45,6 +45,7 @@ import {
   type CollectionsSettings,
   type SkipReason,
   collectionGreetingName,
+  formatDebtBody,
   templateFactsFrom,
   templateVarsFromPayload,
   renderStepText,
@@ -407,9 +408,15 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
     // ele que vai — do jeito que o cliente escreveu, só com as chaves
     // preenchidas. A IA não reescreve o que o dono da empresa decidiu dizer.
     const degrau = s.steps.length ? stepForTouch(s.steps, d.touchCount) : null
-    const textoDoDegrau = degrau?.text
-      ? renderStepText(degrau.text, {
+    // 🔴 Quem acumulou parcelas recebe a mensagem de acordo, não o lembrete de
+    // sempre (23/09, João: "falta aquela mensagem mais incisiva quando está com
+    // 3 vencidas"). Ela ganha do texto do degrau: é a situação mais grave.
+    const textoEscolhido =
+      s.manyChargesText && d.charges.length >= s.manyChargesMin ? s.manyChargesText : (degrau?.text ?? null)
+    const textoDoDegrau = textoEscolhido
+      ? renderStepText(textoEscolhido, {
           nome: firstName ?? '',
+          lista: formatDebtBody(summary),
           ...templateVarsFromPayload({
             total: summary.total,
             links: summary.links,

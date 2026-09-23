@@ -2255,6 +2255,34 @@ function RulePanel({
             {num('sendEveryMinutes', 'Uma mensagem a cada (min)', 'Cadência do envio automático e do "Aprovar todas": espaçar as mensagens é o que evita o bloqueio do número.', 1, 120)}
           </div>
 
+          {/* 🔴 Mensagem de acordo pra quem acumulou parcelas (23/09, João). */}
+          <div className="rounded-md border bg-muted/30 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm">Mensagem para quem acumulou</span>
+              <Input
+                type="number"
+                min={2}
+                max={20}
+                value={String(draft.manyChargesMin)}
+                onChange={(e) => setDraft({ ...draft, manyChargesMin: Number(e.target.value) })}
+                className="w-16"
+              />
+              <span className="text-sm">ou mais parcelas vencidas</span>
+            </div>
+            <textarea
+              className="mt-2 min-h-[5rem] w-full rounded-md border border-border bg-background p-2 text-sm"
+              placeholder="Vazio = a régua manda o texto de sempre. Ex.: São {parcelas} parcelas em aberto, {nome}. Precisamos acertar pelo menos 2 para manter o serviço ativo: {lista} Se já pagou, responda “já paguei”; se não, me diga uma data."
+              value={draft.manyChargesText}
+              onChange={(e) => setDraft({ ...draft, manyChargesText: e.target.value })}
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Quem deve três meses não responde ao mesmo lembrete de quem atrasou uma semana. Com o
+              texto preenchido, a régua manda ele no lugar do normal. Dá para usar{' '}
+              <code>{'{nome}'}</code>, <code>{'{parcelas}'}</code>, <code>{'{valor}'}</code>,{' '}
+              <code>{'{dias}'}</code> e <code>{'{lista}'}</code>, que traz as parcelas com os links.
+            </p>
+          </div>
+
           {/* 🪜 Cadência própria (23/09, Rafael): a régua de intervalo fixo
               cobra sempre de N em N dias, com o mesmo texto. Aqui cada toque
               tem o seu dia de atraso e, se o cliente quiser, o seu texto. */}
