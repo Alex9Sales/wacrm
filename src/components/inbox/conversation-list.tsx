@@ -112,6 +112,8 @@ export function ConversationList({
   } | null>(null);
   const searchParams = useSearchParams();
   const [search, setSearch] = useState("");
+  // Texto digitado na busca do filtro de empresas (24/09, pedido do Vitor).
+  const [companyQuery, setCompanyQuery] = useState("");
   const [newConvOpen, setNewConvOpen] = useState(false);
   // Paginação (perf): a inbox carrega a 1ª página (CONVERSATIONS_PAGE_SIZE) e
   // vai anexando com "carregar mais". `hasMore` = a última página veio cheia.
@@ -317,6 +319,29 @@ export function ConversationList({
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [conversations]);
+
+  // 🔎 Busca dentro do filtro de empresas (pedido do Vitor/GoLink, 24/09):
+  // numa base grande a lista alfabética vira rolagem infinita. Sem acento e
+  // sem caixa, porque ninguém digita "Engenharia" com o acento certo.
+  const companyQueryNorm = useMemo(
+    () =>
+      companyQuery
+        .trim()
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, ""),
+    [companyQuery]
+  );
+  const visibleCompanies = useMemo(() => {
+    if (!companyQueryNorm) return companies;
+    return companies.filter((co) =>
+      co
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "")
+        .includes(companyQueryNorm)
+    );
+  }, [companies, companyQueryNorm]);
 
   // Channel ("caixa") options are derived from the loaded conversations —
   // each conversation already carries its `channel` ({ id, provider,
@@ -874,33 +899,54 @@ export function ConversationList({
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="start"
-                className="max-h-64 w-56 border-border bg-popover"
+                className="max-h-72 w-56 border-border bg-popover"
               >
-                <DropdownMenuItem
-                  onClick={() => setSelectedCompany(null)}
-                  className={cn(
-                    "text-sm",
-                    selectedCompany === null
-                      ? "text-primary"
-                      : "text-popover-foreground"
-                  )}
-                >
-                  Todas as empresas
-                </DropdownMenuItem>
-                {companies.map((co) => (
+                {/* A busca só aparece quando a lista é grande o bastante pra
+                    atrapalhar — em quem tem 3 empresas ela seria ruído. */}
+                {companies.length > 7 && (
+                  <div className="px-2 pb-1 pt-1">
+                    <Input
+                      value={companyQuery}
+                      onChange={(e) => setCompanyQuery(e.target.value)}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      placeholder="Buscar empresa..."
+                      className="h-7 text-xs"
+                      autoFocus
+                    />
+                  </div>
+                )}
+                <div className="max-h-56 overflow-y-auto">
                   <DropdownMenuItem
-                    key={co}
-                    onClick={() => setSelectedCompany(co)}
+                    onClick={() => setSelectedCompany(null)}
                     className={cn(
                       "text-sm",
-                      selectedCompany === co
+                      selectedCompany === null
                         ? "text-primary"
                         : "text-popover-foreground"
                     )}
                   >
-                    <span className="truncate">{co}</span>
+                    Todas as empresas
                   </DropdownMenuItem>
-                ))}
+                  {visibleCompanies.map((co) => (
+                    <DropdownMenuItem
+                      key={co}
+                      onClick={() => setSelectedCompany(co)}
+                      className={cn(
+                        "text-sm",
+                        selectedCompany === co
+                          ? "text-primary"
+                          : "text-popover-foreground"
+                      )}
+                    >
+                      <span className="truncate">{co}</span>
+                    </DropdownMenuItem>
+                  ))}
+                  {visibleCompanies.length === 0 && (
+                    <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+                      Nenhuma empresa com esse nome.
+                    </p>
+                  )}
+                </div>
               </DropdownMenuContent>
             </DropdownMenu>
           )}
