@@ -77,6 +77,12 @@ export function EditBillingDialog({
   const [asaasBusy, setAsaasBusy] = useState(false);
   const [asaasFound, setAsaasFound] = useState<AsaasFound[] | null>(null);
   const [asaasBilling, setAsaasBilling] = useState<AsaasBilling | null>(null);
+  // Criar assinatura: só aparece quando a conta ainda não tem uma vinculada.
+  const [criando, setCriando] = useState(false);
+  const [novoValor, setNovoValor] = useState("");
+  const [novoVenc, setNovoVenc] = useState("");
+  const [futuroValor, setFuturoValor] = useState("");
+  const [futuroDe, setFuturoDe] = useState("");
   const [responsibleAdminId, setResponsibleAdminId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   // Track the client id we last hydrated from so re-opening for a
@@ -98,6 +104,10 @@ export function EditBillingDialog({
     setAsaasSubscriptionId(client.asaasSubscriptionId ?? "");
     setAsaasFound(null);
     setAsaasBilling(null);
+    setNovoValor("");
+    setNovoVenc("");
+    setFuturoValor("");
+    setFuturoDe("");
     setHydratedId(client.id);
   }
 
@@ -183,6 +193,48 @@ export function EditBillingDialog({
       toast.error("Não foi possível conectar ao servidor.");
     } finally {
       setAsaasBusy(false);
+    }
+  }
+
+  /** ⚠️ Emite cobrança de verdade: o Asaas gera o boleto e avisa o cliente. */
+  async function criarAssinatura() {
+    if (!client) return;
+    if (!novoValor.trim() || !novoVenc.trim()) {
+      toast.error("Preencha o valor e o primeiro vencimento.");
+      return;
+    }
+    const ok = window.confirm(
+      `Criar assinatura de R$ ${novoValor} para ${client.name}, primeiro vencimento em ` +
+        `${novoVenc.split("-").reverse().join("/")}?\n\n` +
+        "O Asaas vai gerar o boleto e avisar o cliente. Isso não tem desfazer.",
+    );
+    if (!ok) return;
+    setCriando(true);
+    try {
+      const res = await fetch(`/api/admin/clients/${client.id}/subscription`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          value: novoValor,
+          first_due_date: novoVenc,
+          future_value: futuroValor.trim() || null,
+          future_from: futuroDe.trim() || null,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string; subscriptionId?: string };
+      if (!res.ok) {
+        toast.error(data.error || "Não foi possível criar a assinatura.");
+        return;
+      }
+      toast.success("Assinatura criada e vinculada.");
+      setAsaasSubscriptionId(data.subscriptionId ?? "");
+      setMonthlyValue(novoValor);
+      onSaved();
+      onOpenChange(false);
+    } catch {
+      toast.error("Não foi possível conectar ao servidor.");
+    } finally {
+      setCriando(false);
     }
   }
 
@@ -391,6 +443,60 @@ export function EditBillingDialog({
                 Vinculado: {asaasCustomerId || "—"}
                 {asaasSubscriptionId ? ` · assinatura ${asaasSubscriptionId}` : ""}
               </p>
+            )}
+
+            {/* Criar assinatura — só quando ainda não existe uma. Emite
+                cobrança de verdade, por isso fica atrás de uma confirmação. */}
+            {!asaasSubscriptionId && (
+              <div className="space-y-2 border-t border-border pt-3">
+                <Label className="text-xs text-muted-foreground">
+                  Criar assinatura mensal no Asaas
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="Valor (ex.: 497)"
+                    value={novoValor}
+                    onChange={(e) => setNovoValor(e.target.value)}
+                  />
+                  <Input
+                    type="date"
+                    value={novoVenc}
+                    onChange={(e) => setNovoVenc(e.target.value)}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="Passa a valer (ex.: 697)"
+                    value={futuroValor}
+                    onChange={(e) => setFuturoValor(e.target.value)}
+                  />
+                  <Input
+                    type="date"
+                    value={futuroDe}
+                    onChange={(e) => setFuturoDe(e.target.value)}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  O segundo par é o reajuste combinado: o Asaas não agenda troca
+                  de valor, então ele fica anotado nas notas do cliente para
+                  alguém subir na data.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => void criarAssinatura()}
+                  disabled={criando}
+                >
+                  {criando ? (
+                    <Loader2 className="mr-2 size-4 animate-spin" />
+                  ) : null}
+                  Criar assinatura e cobrar
+                </Button>
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  Gera o boleto no Asaas e avisa o cliente. Não tem desfazer.
+                </p>
+              </div>
             )}
           </div>
 
