@@ -105,8 +105,15 @@ export async function GET(request: Request) {
     }
 
     // 2) token de curta → longa duração (60 dias).
+    //
+    // ⚠️ 24/09 (Zelo): esta troca falhava e o catch engolia — a conta ficava
+    // com o token de CURTA duração, que morre em ~1 hora (sempre na hora
+    // cheia). A Isabele reconectava, "funcionava", e uma hora depois o canal
+    // estava morto de novo, sem nada na tela. Se a troca não der, o canal
+    // nasce marcado pra reconectar e o motivo vai pro log.
     let token = short.access_token
     let expiresInSeconds: number | null = null
+    let tokenCurto = false
     try {
       const longRes = await fetch(
         `${GRAPH_BASE}/access_token?grant_type=ig_exchange_token&client_secret=${APP_SECRET}&access_token=${short.access_token}`,
@@ -114,13 +121,22 @@ export async function GET(request: Request) {
       const long = (await longRes.json().catch(() => ({}))) as {
         access_token?: string
         expires_in?: number
+        error?: { message?: string; code?: number }
       }
       if (long.access_token) {
         token = long.access_token
         expiresInSeconds = long.expires_in ?? null
+      } else {
+        tokenCurto = true
+        console.error(
+          `[instagram oauth] troca pelo token de 60 dias FALHOU (a conexão vai durar ~1h): ${
+            long.error?.message ?? `HTTP ${longRes.status}`
+          }. Confira INSTAGRAM_APP_SECRET.`,
+        )
       }
-    } catch {
-      /* fica com o de curta duração */
+    } catch (err) {
+      tokenCurto = true
+      console.error('[instagram oauth] troca pelo token de 60 dias falhou:', err)
     }
 
     // 3) id + @username da conta.
@@ -165,6 +181,16 @@ export async function GET(request: Request) {
         ? { token_expires_at: new Date(Date.now() + expiresInSeconds * 1000).toISOString() }
         : {}),
       ...(igId === appScopedId && !/^17\d{15,}$/.test(igId) ? { ig_id_provisional: true } : {}),
+      ...(tokenCurto
+        ? {
+            health: {
+              state: 'warn',
+              reason:
+                'O Instagram não liberou o acesso de longa duração: esta conexão vale por cerca de 1 hora. Reconecte o Instagram; se repetir, fale com o suporte.',
+              at: new Date().toISOString(),
+            },
+          }
+        : {}),
     }
     const credentials = {
       accessToken: token,
