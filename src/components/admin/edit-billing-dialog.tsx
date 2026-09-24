@@ -40,7 +40,14 @@ interface AsaasFound {
 
 interface AsaasBilling {
   subscriptions: { id: string; value: number; description?: string; nextDueDate?: string; status?: string }[];
-  installments: { id: string; value: number; installmentCount?: number; description?: string }[];
+  installments: {
+    id: string;
+    value: number;
+    /** O valor de CADA parcela (o `value` do Asaas é o total). */
+    installmentValue?: number;
+    installmentCount?: number;
+    description?: string;
+  }[];
   nextCharge: { value: number; dueDate: string } | null;
 }
 
@@ -246,7 +253,9 @@ export function EditBillingDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="sm:max-w-md">
+      {/* 24/09: com o bloco do Asaas o conteúdo passou da tela e o modal
+          ficava estático, sem chegar no botão de salvar. */}
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Editar cobrança</DialogTitle>
           <DialogDescription>
@@ -255,7 +264,7 @@ export function EditBillingDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
+        <div className="-mr-2 flex-1 space-y-4 overflow-y-auto pr-2 py-2">
           <div className="space-y-2">
             <Label className="text-muted-foreground">Status</Label>
             <select
@@ -394,26 +403,33 @@ export function EditBillingDialog({
                       setMonthlyValue(String(s.value).replace(".", ","));
                       toast.success("Assinatura vinculada — salve para confirmar.");
                     }}
-                    className="block w-full rounded px-2 py-1 text-left hover:bg-muted"
+                    className="block w-full rounded border border-border bg-background px-2 py-1.5 text-left hover:bg-muted"
                   >
                     Assinatura · {brl(s.value)}/mês
                     {s.description ? ` · ${s.description}` : ""}
+                    <span className="block text-xs text-primary">Clique para usar este valor</span>
                   </button>
                 ))}
-                {asaasBilling.installments.map((i) => (
-                  <button
-                    key={i.id}
-                    type="button"
-                    onClick={() => {
-                      setMonthlyValue(String(i.value).replace(".", ","));
-                      toast.success("Valor do parcelamento copiado — salve para confirmar.");
-                    }}
-                    className="block w-full rounded px-2 py-1 text-left hover:bg-muted"
-                  >
-                    Parcelamento · {i.installmentCount ?? "?"}× {brl(i.value)}
-                    {i.description ? ` · ${i.description}` : ""}
-                  </button>
-                ))}
+                {asaasBilling.installments.map((i) => {
+                  // A PARCELA é o que o cliente paga por mês; `value` é o total.
+                  const parcela = i.installmentValue ?? (i.installmentCount ? i.value / i.installmentCount : i.value);
+                  return (
+                    <button
+                      key={i.id}
+                      type="button"
+                      onClick={() => {
+                        setMonthlyValue(parcela.toFixed(2).replace(".", ","));
+                        toast.success("Valor da parcela copiado — salve para confirmar.");
+                      }}
+                      className="block w-full rounded border border-border bg-background px-2 py-1.5 text-left hover:bg-muted"
+                    >
+                      Parcelamento · {i.installmentCount ?? "?"}× {brl(parcela)}
+                      <span className="text-muted-foreground"> (total {brl(i.value)})</span>
+                      {i.description ? ` · ${i.description}` : ""}
+                      <span className="block text-xs text-primary">Clique para usar este valor</span>
+                    </button>
+                  );
+                })}
                 {asaasBilling.nextCharge && (
                   <p className="px-2 pt-1 text-xs text-muted-foreground">
                     Próxima em aberto: {brl(asaasBilling.nextCharge.value)} em{" "}

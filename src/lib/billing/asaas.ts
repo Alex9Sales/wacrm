@@ -232,10 +232,13 @@ export async function listCustomerSubscriptions(
 
 export interface AsaasInstallmentRow {
   id: string
+  /** ⚠️ No parcelamento do Asaas, `value` é o TOTAL — não a parcela. O valor
+   *  de cada parcela vem em `installmentValue` (24/09: a tela mostrou
+   *  "6× R$ 7.791,00" quando o certo era 6× R$ 1.298,50). */
   value: number
+  installmentValue?: number
   installmentCount?: number
   description?: string
-  /** Soma de todas as parcelas. */
   totalValue?: number
 }
 
