@@ -14,6 +14,7 @@
 import { crmFallbackForTool } from './crm-fallback'
 import { SAME_ORDER_WINDOW_MS } from './order-window'
 import { failureKey, retryBlockedSummary, withFailureGuidance } from './tool-failure'
+import { idsInText, looksLikeId, repairIdArgs, type IdRepair } from './tool-id-repair'
 import { and, desc, eq, gte } from 'drizzle-orm'
 import { assertPublicUrl } from '@/lib/net/safe-url'
 
@@ -288,6 +289,42 @@ export function stableArgsKey(args: Record<string, unknown>): string {
  * Devolve a rodada em vez de um booleano porque o modelo precisa saber QUANDO
  * foi e O QUE resultou — sem isso ele não consegue confirmar direito ao cliente.
  */
+/** Janela de resultados de ferramenta que serve de fonte dos códigos válidos. */
+const ID_SOURCE_WINDOW_MS = 6 * 60 * 60_000
+
+/**
+ * Corrige os códigos dos argumentos usando o que as ferramentas responderam
+ * nesta conversa. Best-effort: qualquer falha devolve os argumentos como
+ * vieram — conserto é melhoria, nunca pode derrubar a chamada.
+ */
+async function repairIdsFromConversation(
+  args: Record<string, unknown>,
+  conversationId: string,
+): Promise<{ args: Record<string, unknown>; repairs: IdRepair[] } | null> {
+  if (!Object.values(args).some(looksLikeId)) return null
+  try {
+    const cutoff = new Date(Date.now() - ID_SOURCE_WINDOW_MS).toISOString()
+    const rows = await db
+      .select({ resultSummary: agentToolRuns.resultSummary })
+      .from(agentToolRuns)
+      .where(
+        and(
+          eq(agentToolRuns.conversationId, conversationId),
+          eq(agentToolRuns.status, 'ok'),
+          gte(agentToolRuns.createdAt, cutoff),
+        ),
+      )
+      .orderBy(desc(agentToolRuns.createdAt))
+      .limit(20)
+    const known = new Set<string>()
+    for (const r of rows) for (const id of idsInText(r.resultSummary)) known.add(id)
+    return repairIdArgs(args, known)
+  } catch (err) {
+    console.error('[external-tools] conferência de códigos falhou:', err)
+    return null
+  }
+}
+
 async function previousSuccessfulRun(
   toolId: string,
   conversationId: string,
@@ -363,6 +400,19 @@ export async function executeTool(
         summary: `Faltaram parâmetros obrigatórios: ${missing.map((p) => p.name).join(', ')}. Pergunte ao cliente e chame de novo.`,
       }
     } else {
+      // 🔧 O modelo copia códigos de uma ferramenta pra outra e às vezes erra
+      // um dígito — e o sistema do cliente responde "não encontrado" com a
+      // venda já fechada. Confere contra o que as ferramentas DESTA conversa
+      // responderam antes de mandar (24/09, Família do Gás).
+      const fix = ctx.conversationId ? await repairIdsFromConversation(args, ctx.conversationId) : null
+      if (fix?.repairs.length) {
+        args = fix.args
+        for (const r of fix.repairs) {
+          console.warn(
+            `[external-tools] ${tool.slug}: ${r.param} veio errado do modelo (${r.from}) — corrigido para ${r.to}`,
+          )
+        }
+      }
       try {
         const { out: baseUrl, used } = fillPlaceholders(tool.url, args, true)
         // 🛡️ Anti-SSRF: só destino público (auditoria 02/09).
