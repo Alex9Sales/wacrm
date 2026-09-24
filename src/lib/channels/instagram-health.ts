@@ -182,6 +182,18 @@ export async function ensureIgDelivery(ch: ChannelCtx): Promise<IgDeliveryResult
         return { ...base, error: me.error, needsReconnect: true }
       }
       return { ...base, error: me.error }
+    } else {
+      // 200, mas sem o id da conta profissional. O caso típico é um perfil
+      // PESSOAL: o Instagram só entrega comentário e DM para conta
+      // profissional (Comercial ou Criador de conteúdo). Reconectar não
+      // resolve — quem tem que mudar é o perfil, no app do Instagram.
+      const pessoal = (me.accountType ?? '').toUpperCase() === 'PERSONAL'
+      return {
+        ...base,
+        error: pessoal
+          ? 'Este perfil do Instagram é uma conta pessoal. Para receber comentários e mensagens, mude o perfil para conta profissional (Comercial ou Criador de conteúdo) no app do Instagram e reconecte aqui.'
+          : 'O Instagram não devolveu o identificador da conta profissional deste perfil. Verifique no app do Instagram se ele está como conta profissional (Comercial ou Criador de conteúdo) e reconecte aqui.',
+      }
     }
   }
 

@@ -749,28 +749,55 @@ export function isInstagramAuthError(err: { code?: number; message?: string } | 
  * o canal ficava mudo — inscrição 400 ("Unsupported request") e webhook sem
  * dono. Esta função é a fonte da verdade pra consertar isso depois.
  */
-export async function fetchInstagramMe(
-  ch: ChannelCtx,
-): Promise<{ userId: string | null; username: string | null; error: string | null }> {
+export async function fetchInstagramMe(ch: ChannelCtx): Promise<{
+  userId: string | null
+  username: string | null
+  /** PERSONAL = conta pessoal: não recebe webhook de comentário. */
+  accountType: string | null
+  error: string | null
+}> {
   try {
-    const res = await fetch(`${graphBaseOf(ch)}/me?fields=user_id,username`, {
+    // `id` é o app-scoped; `user_id` é o da conta profissional. Pedimos os dois
+    // (e o account_type) porque uma conta PESSOAL não tem o segundo — e é isso
+    // que precisamos saber para dizer ao cliente o que fazer.
+    const res = await fetch(`${graphBaseOf(ch)}/me?fields=id,user_id,username,account_type`, {
       headers: { Authorization: `Bearer ${accessTokenOf(ch)}` },
     })
     const body = (await res.json().catch(() => ({}))) as {
+      id?: string | number
       user_id?: string | number
       username?: string
+      account_type?: string
       error?: { message?: string; code?: number }
     }
     if (!res.ok) {
-      return { userId: null, username: null, error: body.error?.message || `HTTP ${res.status}` }
+      return {
+        userId: null,
+        username: null,
+        accountType: null,
+        error: body.error?.message || `HTTP ${res.status}`,
+      }
+    }
+    if (!body.user_id) {
+      // Sem user_id o canal fica mudo e nada na tela explica o porquê — logue o
+      // que a Meta devolveu, é o único jeito de descobrir de fora.
+      console.error(
+        `[instagram] /me sem user_id no canal ${ch.id}: ${JSON.stringify(body).slice(0, 400)}`,
+      )
     }
     return {
       userId: body.user_id ? String(body.user_id) : null,
       username: body.username ?? null,
+      accountType: body.account_type ?? null,
       error: null,
     }
   } catch (err) {
-    return { userId: null, username: null, error: err instanceof Error ? err.message : 'falha na consulta' }
+    return {
+      userId: null,
+      username: null,
+      accountType: null,
+      error: err instanceof Error ? err.message : 'falha na consulta',
+    }
   }
 }
 

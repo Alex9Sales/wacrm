@@ -17,7 +17,7 @@ import {
   fetchInstagramSubscription,
   isInstagramAuthError,
 } from '@/lib/channels/providers/instagram'
-import { ensureIgDelivery, markIgChannelExpired } from '@/lib/channels/instagram-health'
+import { ensureIgDelivery, looksLikeAppScopedId, markIgChannelExpired } from '@/lib/channels/instagram-health'
 
 export interface CommentAutomation {
   id: string
@@ -444,6 +444,17 @@ export async function checkCommentWebhook(channelId: string): Promise<CommentWeb
   const ctx = await getCurrentAccount()
   const ch = await loadChannelByAccount(ctx.accountId, channelId)
   if (!ch || ch.provider !== 'instagram') return { ok: false, missing: [], error: 'Canal não encontrado.' }
+  // O canal guardado com o id app-scoped (28…) responde erro cru da Meta
+  // ("Unsupported request"), que não diz nada a ninguém. Diga o que fazer.
+  const igId = (ch.providerMeta as Record<string, unknown>).ig_id
+  if (looksLikeAppScopedId(typeof igId === 'string' ? igId : null)) {
+    return {
+      ok: false,
+      missing: ['comments'],
+      error:
+        'Este perfil do Instagram ainda não está pronto para entregar comentários. Clique em "Tentar de novo" que eu verifico e corrijo o que der.',
+    }
+  }
   const sub = await fetchInstagramSubscription(ch)
   if (sub.error) {
     // 24/09: token vencido chegava aqui como "não deu pra perguntar" e a tela
