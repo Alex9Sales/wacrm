@@ -14,7 +14,7 @@
 import { sql } from 'drizzle-orm'
 
 import { db } from '@/db'
-import { PLANS, isPlanKey } from '@/lib/billing/plans'
+import { PLANS, planPriceOf } from '@/lib/billing/plans'
 
 export interface AccountHealthRow {
   orgId: string
@@ -92,10 +92,10 @@ function toRows(res: unknown): Array<Record<string, unknown>> {
   return Array.isArray(r) ? (r as Array<Record<string, unknown>>) : []
 }
 
-function planPrice(plan: string | null): number {
-  if (plan && isPlanKey(plan)) return PLANS[plan].price
-  return 0
-}
+// Preço do plano: `planPriceOf` tolera a caixa com que o plano foi gravado
+// ("Pro", "PRO", "Enterprise"). Era o que faltava aqui — o painel mostrava
+// MRR R$ 0 com 12 assinantes ativos (24/09).
+const planPrice = planPriceOf
 
 /** Health 0-100 — pesos-HIPÓTESE (ativação 30, frequência 25, profundidade
  *  20, volume 15, pagamento 10). Calibrar quando houver histórico de

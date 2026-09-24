@@ -63,6 +63,20 @@ export function getPlan(key: string): Plan | null {
   return isPlanKey(key) ? PLANS[key] : null
 }
 
+/**
+ * Preço mensal do plano gravado na conta, tolerante à caixa.
+ *
+ * ⚠️ 24/09: o plano é texto livre no cadastro e as contas reais estão como
+ * "Pro", "PRO", "Enterprise". Quem comparava direto com `isPlanKey` (que só
+ * aceita minúsculo) não achava nenhuma — o painel de Sucesso mostrava
+ * **MRR R$ 0 com 12 assinantes ativos**. Use SEMPRE esta função em vez de
+ * indexar PLANS na mão.
+ */
+export function planPriceOf(plan: string | null | undefined): number {
+  const key = plan?.trim().toLowerCase()
+  return key && isPlanKey(key) ? PLANS[key].price : 0
+}
+
 /** Formata o preço em reais (ex.: 1999 → "R$ 1.999"; 139.9 → "R$ 139,90"). */
 export function formatPrice(value: number): string {
   const opts = Number.isInteger(value)
