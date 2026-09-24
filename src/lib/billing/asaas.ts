@@ -181,3 +181,85 @@ export async function cancelSubscription(subscriptionId: string): Promise<void> 
     throw err
   }
 }
+
+// ------------------------------------------------------------
+// 🔗 Vincular uma conta do CRM a quem já existe no Asaas (24/09).
+//
+// Vários clientes foram cadastrados no Asaas na mão, antes de existir a
+// assinatura pelo CRM: o Renato tem um parcelamento de 6× R$ 1.298,50 e o
+// João uma cobrança avulsa do agente. O painel mostrava esse dinheiro como
+// zero porque nada aponta pro Asaas. Aqui está o que a tela de vínculo
+// precisa: achar o cliente e listar o que ele já tem.
+// ------------------------------------------------------------
+
+/** Busca clientes por nome, e-mail ou documento (o que o admin digitar). */
+export async function searchCustomers(term: string): Promise<AsaasCustomer[]> {
+  const q = term.trim()
+  if (!q) return []
+  const digits = q.replace(/\D/g, '')
+  // Documento completo é busca exata: evita trazer meio mundo.
+  if (digits.length === 11 || digits.length === 14) {
+    const r = await asaasFetch<{ data?: AsaasCustomer[] }>(
+      `/customers?cpfCnpj=${encodeURIComponent(digits)}`,
+    )
+    return r.data ?? []
+  }
+  const param = q.includes('@') ? 'email' : 'name'
+  const r = await asaasFetch<{ data?: AsaasCustomer[] }>(
+    `/customers?${param}=${encodeURIComponent(q)}&limit=20`,
+  )
+  return r.data ?? []
+}
+
+export interface AsaasSubscriptionRow {
+  id: string
+  value: number
+  status?: string
+  cycle?: string
+  description?: string
+  nextDueDate?: string
+}
+
+/** Assinaturas (recorrência de verdade) de um cliente. */
+export async function listCustomerSubscriptions(
+  customerId: string,
+): Promise<AsaasSubscriptionRow[]> {
+  const r = await asaasFetch<{ data?: AsaasSubscriptionRow[] }>(
+    `/subscriptions?customer=${encodeURIComponent(customerId)}&limit=50`,
+  )
+  return r.data ?? []
+}
+
+export interface AsaasInstallmentRow {
+  id: string
+  value: number
+  installmentCount?: number
+  description?: string
+  /** Soma de todas as parcelas. */
+  totalValue?: number
+}
+
+/**
+ * Parcelamentos do cliente — é o caso do Renato: 6× R$ 1.298,50 pela
+ * implantação, que NÃO é assinatura e por isso não aparece em /subscriptions.
+ */
+export async function listCustomerInstallments(
+  customerId: string,
+): Promise<AsaasInstallmentRow[]> {
+  const r = await asaasFetch<{ data?: AsaasInstallmentRow[] }>(
+    `/installments?customer=${encodeURIComponent(customerId)}&limit=50`,
+  )
+  return r.data ?? []
+}
+
+/** Próxima cobrança em aberto do cliente (pro painel dizer quando vence). */
+export async function nextOpenCharge(
+  customerId: string,
+): Promise<{ id: string; value: number; dueDate: string; invoiceUrl?: string } | null> {
+  const r = await asaasFetch<{
+    data?: { id: string; value: number; dueDate: string; invoiceUrl?: string }[]
+  }>(
+    `/payments?customer=${encodeURIComponent(customerId)}&status=PENDING&limit=1&order=asc&sort=dueDate`,
+  )
+  return r.data?.[0] ?? null
+}

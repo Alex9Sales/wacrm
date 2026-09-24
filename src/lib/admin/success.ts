@@ -97,6 +97,13 @@ function toRows(res: unknown): Array<Record<string, unknown>> {
 // MRR R$ 0 com 12 assinantes ativos (24/09).
 const planPrice = planPriceOf
 
+/** Valor contratado da conta (numeric vem como string no driver). */
+function contractedValue(raw: unknown): number | null {
+  if (raw === null || raw === undefined) return null
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
 /** Health 0-100 — pesos-HIPÓTESE (ativação 30, frequência 25, profundidade
  *  20, volume 15, pagamento 10). Calibrar quando houver histórico de
  *  cancelamento: a nota das contas 60 dias antes de sair tem que separar quem
@@ -148,6 +155,7 @@ export async function getSuccessDashboard(): Promise<SuccessDashboard> {
       o.created_at,
       b.status,
       b.plan,
+      b.monthly_value,
       (SELECT count(*)::int FROM channels c WHERE c.account_id = o.id) AS channels,
       (SELECT count(*)::int FROM contacts ct WHERE ct.account_id = o.id) AS contacts,
       (SELECT count(*)::int FROM deals d WHERE d.account_id = o.id) AS deals,
@@ -221,7 +229,10 @@ export async function getSuccessDashboard(): Promise<SuccessDashboard> {
       createdAt,
       status,
       plan: (r.plan as string | null) ?? null,
-      price: planPrice((r.plan as string | null) ?? null),
+      // O que o cliente paga de VERDADE: o valor contratado manda sobre o
+      // preço de tabela (implantação parcelada, preço travado, reajuste
+      // combinado). Sem valor gravado, cai no plano — 24/09.
+      price: contractedValue(r.monthly_value) ?? planPrice((r.plan as string | null) ?? null),
       ttvDays,
       activated: channels > 0 && deals > 0,
       iaTtvHours,

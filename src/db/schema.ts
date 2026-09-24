@@ -162,6 +162,14 @@ export const organizationBilling = pgTable("organization_billing", {
 	// /api/webhooks/asaas vira o status pra 'active' quando o pagamento confirma.
 	asaasCustomerId: text("asaas_customer_id"),
 	asaasSubscriptionId: text("asaas_subscription_id"),
+	// Documento do cliente (migr 0191): o formulário do site já pedia e
+	// validava, mas mandava direto pro Asaas sem guardar — sem ele não dava
+	// pra achar o cliente lá a partir do CRM.
+	cpfCnpj: text("cpf_cnpj"),
+	// Valor que o cliente paga de verdade por mês (migr 0191). NULL = usa o
+	// preço de tabela do plano. Existe porque o contratado nem sempre é a
+	// tabela: implantação parcelada, preço travado, degrau de reajuste.
+	monthlyValue: numeric("monthly_value", { precision: 12, scale: 2 }),
 	// Ciclo de vida (migr 0102): cancel_at = fim do período pago quando o cliente
 	// cancela (o acesso vale ATÉ lá; depois vira 'canceled'). deleted_at =
 	// soft-delete (mantém o registro + histórico, mas bloqueia e some da lista).

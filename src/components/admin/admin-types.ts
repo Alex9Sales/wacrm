@@ -27,6 +27,12 @@ export interface ClientListRow {
   responsible: { id: string; email: string; name: string } | null;
   memberCount: number;
   channelCount: number;
+  /** Documento do cliente (migr 0191) — é por ele que se acha no Asaas. */
+  cpfCnpj: string | null;
+  /** Valor realmente contratado por mês. null = usa o preço do plano. */
+  monthlyValue: number | null;
+  asaasCustomerId: string | null;
+  asaasSubscriptionId: string | null;
 }
 
 /** A platform admin (Alex/Rafael) that can own clients — for the picker. */

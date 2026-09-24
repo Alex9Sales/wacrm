@@ -53,6 +53,12 @@ export interface ClientListRow {
   responsible: { id: string; email: string; name: string } | null;
   memberCount: number;
   channelCount: number;
+  /** Documento do cliente (migr 0191) — é por ele que se acha no Asaas. */
+  cpfCnpj: string | null;
+  /** Valor realmente contratado por mês. null = usa o preço do plano. */
+  monthlyValue: number | null;
+  asaasCustomerId: string | null;
+  asaasSubscriptionId: string | null;
 }
 
 /**
@@ -101,6 +107,10 @@ export async function listClients(): Promise<ClientListRow[]> {
       billingPhone: organizationBilling.billingPhone,
       notes: organizationBilling.notes,
       lastReminderAt: organizationBilling.lastReminderAt,
+      cpfCnpj: organizationBilling.cpfCnpj,
+      monthlyValue: organizationBilling.monthlyValue,
+      asaasCustomerId: organizationBilling.asaasCustomerId,
+      asaasSubscriptionId: organizationBilling.asaasSubscriptionId,
       ownerEmail: user.email,
       ownerName: user.name,
       responsibleId: respUser.id,
@@ -143,6 +153,11 @@ export async function listClients(): Promise<ClientListRow[]> {
       : null,
     memberCount: Number(r.memberCount ?? 0),
     channelCount: Number(r.channelCount ?? 0),
+    cpfCnpj: r.cpfCnpj ?? null,
+    // numeric vem como string no driver — o painel quer número.
+    monthlyValue: r.monthlyValue === null || r.monthlyValue === undefined ? null : Number(r.monthlyValue),
+    asaasCustomerId: r.asaasCustomerId ?? null,
+    asaasSubscriptionId: r.asaasSubscriptionId ?? null,
   }));
 }
 

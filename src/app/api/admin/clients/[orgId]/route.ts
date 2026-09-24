@@ -28,6 +28,27 @@ interface PatchBody {
   billing_phone?: unknown;
   notes?: unknown;
   responsible_admin_id?: unknown;
+  // Vínculo com o Asaas (24/09): documento do cliente, valor realmente
+  // contratado e os ids de lá. Ver drizzle/0191.
+  cpf_cnpj?: unknown;
+  monthly_value?: unknown;
+  asaas_customer_id?: unknown;
+  asaas_subscription_id?: unknown;
+}
+
+/**
+ * Valor em reais. undefined = não mexe, null = limpa, número > 0 = grava.
+ * Aceita "1.298,50" e "1298.50" — o admin digita como está no Asaas.
+ */
+function optionalMoney(v: unknown): string | null | undefined {
+  if (v === undefined) return undefined;
+  if (v === null || v === "") return null;
+  const raw = typeof v === "number" ? String(v) : typeof v === "string" ? v : null;
+  if (raw === null) return undefined;
+  const norm = raw.trim().replace(/\s/g, "").replace(/\./g, "").replace(",", ".");
+  const n = Number(norm);
+  if (!Number.isFinite(n) || n < 0) throw new Error("invalid-money");
+  return n > 0 ? n.toFixed(2) : null;
 }
 
 /**
@@ -96,6 +117,23 @@ export async function PATCH(
     const plan = optionalText(body.plan);
     const billingPhone = optionalText(body.billing_phone);
     const notes = optionalText(body.notes);
+    // Documento sempre em dígitos: é assim que o Asaas procura.
+    const cpfCnpjRaw = optionalText(body.cpf_cnpj);
+    const cpfCnpj =
+      cpfCnpjRaw === undefined || cpfCnpjRaw === null
+        ? cpfCnpjRaw
+        : cpfCnpjRaw.replace(/\D/g, "") || null;
+    const asaasCustomerId = optionalText(body.asaas_customer_id);
+    const asaasSubscriptionId = optionalText(body.asaas_subscription_id);
+    let monthlyValue: string | null | undefined;
+    try {
+      monthlyValue = optionalMoney(body.monthly_value);
+    } catch {
+      return NextResponse.json(
+        { error: "monthly_value inválido (use um número, ex.: 1298,50)." },
+        { status: 400 },
+      );
+    }
 
     // Responsible admin (tri-state): undefined = untouched, null = clear,
     // string = must be a real platform admin's user id (else 400).
@@ -148,6 +186,11 @@ export async function PATCH(
     if (notes !== undefined) updates.notes = notes;
     if (responsibleAdminId !== undefined)
       updates.responsibleAdminId = responsibleAdminId;
+    if (cpfCnpj !== undefined) updates.cpfCnpj = cpfCnpj;
+    if (monthlyValue !== undefined) updates.monthlyValue = monthlyValue;
+    if (asaasCustomerId !== undefined) updates.asaasCustomerId = asaasCustomerId;
+    if (asaasSubscriptionId !== undefined)
+      updates.asaasSubscriptionId = asaasSubscriptionId;
 
     const existing = firstOrNull(
       await db
@@ -178,6 +221,10 @@ export async function PATCH(
           billingPhone: billingPhone ?? null,
           notes: notes ?? null,
           responsibleAdminId: responsibleAdminId ?? null,
+          cpfCnpj: cpfCnpj ?? null,
+          monthlyValue: monthlyValue ?? null,
+          asaasCustomerId: asaasCustomerId ?? null,
+          asaasSubscriptionId: asaasSubscriptionId ?? null,
         })
         .returning();
     }
