@@ -70,22 +70,29 @@ export async function POST(request: Request, { params }: RouteParams) {
     const origin = resolveOrigin(request)
     const webhookUrl = `${origin}/api/webhooks/${channel.provider}/${channel.id}?secret=${encodeURIComponent(channel.webhookSecret)}`
 
-    const { qr } = await provider.startSession(channel, webhookUrl)
+    const { qr, state } = await provider.startSession(channel, webhookUrl)
+
+    // Já conectado: não marque como "esperando leitura" — era o que fazia o
+    // canal bom aparecer como pendente na tela (24/09).
+    if (!qr && state === 'connected') {
+      await updateChannelStatus(channel.id, 'connected')
+      return NextResponse.json({ qr: null, qrIsImage: false, state: 'connected' })
+    }
 
     // Mark the channel as awaiting a scan.
     await updateChannelStatus(channel.id, 'qr_pending')
 
     if (!qr) {
-      // Session started but no QR this round (still initializing, or already
-      // paired). The UI should poll /state.
-      return NextResponse.json({ qr: null, qrIsImage: false })
+      // A sessão ainda está subindo — a tela pede de novo em instantes em vez
+      // de tratar isso como "reconectando sozinho" e ficar parada.
+      return NextResponse.json({ qr: null, qrIsImage: false, state: state ?? 'starting' })
     }
 
     // waha/evolution return a data:image/... URL; evogo returns a raw
     // string (starts with '2@'). Flag which so the UI renders an <img> or
     // encodes the string into a QR itself.
     const qrIsImage = qr.startsWith('data:')
-    return NextResponse.json({ qr, qrIsImage })
+    return NextResponse.json({ qr, qrIsImage, state: 'qr' })
   } catch (err) {
     return toErrorResponse(err)
   }

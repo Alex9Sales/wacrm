@@ -18,10 +18,15 @@
 // restart it re-evaluates from scratch, which at worst re-alerts once — fine.
 // ============================================================
 
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 
-import { db, channels, member, notifications } from '@/db';
+import { db, channels, conversations, member, messages, notifications } from '@/db';
 import { loadChannel } from '@/lib/channels/channels';
+import {
+  sessionVerdict,
+  verdictReason,
+  ZOMBIE_SILENCE_MS,
+} from '@/lib/channels/session-health-rules';
 import {
   wahaSessionHealth,
   wahaRestartSession,
@@ -34,10 +39,6 @@ import {
 const webhookReconciled = new Set<string>();
 import { publishEvent } from '@/lib/events/publish';
 
-// Activity older than this on a WORKING session = suspected zombie. Generous so
-// a genuinely quiet channel (which still gets presence/ack events) isn't
-// flagged. Tunable via env.
-const STALE_MS = Number(process.env.SESSION_STALE_MS) || 30 * 60_000;
 // Don't restart the same channel more than once per window (avoid churn / a
 // restart loop on a session that actually needs a human re-pair).
 const RESTART_COOLDOWN_MS = 30 * 60_000;
@@ -49,6 +50,29 @@ interface ChannelState {
   alertedAt?: number;
 }
 const state = new Map<string, ChannelState>();
+
+/**
+ * Há quanto tempo este canal trocou a última mensagem. É o que separa um
+ * canal que parou de entregar (precisa de reinício) de um canal que está
+ * simplesmente quieto (não se mexe). null = nunca trocou nada.
+ */
+async function channelTrafficAgeMs(channelId: string): Promise<number | null> {
+  try {
+    const row = await db
+      .select({ at: messages.createdAt })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .where(eq(conversations.channelId, channelId))
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+    const at = row[0]?.at;
+    if (!at) return null;
+    return Date.now() - new Date(at).getTime();
+  } catch (err) {
+    console.error('[session-monitor] leitura de tráfego falhou:', err);
+    return null;
+  }
+}
 
 export async function runSessionHealthCheck(): Promise<void> {
   let rows: { id: string; accountId: string; name: string }[];
@@ -83,10 +107,16 @@ export async function runSessionHealthCheck(): Promise<void> {
 
       const { wahaStatus, activityAgeMs, webhookEvents } =
         await wahaSessionHealth(ch);
-      const stale = activityAgeMs !== null && activityAgeMs > STALE_MS;
-      const healthy = wahaStatus === 'WORKING' && !stale;
+      // Só busca o tráfego do canal quando a sessão está WORKING e calada —
+      // é o único caso em que a resposta muda a decisão.
+      const trafficAgeMs =
+        wahaStatus === 'WORKING' && activityAgeMs !== null && activityAgeMs > ZOMBIE_SILENCE_MS
+          ? await channelTrafficAgeMs(row.id)
+          : null;
+      const signals = { wahaStatus, activityAgeMs, trafficAgeMs };
+      const verdict = sessionVerdict(signals);
 
-      if (healthy) {
+      if (verdict === 'healthy') {
         state.delete(row.id); // recovered → forget so a future issue is fresh
         // Sessão antiga com lista de eventos defasada (criada antes de um
         // evento novo existir) → completa os que faltam (ex.: message.edited).
@@ -103,9 +133,7 @@ export async function runSessionHealthCheck(): Promise<void> {
 
       const now = Date.now();
       const st = state.get(row.id) ?? {};
-      const why = `waha=${wahaStatus} activity=${
-        activityAgeMs === null ? 'none' : Math.round(activityAgeMs / 60_000) + 'min'
-      }`;
+      const why = verdictReason(signals, verdict);
 
       // 1) Soft restart once per cooldown — recovers many stalls, no QR.
       if (!st.restartedAt || now - st.restartedAt > RESTART_COOLDOWN_MS) {

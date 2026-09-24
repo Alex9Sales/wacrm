@@ -476,7 +476,19 @@ export interface WhatsAppProvider {
   ): Promise<{ url: string } | null>;
 
   // ---- session lifecycle (non-official providers) ----
-  startSession?(ch: ChannelCtx, webhookUrl: string): Promise<{ qr?: string }>;
+  /**
+   * Inicia (ou retoma) a sessão e devolve o QR de pareamento.
+   *
+   * ⚠️ `state` existe porque o retorno vazio significava DUAS coisas opostas —
+   * "já está conectado" e "ainda não ficou pronto a tempo" — e a tela não
+   * tinha como distinguir: o usuário clicava, esperava e não via QR, erro nem
+   * explicação (24/09). Agora: 'qr' traz o código, 'connected' diz que não há
+   * o que parear, 'starting' pede pra tentar de novo em instantes.
+   */
+  startSession?(
+    ch: ChannelCtx,
+    webhookUrl: string,
+  ): Promise<{ qr?: string; state?: 'qr' | 'connected' | 'starting' }>;
   getState?(
     ch: ChannelCtx,
   ): Promise<{ status: string; phoneNumber?: string | null }>;

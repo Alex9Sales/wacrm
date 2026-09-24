@@ -43,9 +43,14 @@ interface ChannelQrModalProps {
 
 // 'connecting' — /connect returned no QR because the session still has valid
 // credentials and is re-establishing on its own (NOWEB auto-reconnect); no
-// scan needed. 'connected' — a brief success beat before the modal closes,
-// so a reconnect never just silently vanishes.
-type Phase = 'loading' | 'ready' | 'connecting' | 'connected' | 'error';
+// scan needed. 'starting' — a sessão ainda está subindo e o QR vem em
+// instantes (24/09: antes isso virava 'connecting' e a tela ficava parada
+// prometendo uma reconexão que não vinha). 'connected' — a brief success beat
+// before the modal closes, so a reconnect never just silently vanishes.
+type Phase = 'loading' | 'ready' | 'starting' | 'connecting' | 'connected' | 'error';
+
+/** Quantas vezes insistimos enquanto a sessão sobe (3s entre tentativas). */
+const MAX_START_ATTEMPTS = 8;
 
 export function ChannelQrModal({
   channel,
@@ -63,6 +68,7 @@ export function ChannelQrModal({
   const connectedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const qrRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const phaseRef = useRef<Phase>('loading');
+  const startAttemptsRef = useRef(0);
   const onConnectedRef = useRef(onConnected);
   useEffect(() => {
     onConnectedRef.current = onConnected;
@@ -89,15 +95,30 @@ export function ChannelQrModal({
         const payload = await res.json().catch(() => ({}));
         throw new Error(payload.error || `HTTP ${res.status}`);
       }
-      const data = (await res.json()) as { qr: string; qrIsImage: boolean };
+      const data = (await res.json()) as {
+        qr: string;
+        qrIsImage: boolean;
+        state?: 'qr' | 'connected' | 'starting';
+      };
       if (closedRef.current) return;
       if (!data.qr) {
-        // No QR means the session isn't asking to pair — its credentials are
-        // still valid and it's reconnecting on its own. Not an error; the
-        // state poll will confirm 'connected' shortly.
+        // ⚠️ 24/09: vazio significava duas coisas opostas — "já conectado" e
+        // "não ficou pronto a tempo" — e a tela tratava as duas como
+        // "reconectando sozinho", ficando parada pra sempre quando era a
+        // segunda. Agora, se a sessão ainda está subindo, insistimos: o WAHA
+        // leva mais que os ~20s da primeira tentativa pra chegar no QR.
+        if (data.state === 'starting' && startAttemptsRef.current < MAX_START_ATTEMPTS) {
+          startAttemptsRef.current += 1;
+          setPhase('starting');
+          setTimeout(() => {
+            if (!closedRef.current) void requestQr();
+          }, 3000);
+          return;
+        }
         setPhase('connecting');
         return;
       }
+      startAttemptsRef.current = 0;
       const dataUrl = await resolveQr(data.qr, !!data.qrIsImage);
       if (closedRef.current) return;
       setQrDataUrl(dataUrl);
@@ -250,6 +271,17 @@ export function ChannelQrModal({
                 Aguardando leitura...
               </div>
             </>
+          )}
+
+          {phase === 'starting' && (
+            <div className="flex flex-col items-center gap-2 text-muted-foreground">
+              <Loader2 className="size-6 animate-spin" />
+              <p className="text-sm">Preparando o QR Code...</p>
+              <p className="max-w-[16rem] text-center text-xs text-muted-foreground/80">
+                O WhatsApp está iniciando a sessão. Isso leva alguns segundos —
+                o código aparece sozinho aqui.
+              </p>
+            </div>
           )}
 
           {phase === 'connecting' && (

@@ -1897,7 +1897,7 @@ export const wahaProvider: WhatsAppProvider = {
   async startSession(
     ch: ChannelCtx,
     webhookUrl: string,
-  ): Promise<{ qr?: string }> {
+  ): Promise<{ qr?: string; state?: 'qr' | 'connected' | 'starting' }> {
     const base = baseUrlOf(ch);
     const session = sessionOf(ch);
     const enc = encodeURIComponent(session);
@@ -1936,7 +1936,7 @@ export const wahaProvider: WhatsAppProvider = {
           });
           if (res.ok) {
             const buf = Buffer.from(await res.arrayBuffer());
-            return { qr: `data:image/png;base64,${buf.toString('base64')}` };
+            return { qr: `data:image/png;base64,${buf.toString('base64')}`, state: 'qr' };
           }
         } catch {
           /* fall through to the normal (re)start path below */
@@ -2008,7 +2008,7 @@ export const wahaProvider: WhatsAppProvider = {
         headers: headersOf(ch),
       });
       const status = String((s.body as { status?: unknown }).status || '');
-      if (status === 'WORKING') return {};
+      if (status === 'WORKING') return { state: 'connected' };
       if (status === 'SCAN_QR_CODE') {
         try {
           const res = await fetch(`${base}/api/${enc}/auth/qr`, {
@@ -2016,7 +2016,7 @@ export const wahaProvider: WhatsAppProvider = {
           });
           if (res.ok) {
             const buf = Buffer.from(await res.arrayBuffer());
-            return { qr: `data:image/png;base64,${buf.toString('base64')}` };
+            return { qr: `data:image/png;base64,${buf.toString('base64')}`, state: 'qr' };
           }
         } catch {
           /* retry on the next cycle */
@@ -2031,8 +2031,9 @@ export const wahaProvider: WhatsAppProvider = {
       }
       await sleep(1500);
     }
-    // Still initializing — no QR this round.
-    return {};
+    // Ainda subindo: NÃO é "conectado" nem erro. A tela pede de novo em
+    // instantes em vez de ficar muda (24/09).
+    return { state: 'starting' };
   },
 
   async getState(
