@@ -461,9 +461,19 @@ export function EditBillingDialog({
               </p>
             )}
 
-            {/* Criar assinatura — só quando ainda não existe uma. Emite
-                cobrança de verdade, por isso fica atrás de uma confirmação. */}
-            {!asaasSubscriptionId && (
+            {/* ⚠️ 24/09: o Renato tem PARCELAMENTO, não assinatura — e o
+                formulário de criar aparecia do mesmo jeito, convidando a
+                cobrar duas vezes o mesmo cliente. Com parcelamento à vista,
+                avisa em vez de oferecer o botão. */}
+            {!asaasSubscriptionId && (asaasBilling?.installments.length ?? 0) > 0 && (
+              <p className="border-t border-border pt-3 text-xs text-amber-600 dark:text-amber-400">
+                Este cliente já tem parcelamento no Asaas. Não crie assinatura
+                aqui — ele receberia duas cobranças. Use o valor da parcela
+                acima e salve.
+              </p>
+            )}
+
+            {!asaasSubscriptionId && (asaasBilling?.installments.length ?? 0) === 0 && (
               <div className="space-y-2 border-t border-border pt-3">
                 <Label className="text-xs text-muted-foreground">
                   Criar assinatura mensal no Asaas
