@@ -728,6 +728,77 @@ export const instagramProvider: WhatsAppProvider = {
 /** Campos que a automação precisa receber do Instagram. */
 export const IG_WEBHOOK_FIELDS = ['messages', 'comments'] as const
 
+/**
+ * O token do Instagram morreu? A Meta devolve OAuthException com code 190
+ * (às vezes 102/463 no Messenger). Quem chama usa isso pra marcar o canal
+ * como "precisa reconectar" em vez de deixar escrito "Conectado" na tela.
+ */
+export function isInstagramAuthError(err: { code?: number; message?: string } | null | undefined): boolean {
+  if (!err) return false
+  if (err.code === 190 || err.code === 102 || err.code === 463) return true
+  return /access token|session has expired|oauthexception/i.test(err.message ?? '')
+}
+
+/**
+ * Conta profissional deste token: `user_id` (o 17841…) + @username.
+ *
+ * ⚠️ 24/09 (Zelo): o OAuth devolve DOIS ids — `id` (app-scoped, começa com 28…)
+ * e `user_id` (o id da conta profissional, 17841…). Só o SEGUNDO serve: é ele
+ * que vem no `entry[].id` do webhook e o único que o `subscribed_apps` aceita.
+ * Quando o `/me` falha na conexão, o callback acabava guardando o app-scoped e
+ * o canal ficava mudo — inscrição 400 ("Unsupported request") e webhook sem
+ * dono. Esta função é a fonte da verdade pra consertar isso depois.
+ */
+export async function fetchInstagramMe(
+  ch: ChannelCtx,
+): Promise<{ userId: string | null; username: string | null; error: string | null }> {
+  try {
+    const res = await fetch(`${graphBaseOf(ch)}/me?fields=user_id,username`, {
+      headers: { Authorization: `Bearer ${accessTokenOf(ch)}` },
+    })
+    const body = (await res.json().catch(() => ({}))) as {
+      user_id?: string | number
+      username?: string
+      error?: { message?: string; code?: number }
+    }
+    if (!res.ok) {
+      return { userId: null, username: null, error: body.error?.message || `HTTP ${res.status}` }
+    }
+    return {
+      userId: body.user_id ? String(body.user_id) : null,
+      username: body.username ?? null,
+      error: null,
+    }
+  } catch (err) {
+    return { userId: null, username: null, error: err instanceof Error ? err.message : 'falha na consulta' }
+  }
+}
+
+/**
+ * Renova o token de 60 dias (`ig_refresh_token`). Só vale pra token de longa
+ * duração com pelo menos 24h de vida — a Meta recusa os demais.
+ */
+export async function refreshInstagramToken(
+  ch: ChannelCtx,
+): Promise<{ token: string | null; expiresInSeconds: number | null; error: string | null }> {
+  try {
+    const res = await fetch(
+      `${graphBaseOf(ch)}/refresh_access_token?grant_type=ig_refresh_token&access_token=${encodeURIComponent(accessTokenOf(ch))}`,
+    )
+    const body = (await res.json().catch(() => ({}))) as {
+      access_token?: string
+      expires_in?: number
+      error?: { message?: string }
+    }
+    if (!res.ok || !body.access_token) {
+      return { token: null, expiresInSeconds: null, error: body.error?.message || `HTTP ${res.status}` }
+    }
+    return { token: body.access_token, expiresInSeconds: body.expires_in ?? null, error: null }
+  } catch (err) {
+    return { token: null, expiresInSeconds: null, error: err instanceof Error ? err.message : 'falha ao renovar' }
+  }
+}
+
 export interface InstagramSubscription {
   /** Campos que o Instagram está entregando hoje. */
   fields: string[]
@@ -735,6 +806,8 @@ export interface InstagramSubscription {
   missing: string[]
   /** Não deu para perguntar (token vencido, rede…) — não é o mesmo que "falta". */
   error: string | null
+  /** Código da Meta, quando houve erro (190 = token morto). */
+  errorCode?: number
 }
 
 /** O que o Instagram diz estar entregando para este canal. */
@@ -745,10 +818,15 @@ export async function fetchInstagramSubscription(ch: ChannelCtx): Promise<Instag
     })
     const body = (await res.json().catch(() => ({}))) as {
       data?: { subscribed_fields?: string[] }[]
-      error?: { message?: string }
+      error?: { message?: string; code?: number }
     }
     if (!res.ok) {
-      return { fields: [], missing: [], error: body.error?.message || `HTTP ${res.status}` }
+      return {
+        fields: [],
+        missing: [],
+        error: body.error?.message || `HTTP ${res.status}`,
+        errorCode: body.error?.code,
+      }
     }
     const fields = [...new Set((body.data ?? []).flatMap((d) => d.subscribed_fields ?? []))]
     return {
@@ -762,15 +840,19 @@ export async function fetchInstagramSubscription(ch: ChannelCtx): Promise<Instag
 }
 
 /** Inscreve (ou reinscreve) a conta nos campos que a automação precisa. */
-export async function subscribeInstagramWebhook(ch: ChannelCtx): Promise<{ ok: boolean; error?: string }> {
+export async function subscribeInstagramWebhook(
+  ch: ChannelCtx,
+  igIdOverride?: string,
+): Promise<{ ok: boolean; error?: string; errorCode?: number }> {
   try {
+    const target = igIdOverride || igIdOf(ch)
     const res = await fetch(
-      `${graphBaseOf(ch)}/${igIdOf(ch)}/subscribed_apps?subscribed_fields=${IG_WEBHOOK_FIELDS.join(',')}`,
+      `${graphBaseOf(ch)}/${target}/subscribed_apps?subscribed_fields=${IG_WEBHOOK_FIELDS.join(',')}`,
       { method: 'POST', headers: { Authorization: `Bearer ${accessTokenOf(ch)}` } },
     )
     if (res.ok) return { ok: true }
-    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } }
-    return { ok: false, error: body.error?.message || `HTTP ${res.status}` }
+    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string; code?: number } }
+    return { ok: false, error: body.error?.message || `HTTP ${res.status}`, errorCode: body.error?.code }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'falha ao inscrever' }
   }

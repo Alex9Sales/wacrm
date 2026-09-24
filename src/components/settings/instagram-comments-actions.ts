@@ -15,8 +15,9 @@ import { loadChannelByAccount } from '@/lib/channels/channels'
 import {
   fetchInstagramMedia,
   fetchInstagramSubscription,
-  subscribeInstagramWebhook,
+  isInstagramAuthError,
 } from '@/lib/channels/providers/instagram'
+import { ensureIgDelivery, markIgChannelExpired } from '@/lib/channels/instagram-health'
 
 export interface CommentAutomation {
   id: string
@@ -435,6 +436,8 @@ export interface CommentWebhookStatus {
   missing: string[]
   /** Não deu para perguntar à Meta (token vencido, rede). */
   error: string | null
+  /** O token morreu: nenhum botão resolve, só reconectar o Instagram. */
+  needsReconnect?: boolean
 }
 
 export async function checkCommentWebhook(channelId: string): Promise<CommentWebhookStatus> {
@@ -442,26 +445,41 @@ export async function checkCommentWebhook(channelId: string): Promise<CommentWeb
   const ch = await loadChannelByAccount(ctx.accountId, channelId)
   if (!ch || ch.provider !== 'instagram') return { ok: false, missing: [], error: 'Canal não encontrado.' }
   const sub = await fetchInstagramSubscription(ch)
-  if (sub.error) return { ok: false, missing: [], error: sub.error }
+  if (sub.error) {
+    // 24/09: token vencido chegava aqui como "não deu pra perguntar" e a tela
+    // mandava clicar em "Ativar agora", que nunca ia funcionar. Agora o canal é
+    // marcado como caído e a tela pede a reconexão.
+    if (isInstagramAuthError({ code: sub.errorCode, message: sub.error })) {
+      await markIgChannelExpired(ch, sub.error)
+      return {
+        ok: false,
+        missing: [],
+        error: 'A conexão com o Instagram venceu. Reconecte o Instagram para voltar a receber comentários.',
+        needsReconnect: true,
+      }
+    }
+    return { ok: false, missing: [], error: sub.error }
+  }
   return { ok: sub.missing.length === 0, missing: sub.missing, error: null }
 }
 
 /** Liga a entrega de comentários nesta conta (o botão "Ativar agora"). */
-export async function fixCommentWebhook(channelId: string): Promise<{ ok: boolean; error?: string }> {
+export async function fixCommentWebhook(
+  channelId: string,
+): Promise<{ ok: boolean; error?: string; needsReconnect?: boolean }> {
   const ctx = await requireRole('admin')
   const ch = await loadChannelByAccount(ctx.accountId, channelId)
   if (!ch || ch.provider !== 'instagram') return { ok: false, error: 'Canal não encontrado.' }
-  const r = await subscribeInstagramWebhook(ch)
-  if (!r.ok) return r
-  // Confere o resultado em vez de confiar no 200: a Meta às vezes aceita o POST
-  // e não inscreve (permissão de comentários não aprovada no app).
-  const sub = await fetchInstagramSubscription(ch)
-  if (sub.missing.includes('comments')) {
+  // Conserta o ig_id guardado errado, inscreve e confere o resultado em vez de
+  // confiar no 200 — a Meta às vezes aceita o POST e não inscreve.
+  const r = await ensureIgDelivery(ch)
+  if (r.ok) return { ok: true }
+  if (r.needsReconnect) {
     return {
       ok: false,
-      error:
-        'A Meta aceitou o pedido mas não ativou os comentários. Isso acontece quando a permissão de comentários do app ainda não foi aprovada, ou quando quem conectou a conta não autorizou essa permissão — reconecte o Instagram aceitando todas as permissões.',
+      needsReconnect: true,
+      error: 'A conexão com o Instagram venceu. Reconecte o Instagram para voltar a receber comentários.',
     }
   }
-  return { ok: true }
+  return { ok: false, error: r.error ?? 'Não foi possível ativar a entrega dos comentários.' }
 }

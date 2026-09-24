@@ -9,6 +9,7 @@ import { Queue, Worker } from 'bullmq';
 
 import { bullConnection } from '@/lib/queue/connection';
 import { runMetaHealthCheck } from '@/lib/channels/meta-health';
+import { runInstagramHealthCheck } from '@/lib/channels/instagram-health';
 
 const QUEUE = 'meta-health';
 const EVERY_MS = Number(process.env.META_HEALTH_EVERY_MS) || 30 * 60_000;
@@ -23,10 +24,21 @@ export function startMetaHealthWorker(): Worker {
       console.error('[meta-health] schedule failed:', err);
     }
   })();
-  const worker = new Worker(QUEUE, async () => runMetaHealthCheck(), {
-    connection: bullConnection(),
-    concurrency: 1,
-  });
+  const worker = new Worker(
+    QUEUE,
+    async () => {
+      const meta = await runMetaHealthCheck();
+      // Mesmo tick cuida do Instagram: renova o token de 60 dias, conserta o
+      // ig_id gravado errado e reinscreve o webhook (24/09, caso Zelo).
+      try {
+        await runInstagramHealthCheck();
+      } catch (err) {
+        console.error('[instagram health] tick failed:', err);
+      }
+      return meta;
+    },
+    { connection: bullConnection(), concurrency: 1 },
+  );
   worker.on('failed', (_job, err) => console.error('[meta-health] tick failed:', err));
   console.log(`[meta-health] started — tick every ${Math.round(EVERY_MS / 60000)}min`);
   return worker;

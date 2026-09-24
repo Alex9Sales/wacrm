@@ -106,20 +106,34 @@ export async function GET(request: Request) {
 
     // 2) token de curta → longa duração (60 dias).
     let token = short.access_token
+    let expiresInSeconds: number | null = null
     try {
       const longRes = await fetch(
         `${GRAPH_BASE}/access_token?grant_type=ig_exchange_token&client_secret=${APP_SECRET}&access_token=${short.access_token}`,
       )
       const long = (await longRes.json().catch(() => ({}))) as {
         access_token?: string
+        expires_in?: number
       }
-      if (long.access_token) token = long.access_token
+      if (long.access_token) {
+        token = long.access_token
+        expiresInSeconds = long.expires_in ?? null
+      }
     } catch {
       /* fica com o de curta duração */
     }
 
     // 3) id + @username da conta.
-    let igId = short.user_id ? String(short.user_id) : ''
+    //
+    // ⚠️ 24/09 (Zelo): o OAuth devolve DOIS ids — `id`/`user_id` do token de
+    // curta duração é APP-SCOPED (28…), e só o `user_id` do /me é o id da conta
+    // profissional (17841…), que é o que o webhook manda em `entry[].id` e o
+    // único que `subscribed_apps` aceita. O /me falhou calado numa conexão e o
+    // canal ficou com o id errado: mudo, sem inscrição e sem dono no webhook.
+    // Agora a falha aparece no log e o id provisório fica marcado pra
+    // `ensureIgDelivery` consertar depois.
+    const appScopedId = short.user_id ? String(short.user_id) : ''
+    let igId = appScopedId
     let username = ''
     try {
       const meRes = await fetch(
@@ -128,16 +142,30 @@ export async function GET(request: Request) {
       const me = (await meRes.json().catch(() => ({}))) as {
         user_id?: string
         username?: string
+        error?: { message?: string; code?: number }
       }
-      if (me.user_id) igId = me.user_id
+      if (me.user_id) igId = String(me.user_id)
       if (me.username) username = me.username
-    } catch {
-      /* best-effort */
+      if (!me.user_id) {
+        console.error(
+          '[instagram oauth] /me não devolveu user_id — ficando com o id app-scoped:',
+          me.error?.message ?? `HTTP ${meRes.status}`,
+        )
+      }
+    } catch (err) {
+      console.error('[instagram oauth] /me falhou:', err)
     }
     if (!igId) return back('erro')
 
     const name = username ? `Instagram @${username}` : 'Instagram Direct'
-    const providerMeta = { ig_id: igId, graphBase: GRAPH_BASE }
+    const providerMeta: Record<string, unknown> = {
+      ig_id: igId,
+      graphBase: GRAPH_BASE,
+      ...(expiresInSeconds
+        ? { token_expires_at: new Date(Date.now() + expiresInSeconds * 1000).toISOString() }
+        : {}),
+      ...(igId === appScopedId && !/^17\d{15,}$/.test(igId) ? { ig_id_provisional: true } : {}),
+    }
     const credentials = {
       accessToken: token,
       appSecret: APP_SECRET,
@@ -145,6 +173,8 @@ export async function GET(request: Request) {
     }
 
     // 4) Se já existe canal pra esse ig_id, ATUALIZA (reconecta); senão cria.
+    // Procura também pelo id app-scoped: uma conexão antiga pode ter ficado
+    // gravada com ele, e criar um segundo canal partiria as conversas em duas.
     const existing = firstOrNull(
       await db
         .select({ id: channels.id })
@@ -152,7 +182,9 @@ export async function GET(request: Request) {
         .where(
           and(
             eq(channels.provider, 'instagram'),
-            sql`${channels.providerMeta}->>'ig_id' = ${igId}`,
+            appScopedId && appScopedId !== igId
+              ? sql`${channels.providerMeta}->>'ig_id' IN (${igId}, ${appScopedId})`
+              : sql`${channels.providerMeta}->>'ig_id' = ${igId}`,
           ),
         )
         .limit(1),

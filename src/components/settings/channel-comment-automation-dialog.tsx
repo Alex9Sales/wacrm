@@ -341,7 +341,35 @@ export function ChannelCommentAutomationDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {webhook && !webhook.ok && !webhook.error ? (
+        {/* 24/09 (caso Zelo): quando o token vencia, a checagem devolvia `error`
+            e a tela não mostrava NADA — a pessoa comentava, não acontecia nada e
+            não tinha como saber por quê. Agora cada estado tem o seu aviso. */}
+        {webhook?.needsReconnect ? (
+          <div className="rounded-md border border-red-500/40 bg-red-500/10 p-3 text-xs">
+            <p className="font-medium text-red-200">A conexão com o Instagram venceu.</p>
+            <p className="mt-1 text-muted-foreground">
+              Enquanto não reconectar, nenhum comentário chega até aqui e a automação não roda.
+              Reconecte com o mesmo perfil, aceitando todas as permissões — não se perde nenhuma
+              conversa.
+            </p>
+            <a
+              href="/api/instagram/oauth/start"
+              className="mt-2 inline-flex items-center rounded-md bg-gradient-to-r from-purple-500 to-pink-500 px-3 py-1.5 font-medium text-white transition hover:opacity-90"
+            >
+              Reconectar o Instagram
+            </a>
+          </div>
+        ) : webhook?.error ? (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
+            <p className="font-medium text-amber-200">
+              Não deu para confirmar se o Instagram está entregando os comentários.
+            </p>
+            <p className="mt-1 text-muted-foreground">{webhook.error}</p>
+            <Button size="sm" className="mt-2" onClick={() => void ligarEntrega()} disabled={fixing}>
+              {fixing ? 'Tentando…' : 'Tentar de novo'}
+            </Button>
+          </div>
+        ) : webhook && !webhook.ok ? (
           <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
             <p className="font-medium text-amber-200">
               O Instagram ainda não está entregando os comentários desta conta.
