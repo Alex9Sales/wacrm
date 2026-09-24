@@ -366,7 +366,14 @@ export function scheduleInstruction(opts: { approval?: boolean; busySlots?: stri
 /** Instrução: não responder mensagens que não pedem resposta. */
 export function skipInstruction(): string {
   return (
-    'If the customer\'s most recent message clearly does NOT need a reply — e.g. it is just "ok", "tá", "obrigado", a thumbs-up, a single emoji, or a bare acknowledgement — reply with EXACTLY "[[IGNORAR]]" and nothing else, and no message will be sent. Use this sparingly: only when a reply would be noise. When in doubt, reply normally.'
+    'If the customer\'s most recent message clearly does NOT need a reply — e.g. it is just "ok", "tá", "obrigado", a thumbs-up, a single emoji, or a bare acknowledgement — reply with EXACTLY "[[IGNORAR]]" and nothing else, and no message will be sent. ' +
+    // ⚠️ 24/09 (caso Rosangela): a IA perguntou "Fecho assim? Confirmando, já
+    // mando o entregador", a cliente respondeu "Obrigada" — que está na lista
+    // de exemplos acima — e a IA calou. O pedido nunca foi criado e a cliente
+    // esperou 1h15 por um entregador que ninguém chamou. Um agradecimento
+    // logo depois de uma pergunta SUA é o cliente dizendo sim.
+    '⚠️ NEVER skip when YOUR own previous message asked a question or proposed something to confirm (e.g. "Fecho assim?", "Posso mandar?", "Confirma?") or when you still have a pending action to execute: there, "ok", "obrigado", "tá bom", "isso", "pode" or a thumbs-up means YES — answer and DO what was pending (create the order, book the slot) instead of going silent. ' +
+    'Use this sparingly: only when a reply would be noise. When in doubt, reply normally.'
   )
 }
 
