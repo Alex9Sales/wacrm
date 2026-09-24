@@ -65,7 +65,7 @@ async function patchProviderMeta(channelId: string, patch: Record<string, unknow
   const current = (row[0]?.providerMeta ?? {}) as Record<string, unknown>
   await db
     .update(channels)
-    .set({ providerMeta: { ...current, ...patch }, updatedAt: new Date() })
+    .set({ providerMeta: { ...current, ...patch }, updatedAt: new Date().toISOString() })
     .where(eq(channels.id, channelId))
 }
 
@@ -77,7 +77,7 @@ export async function markIgChannelExpired(ch: ChannelCtx, reason: string): Prom
   console.error(`[instagram health] canal ${ch.id} sem token válido: ${reason}`)
   await db
     .update(channels)
-    .set({ status: 'disconnected', updatedAt: new Date() })
+    .set({ status: 'disconnected', updatedAt: new Date().toISOString() })
     .where(eq(channels.id, ch.id))
   await patchProviderMeta(ch.id, {
     health: {
@@ -95,7 +95,7 @@ async function storeRefreshedToken(
   expiresInSeconds: number | null,
 ): Promise<void> {
   const credentials = encryptCredentials({ ...ch.credentials, accessToken: token })
-  await db.update(channels).set({ credentials, updatedAt: new Date() }).where(eq(channels.id, ch.id))
+  await db.update(channels).set({ credentials, updatedAt: new Date().toISOString() }).where(eq(channels.id, ch.id))
   const expiresAt = expiresInSeconds
     ? new Date(Date.now() + expiresInSeconds * 1000).toISOString()
     : null
@@ -172,7 +172,7 @@ export async function ensureIgDelivery(ch: ChannelCtx): Promise<IgDeliveryResult
       if (me.username) {
         await db
           .update(channels)
-          .set({ name: `Instagram @${me.username}`, updatedAt: new Date() })
+          .set({ name: `Instagram @${me.username}`, updatedAt: new Date().toISOString() })
           .where(eq(channels.id, ch.id))
       }
       console.log(`[instagram health] canal ${ch.id}: ig_id corrigido para ${me.userId}`)
@@ -217,7 +217,7 @@ export async function ensureIgDelivery(ch: ChannelCtx): Promise<IgDeliveryResult
     if (repairedIgId) {
       await db
         .update(channels)
-        .set({ status: 'connected', updatedAt: new Date() })
+        .set({ status: 'connected', updatedAt: new Date().toISOString() })
         .where(eq(channels.id, ch.id))
     }
   }

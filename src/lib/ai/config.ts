@@ -1,4 +1,4 @@
-import { and, asc, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, isNotNull, ne } from 'drizzle-orm'
 import { db, aiConfigs, aiCredentials } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { decrypt } from '@/lib/whatsapp/encryption'
@@ -234,11 +234,22 @@ export async function loadEmbeddingsKey(
 ): Promise<{ key: string | null; corrupt: boolean }> {
   let encrypted: string | null = null
   try {
+    // ⚠️ 24/09: com vários agentes na conta, um LIMIT 1 sem ORDER BY devolvia
+    // QUALQUER linha — o Alex salvou a chave no agente padrão e a reindexação
+    // podia cair num agente sem chave, indexar só por palavra e dizer que deu
+    // certo. Pega quem TEM chave primeiro, com o padrão na frente.
     const row = firstOrNull(
       await db
         .select({ embeddingsApiKey: aiConfigs.embeddingsApiKey })
         .from(aiConfigs)
-        .where(eq(aiConfigs.accountId, accountId))
+        .where(
+          and(
+            eq(aiConfigs.accountId, accountId),
+            isNotNull(aiConfigs.embeddingsApiKey),
+            ne(aiConfigs.embeddingsApiKey, ''),
+          ),
+        )
+        .orderBy(desc(aiConfigs.isDefault), asc(aiConfigs.createdAt))
         .limit(1),
     )
     encrypted = row?.embeddingsApiKey ?? null

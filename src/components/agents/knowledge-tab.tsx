@@ -35,19 +35,30 @@ export function KnowledgeTab() {
   const [loadingBases, setLoadingBases] = useState(true);
   const [creating, setCreating] = useState(false);
 
+  // 24/09: isto rodava só na montagem. Quem salvava a chave de embeddings na
+  // tela do agente e voltava pra cá continuava sem o botão "Reindexar", como se
+  // não tivesse salvado nada. Reconsulta quando a aba volta ao foco.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    const check = async () => {
       try {
-        const res = await fetch('/api/ai/config');
+        const res = await fetch('/api/ai/config', { cache: 'no-store' });
         const data = await res.json().catch(() => ({}));
         if (!cancelled) setHasEmbeddingsKey(!!data?.has_embeddings_key);
       } catch {
         if (!cancelled) setHasEmbeddingsKey(false);
       }
-    })();
+    };
+    void check();
+    const onFocus = () => {
+      if (document.visibilityState === 'visible') void check();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
     return () => {
       cancelled = true;
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
     };
   }, []);
 
