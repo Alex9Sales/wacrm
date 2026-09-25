@@ -127,6 +127,33 @@ describe('webhook do Asaas — parar de cobrar quem pagou', () => {
     expect(out.cancelledRequests).toBe(0)
   })
 
+  // 25/09: quem paga EM DIA nunca entra na carteira, que é só de vencidas.
+  // O webhook parava aqui e o cliente que pagou na hora do "vence hoje" não
+  // recebia nada de volta. Agora a parcela é devolvida para quem chama decidir.
+  it('pagamento fora da carteira entrega a parcela para o agradecimento', async () => {
+    state.charge = null
+    const out = await applyAsaasEvent('conn1', 'acc1', ev('PAYMENT_RECEIVED', 'pay_em_dia'))
+    expect(out.action).toBe('unknown_charge')
+    expect(out.paidAsaasId).toBe('pay_em_dia')
+    expect(out.reopenedAsaasId).toBeUndefined()
+  })
+
+  it('estorno fora da carteira entrega a parcela para cancelar o que espera', async () => {
+    state.charge = null
+    const out = await applyAsaasEvent('conn1', 'acc1', ev('PAYMENT_REFUNDED', 'pay_estornado'))
+    expect(out.action).toBe('unknown_charge')
+    expect(out.reopenedAsaasId).toBe('pay_estornado')
+    expect(out.paidAsaasId).toBeUndefined()
+  })
+
+  it('cobrança que ESTÁ na carteira não passa pela porta do pago em dia', async () => {
+    // As duas portas agradecem; entrar pelas duas seria agradecer duas vezes.
+    state.charge = { id: 'ch1', contactId: 'c1', open: true }
+    const out = await applyAsaasEvent('conn1', 'acc1', ev('PAYMENT_RECEIVED'))
+    expect(out.action).toBe('settled')
+    expect(out.paidAsaasId).toBeUndefined()
+  })
+
   it('parcela de acordo paga EM DIA (nunca espelhada) confere a pausa do dono do cadastro, sem nota quando fica', async () => {
     state.charge = null
     state.owners = [{ contactId: 'c9' }]

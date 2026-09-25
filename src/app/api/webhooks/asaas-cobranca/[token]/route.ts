@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 
-import { sendPaymentThanks } from '@/lib/collections/thanks'
+import { cancelHeldThanks, sendPaymentThanks, thanksForAdvancePayment } from '@/lib/collections/thanks'
 import { applyAsaasEvent, connectionByWebhookToken, type AsaasWebhookBody } from '@/lib/collections/webhook'
 
 // ============================================================
@@ -47,6 +47,28 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
         console.log(`[cobranca webhook] ${conn.label}: agradecimento ${t.sent ? `enviado (${t.why})` : `não enviado — ${t.why}`}`)
       } catch (err) {
         console.error('[cobranca webhook] agradecimento falhou:', err instanceof Error ? err.message : err)
+      }
+    }
+    // 🙏 Pagou EM DIA (25/09): a parcela nunca entrou na carteira, que é só de
+    // vencidas. Quem autoriza a mensagem é o aviso que saiu daqui sobre esta
+    // mesma parcela — sem aviso, silêncio. Best-effort pelo mesmo motivo acima.
+    if (out.action === 'unknown_charge' && out.paidAsaasId) {
+      try {
+        const t = await thanksForAdvancePayment({ accountId: conn.accountId, asaasId: out.paidAsaasId })
+        console.log(`[cobranca webhook] ${conn.label}: pagou em dia — agradecimento ${t.sent ? `enviado (${t.why})` : `não enviado — ${t.why}`}`)
+      } catch (err) {
+        console.error('[cobranca webhook] agradecimento (pago em dia) falhou:', err instanceof Error ? err.message : err)
+      }
+    }
+    // Estorno de uma parcela fora da carteira: o agradecimento que ainda
+    // espera a janela não tem cobrança para reconferir, então é aqui que ele
+    // morre — melhor calado do que agradecer o que voltou a dever.
+    if (out.action === 'unknown_charge' && out.reopenedAsaasId) {
+      try {
+        const n = await cancelHeldThanks(conn.accountId, out.reopenedAsaasId)
+        if (n > 0) console.log(`[cobranca webhook] ${conn.label}: ${n} agradecimento(s) em espera cancelado(s) — pagamento desfeito`)
+      } catch (err) {
+        console.error('[cobranca webhook] cancelar agradecimento em espera falhou:', err instanceof Error ? err.message : err)
       }
     }
     return NextResponse.json({ ok: true, action: out.action })

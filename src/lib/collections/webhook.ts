@@ -58,6 +58,13 @@ export interface WebhookOutcome {
   contactId?: string | null
   /** true = a cobrança ESTAVA aberta e fechou agora (evento repetido não conta). */
   transitioned?: boolean
+  /**
+   * Parcela paga que a carteira não conhece — quem paga EM DIA nunca entra
+   * nela. Quem chama decide se agradece (thanksForAdvancePayment).
+   */
+  paidAsaasId?: string
+  /** Pagamento desfeito de uma parcela que a carteira não conhece. */
+  reopenedAsaasId?: string
   /** O que aconteceu com a pausa da régua (só em pagamento). */
   pause?: PauseAfterSettle
 }
@@ -97,7 +104,18 @@ export async function applyAsaasEvent(connectionId: string, accountId: string, b
   // IA que ficou por "ainda tem parcela" precisa ser conferida aqui.
   if (!charge) {
     const pause = settled ? await settleUnmirroredPayment(accountId, connectionId, body.payment?.customer ?? null) : 'none'
-    return { handled: true, action: 'unknown_charge', cancelledRequests: 0, ...(pause !== 'none' ? { pause } : {}) }
+    return {
+      handled: true,
+      action: 'unknown_charge',
+      cancelledRequests: 0,
+      // 🙏 25/09: pagou EM DIA a parcela que avisamos. Até aqui o webhook
+      // parava neste ponto e o cliente que pagou na hora do "vence hoje"
+      // não recebia nada de volta. Quem chama decide — a prova de que o
+      // CRM falou com ele mora no aviso, não na carteira.
+      ...(settled ? { paidAsaasId: paymentId } : {}),
+      ...(reopened ? { reopenedAsaasId: paymentId } : {}),
+      ...(pause !== 'none' ? { pause } : {}),
+    }
   }
 
   const now = new Date().toISOString()

@@ -1,19 +1,40 @@
 // ============================================================
 // 🧾 Agradecer quando o pagamento entra (lacuna 1, 07/09).
 //
-// Disparado pelo webhook do Asaas ao FECHAR uma cobrança que estava aberta.
-// Só fala com quem já ouviu a gente por aqui: houve toque da régua para o
-// contato, ou a cobrança nasceu no CRM (IA/manual). Pagamento de quem nunca
-// foi cobrado pelo CRM não gera mensagem — seria uma empresa estranha
-// mandando "obrigado" do nada. Uma vez por cobrança (registro em
-// agent_action_requests com tipo próprio, fora da fila e do painel).
+// Disparado pelo webhook do Asaas. Dois caminhos, a mesma regra de fundo —
+// só falamos com quem JÁ OUVIU a gente por aqui:
+//
+//   • Carteira (sendPaymentThanks): uma cobrança VENCIDA que a régua estava
+//     cobrando fecha. Prova de que o CRM falou: o toque da régua para o
+//     contato, ou a cobrança ter nascido aqui (IA/manual).
+//
+//   • Pagou em dia (thanksForAdvancePayment, 25/09): quem paga antes de
+//     vencer NUNCA entra na carteira — ela é só de vencidas, de propósito.
+//     Até aqui o webhook chegava, não reconhecia a cobrança e ficava mudo.
+//     Com o aviso do dia do vencimento ligado isso virou um buraco visível:
+//     o CRM mandava "vence hoje", o cliente pagava na hora, mandava o
+//     comprovante — e ninguém respondia. Aqui a prova de que o CRM falou é
+//     o próprio aviso que saiu daqui sobre ESTA parcela (lembrete do D-N ou
+//     "vence hoje"). Sem aviso, silêncio: agradecer um pagamento que nunca
+//     mencionamos é uma empresa estranha falando do nada.
+//
+// Uma vez por parcela, nos dois caminhos (registro em agent_action_requests
+// com tipo próprio, fora da fila e do painel).
 //
 // Sem 'server-only' — a rota do webhook e o worker alcançam isso.
 // ============================================================
 
-import { and, asc, eq, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, or, sql, type SQL } from 'drizzle-orm'
 
-import { db, agentActionRequests, asaasCharges, collectionsTouches, contacts, member } from '@/db'
+import {
+  db,
+  agentActionRequests,
+  asaasCharges,
+  collectionsTouches,
+  collectionsUpcoming,
+  contacts,
+  member,
+} from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { getAccountSettings } from '@/lib/settings/account-settings'
@@ -34,9 +55,28 @@ export interface ThanksOutcome {
   why: string
 }
 
+/** O pagamento que estamos agradecendo, venha ele da carteira ou do aviso. */
+interface ThanksSubject {
+  /** uuid da carteira — null quando a parcela foi paga em dia e nunca foi espelhada. */
+  chargeId: string | null
+  /** id da cobrança no Asaas: é por ele que as duas portas não agradecem duas vezes. */
+  asaasId: string | null
+  value: number
+  /** Nome como o Asaas escreve (razão social quando é CNPJ). */
+  customerName: string | null
+  cpfCnpj: string | null
+  conversationId: string | null
+  /** Semente do texto: mesma parcela → mesma frase. */
+  seedKey: string
+  /** Como o registro explica a si mesmo no histórico. */
+  policy: string
+}
+
 export async function sendPaymentThanks(args: { accountId: string; chargeId: string; contactId: string }): Promise<ThanksOutcome> {
-  const settings = normalizeSettings((await getAccountSettings(args.accountId)).collections)
-  if (!settings.thankOnPayment) return { sent: false, why: 'agradecimento desligado na conta' }
+  const settingsAll = await getAccountSettings(args.accountId)
+  if (!normalizeSettings(settingsAll.collections).thankOnPayment) {
+    return { sent: false, why: 'agradecimento desligado na conta' }
+  }
 
   const charge = firstOrNull(
     await db
@@ -55,16 +95,6 @@ export async function sendPaymentThanks(args: { accountId: string; chargeId: str
   )
   if (!charge) return { sent: false, why: 'cobrança não encontrada' }
 
-  const contact = firstOrNull(
-    await db
-      .select({ name: contacts.name, nameSource: contacts.nameSource, optedOut: contacts.optedOut })
-      .from(contacts)
-      .where(and(eq(contacts.id, args.contactId), eq(contacts.accountId, args.accountId)))
-      .limit(1),
-  )
-  if (!contact) return { sent: false, why: 'contato não encontrado' }
-  if (contact.optedOut) return { sent: false, why: 'contato pediu para não receber mensagens' }
-
   // Só quem já foi cobrado por aqui (ou cuja cobrança nasceu aqui).
   const touch = firstOrNull(
     await db
@@ -76,16 +106,118 @@ export async function sendPaymentThanks(args: { accountId: string; chargeId: str
   const cobradoAqui = !!touch?.lastTouchAt || charge.origin === 'ai' || charge.origin === 'manual'
   if (!cobradoAqui) return { sent: false, why: 'o CRM nunca cobrou este cliente — sem agradecimento' }
 
-  // Uma vez por cobrança.
+  return runThanks(args.accountId, args.contactId, settingsAll, {
+    chargeId: charge.id,
+    asaasId: charge.asaasId,
+    value: Number(charge.value ?? 0),
+    customerName: charge.customerName,
+    cpfCnpj: charge.cpfCnpj,
+    conversationId: charge.conversationId ?? null,
+    seedKey: charge.id,
+    policy: 'collections.thankOnPayment · só para quem o CRM cobrou',
+  })
+}
+
+/**
+ * Agradece a parcela paga EM DIA — a que nunca entrou na carteira (25/09).
+ *
+ * Quem autoriza a mensagem é o aviso que o CRM mandou sobre esta mesma
+ * parcela. `collections_touches` não serve aqui: ele conta os toques da
+ * régua de vencidas, e quem paga em dia nunca é cobrado por ela.
+ */
+export async function thanksForAdvancePayment(args: {
+  accountId: string
+  asaasId: string
+}): Promise<ThanksOutcome> {
+  const settingsAll = await getAccountSettings(args.accountId)
+  if (!normalizeSettings(settingsAll.collections).thankOnPayment) {
+    return { sent: false, why: 'agradecimento desligado na conta' }
+  }
+
+  // O aviso já ENVIADO que cobre esta parcela. Sugestão parada na fila não
+  // conta: ninguém do outro lado ouviu nada.
+  const aviso = firstOrNull(
+    await db
+      .select({
+        contactId: agentActionRequests.contactId,
+        conversationId: agentActionRequests.conversationId,
+      })
+      .from(agentActionRequests)
+      .where(
+        and(
+          eq(agentActionRequests.accountId, args.accountId),
+          eq(agentActionRequests.actionType, 'collect_charges'),
+          eq(agentActionRequests.status, 'sent'),
+          sql`${agentActionRequests.payload}->'asaasIds' @> ${JSON.stringify([args.asaasId])}::jsonb`,
+        ),
+      )
+      .orderBy(desc(agentActionRequests.createdAt))
+      .limit(1),
+  )
+  if (!aviso?.contactId) {
+    return { sent: false, why: 'o CRM não avisou esta parcela — sem agradecimento' }
+  }
+
+  // Os dados da parcela vivem na lista de próximos vencimentos. Se a leitura
+  // já a removeu (ela some do Asaas assim que é paga), o agradecimento ainda
+  // sai — sem o valor no texto, que `thankYouMessage` omite sozinho.
+  const parcela = firstOrNull(
+    await db
+      .select({
+        value: collectionsUpcoming.value,
+        customerName: collectionsUpcoming.customerName,
+        cpfCnpj: collectionsUpcoming.cpfCnpj,
+      })
+      .from(collectionsUpcoming)
+      .where(and(eq(collectionsUpcoming.accountId, args.accountId), eq(collectionsUpcoming.asaasId, args.asaasId)))
+      .limit(1),
+  )
+
+  return runThanks(args.accountId, aviso.contactId, settingsAll, {
+    chargeId: null,
+    asaasId: args.asaasId,
+    value: Number(parcela?.value ?? 0),
+    customerName: parcela?.customerName ?? null,
+    cpfCnpj: parcela?.cpfCnpj ?? null,
+    conversationId: aviso.conversationId ?? null,
+    seedKey: args.asaasId,
+    policy: 'collections.thankOnPayment · pagou em dia a parcela que avisamos',
+  })
+}
+
+/** O miolo comum: contato, dedupe, janela de atendimento, envio e registro. */
+async function runThanks(
+  accountId: string,
+  contactId: string,
+  settingsAll: Awaited<ReturnType<typeof getAccountSettings>>,
+  subject: ThanksSubject,
+): Promise<ThanksOutcome> {
+  const settings = normalizeSettings(settingsAll.collections)
+  const contact = firstOrNull(
+    await db
+      .select({ name: contacts.name, nameSource: contacts.nameSource, optedOut: contacts.optedOut })
+      .from(contacts)
+      .where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
+      .limit(1),
+  )
+  if (!contact) return { sent: false, why: 'contato não encontrado' }
+  if (contact.optedOut) return { sent: false, why: 'contato pediu para não receber mensagens' }
+
+  // Uma vez por parcela. A chave do Asaas vale para as duas portas: a parcela
+  // paga em dia que depois cair na carteira não ganha um segundo obrigado.
+  const jaAgradecido: SQL[] = []
+  if (subject.chargeId) jaAgradecido.push(sql`${agentActionRequests.payload}->>'chargeId' = ${subject.chargeId}`)
+  if (subject.asaasId) jaAgradecido.push(sql`${agentActionRequests.payload}->>'asaasId' = ${subject.asaasId}`)
+  if (!jaAgradecido.length) return { sent: false, why: 'pagamento sem referência — sem agradecimento' }
   const already = firstOrNull(
     await db
       .select({ id: agentActionRequests.id })
       .from(agentActionRequests)
       .where(
         and(
-          eq(agentActionRequests.accountId, args.accountId),
+          eq(agentActionRequests.accountId, accountId),
           eq(agentActionRequests.actionType, THANKS_ACTION),
-          sql`${agentActionRequests.payload}->>'chargeId' = ${charge.id}`,
+          or(...jaAgradecido),
         ),
       )
       .limit(1),
@@ -95,14 +227,13 @@ export async function sendPaymentThanks(args: { accountId: string; chargeId: str
   // A mesma saudação da régua (23/09, João/GoLink): com CNPJ o nome do Asaas é
   // razão social — "Tudo certo, Casa da Massa" vira "Tudo certo, Marina"
   // quando a ficha do CRM traz a pessoa que atende.
-  const firstName = collectionGreetingName(charge.customerName, contact.name, contact.nameSource, charge.cpfCnpj)
-  const text = thankYouMessage(firstName, Number(charge.value ?? 0), seedFromId(charge.id))
+  const firstName = collectionGreetingName(subject.customerName, contact.name, contact.nameSource, subject.cpfCnpj)
+  const text = thankYouMessage(firstName, subject.value, seedFromId(subject.seedKey))
 
   // ⏰ 11/09 (Alex): "prende o agradecimento na janela também". O webhook do
   // Asaas chega na hora do pagamento — inclusive 22h de domingo. Mas NÃO se
   // engole o agradecimento: ele fica esperando e sai quando a janela abrir
   // (sendDuePaymentThanks, chamado pelo worker a cada minuto).
-  const settingsAll = await getAccountSettings(args.accountId)
   const tz = settingsAll.businessTimezone || 'America/Sao_Paulo'
   const { hour, weekday } = localParts(tz)
   const hojeKey = localDayKey(tz)
@@ -114,11 +245,16 @@ export async function sendPaymentThanks(args: { accountId: string; chargeId: str
   if (foraDaJanela) {
     const agora = new Date().toISOString()
     await db.insert(agentActionRequests).values({
-      accountId: args.accountId,
-      contactId: args.contactId,
-      conversationId: charge.conversationId ?? null,
+      accountId,
+      contactId,
+      conversationId: subject.conversationId,
       actionType: THANKS_ACTION,
-      payload: { chargeId: charge.id, asaasId: charge.asaasId, value: Number(charge.value ?? 0), heldAt: agora },
+      payload: {
+        ...(subject.chargeId ? { chargeId: subject.chargeId } : {}),
+        asaasId: subject.asaasId,
+        value: subject.value,
+        heldAt: agora,
+      },
       suggestedText: text,
       reason: `Pagamento recebido — agradecimento em espera (${foraDaJanela.toLowerCase()})`,
       decision: 'auto',
@@ -128,17 +264,17 @@ export async function sendPaymentThanks(args: { accountId: string; chargeId: str
     return { sent: false, why: `${foraDaJanela.toLowerCase()} — vai sair quando a janela abrir` }
   }
 
-  const targets = await resolveCollectionTargets(args.accountId, args.contactId, charge.conversationId ?? null)
+  const targets = await resolveCollectionTargets(accountId, contactId, subject.conversationId)
   if (!targets.ok) return { sent: false, why: targets.error }
 
   const sentVia: string[] = []
   let conversationId: string | null = null
 
   if (targets.whatsapp) {
-    const userId = await senderUserId(args.accountId)
+    const userId = await senderUserId(accountId)
     if (userId) {
       try {
-        await engineSendText({ accountId: args.accountId, userId, conversationId: targets.whatsapp.conversationId, contactId: args.contactId, text })
+        await engineSendText({ accountId, userId, conversationId: targets.whatsapp.conversationId, contactId, text })
         sentVia.push('whatsapp')
         conversationId = targets.whatsapp.conversationId
       } catch (err) {
@@ -148,7 +284,7 @@ export async function sendPaymentThanks(args: { accountId: string; chargeId: str
   }
   if (targets.email && !sentVia.length) {
     try {
-      await sendMessageToConversation(args.accountId, {
+      await sendMessageToConversation(accountId, {
         conversationId: targets.email.conversationId,
         messageType: 'text',
         contentText: text,
@@ -165,15 +301,20 @@ export async function sendPaymentThanks(args: { accountId: string; chargeId: str
 
   const now = new Date().toISOString()
   await db.insert(agentActionRequests).values({
-    accountId: args.accountId,
-    contactId: args.contactId,
+    accountId,
+    contactId,
     conversationId,
     actionType: THANKS_ACTION,
-    payload: { chargeId: charge.id, asaasId: charge.asaasId, value: Number(charge.value ?? 0), sentVia },
+    payload: {
+      ...(subject.chargeId ? { chargeId: subject.chargeId } : {}),
+      asaasId: subject.asaasId,
+      value: subject.value,
+      sentVia,
+    },
     suggestedText: text,
     reason: 'Pagamento recebido — agradecimento automático',
     decision: 'auto',
-    policy: 'collections.thankOnPayment · só para quem o CRM cobrou',
+    policy: subject.policy,
     status: 'sent',
     executedAt: now,
     resolvedAt: now,
@@ -186,6 +327,32 @@ async function senderUserId(accountId: string): Promise<string | null> {
   const rows = await db.select({ userId: member.userId, role: member.role }).from(member).where(eq(member.organizationId, accountId))
   const pick = rows.find((r) => r.role === 'owner') ?? rows.find((r) => r.role === 'admin') ?? rows[0]
   return pick?.userId ?? null
+}
+
+/**
+ * Cancela o agradecimento que ainda espera a janela quando o pagamento é
+ * desfeito (estorno, chargeback). A parcela paga em dia não tem linha na
+ * carteira para `sendDuePaymentThanks` reconferir, então quem avisa que ela
+ * voltou a dever é o próprio webhook — ver collections/webhook.ts.
+ */
+export async function cancelHeldThanks(accountId: string, asaasId: string): Promise<number> {
+  const rows = await db
+    .update(agentActionRequests)
+    .set({
+      status: 'expired',
+      resolvedAt: new Date().toISOString(),
+      error: 'O pagamento foi desfeito no Asaas — agradecimento cancelado.',
+    })
+    .where(
+      and(
+        eq(agentActionRequests.accountId, accountId),
+        eq(agentActionRequests.actionType, THANKS_ACTION),
+        eq(agentActionRequests.status, 'pending'),
+        sql`${agentActionRequests.payload}->>'asaasId' = ${asaasId}`,
+      ),
+    )
+    .returning({ id: agentActionRequests.id })
+  return rows.length
 }
 
 /**
@@ -235,33 +402,41 @@ export async function sendDuePaymentThanks(accountId: string, now = new Date()):
     return { sent: false, why: 'agradecimento envelheceu na espera' }
   }
 
-  const chargeId = (pendente.payload as { chargeId?: unknown } | null)?.chargeId
-  if (!pendente.contactId || typeof chargeId !== 'string') {
+  const payload = (pendente.payload ?? {}) as { chargeId?: unknown; asaasId?: unknown; texto?: unknown }
+  const chargeId = typeof payload.chargeId === 'string' ? payload.chargeId : null
+  const asaasId = typeof payload.asaasId === 'string' ? payload.asaasId : null
+  if (!pendente.contactId || (!chargeId && !asaasId)) {
     await db.update(agentActionRequests).set({ status: 'failed', resolvedAt: now.toISOString(), error: 'Agradecimento em espera sem contato ou cobrança.' }).where(eq(agentActionRequests.id, pendente.id))
     return { sent: false, why: 'agradecimento em espera sem referência' }
   }
 
   // O pagamento pode ter sido estornado enquanto esperava — quem manda é o
-  // estado de agora, não o do momento em que o webhook chegou.
-  const charge = firstOrNull(
-    await db
-      .select({ open: asaasCharges.open, value: asaasCharges.value, conversationId: asaasCharges.conversationId })
-      .from(asaasCharges)
-      .where(and(eq(asaasCharges.id, chargeId), eq(asaasCharges.accountId, accountId)))
-      .limit(1),
-  )
-  if (!charge || charge.open) {
-    await db.update(agentActionRequests).set({ status: 'expired', resolvedAt: now.toISOString(), error: 'A cobrança voltou a ficar em aberto — agradecimento cancelado.' }).where(eq(agentActionRequests.id, pendente.id))
-    return { sent: false, why: 'cobrança não está mais paga' }
+  // estado de agora, não o do momento em que o webhook chegou. A parcela paga
+  // EM DIA não tem linha na carteira para conferir: nela o cancelamento vem
+  // pelo webhook do estorno (cancelHeldThanks).
+  let conversationIdDaCobranca: string | null = null
+  if (chargeId) {
+    const charge = firstOrNull(
+      await db
+        .select({ open: asaasCharges.open, value: asaasCharges.value, conversationId: asaasCharges.conversationId })
+        .from(asaasCharges)
+        .where(and(eq(asaasCharges.id, chargeId), eq(asaasCharges.accountId, accountId)))
+        .limit(1),
+    )
+    if (!charge || charge.open) {
+      await db.update(agentActionRequests).set({ status: 'expired', resolvedAt: now.toISOString(), error: 'A cobrança voltou a ficar em aberto — agradecimento cancelado.' }).where(eq(agentActionRequests.id, pendente.id))
+      return { sent: false, why: 'cobrança não está mais paga' }
+    }
+    conversationIdDaCobranca = charge.conversationId ?? null
   }
 
-  const targets = await resolveCollectionTargets(accountId, pendente.contactId, charge.conversationId ?? null)
+  const targets = await resolveCollectionTargets(accountId, pendente.contactId, conversationIdDaCobranca)
   if (!targets.ok) {
     await db.update(agentActionRequests).set({ status: 'failed', resolvedAt: now.toISOString(), error: targets.error }).where(eq(agentActionRequests.id, pendente.id))
     return { sent: false, why: targets.error }
   }
 
-  const text = (pendente.payload as { texto?: unknown } | null)?.texto
+  const text = payload.texto
   const corpo = typeof text === 'string' && text.trim() ? text : ((await db.select({ t: agentActionRequests.suggestedText }).from(agentActionRequests).where(eq(agentActionRequests.id, pendente.id)).limit(1))[0]?.t ?? '')
   if (!corpo.trim()) {
     await db.update(agentActionRequests).set({ status: 'failed', resolvedAt: now.toISOString(), error: 'Agradecimento em espera sem texto.' }).where(eq(agentActionRequests.id, pendente.id))
