@@ -79,6 +79,14 @@ import('./ai-reply-worker')
     console.error('[worker] ai-reply failed to start:', err);
   });
 
+// Ferramenta externa LENTA: a consulta que não cabe nos 12s do turno roda
+// aqui, com prazo próprio, e volta como mensagem nova na conversa.
+import('./slow-tool-worker')
+  .then((m) => m.startSlowToolWorker())
+  .catch((err) => {
+    console.error('[worker] slow-tool failed to start:', err);
+  });
+
 // IA proativa em Negociações (v2 — Fase 3): sugere campos + próximo passo
 // sozinha quando o cliente escreve (debounced; opt-in por conta).
 import('./deal-suggest-worker')

@@ -30,6 +30,8 @@ export const AI_REPLY_QUEUE = 'ai-reply';
 export const DEAL_SUGGEST_QUEUE = 'deal-suggest';
 /** Fase 2: recálculo IMEDIATO de sinais/ações de uma conta (evento, não tick). */
 export const ORCHESTRATION_QUEUE = 'orchestration';
+/** Ferramenta externa LENTA: roda fora do turno e responde depois (25/09). */
+export const SLOW_TOOL_QUEUE = 'slow-tool';
 
 /** Payload of a dispatch job. */
 export interface BroadcastDispatchJob {
@@ -69,6 +71,26 @@ export interface AiReplyJob {
 export interface DealSuggestJob {
   accountId: string;
   conversationId: string;
+}
+
+/**
+ * Chamada de ferramenta LENTA, fora do turno (25/09).
+ *
+ * O turno já respondeu ao cliente ("deixa eu consultar"); este job faz a
+ * chamada com prazo próprio e devolve a resposta como mensagem nova.
+ */
+export interface SlowToolJob {
+  accountId: string;
+  agentId: string | null;
+  conversationId: string;
+  contactId: string | null;
+  toolId: string;
+  args: Record<string, unknown>;
+  /** A pergunta do cliente que originou a consulta — contexto da resposta. */
+  question: string;
+  /** Quando a consulta começou. Se um humano assumir a conversa nesse meio
+   *  tempo, a resposta automática não sai por cima dele. */
+  askedAt: string;
 }
 
 /** Name of the per-channel outbound queue. (BullMQ forbids ':' in queue
@@ -258,6 +280,44 @@ export function orchestrationQueue(): Queue<OrchestrationNudgeJob> {
     });
   }
   return _orchestrationQueue;
+}
+
+let _slowToolQueue: Queue<SlowToolJob> | null = null;
+
+/** Fila das ferramentas LENTAS — uma chamada por job, fora do turno. */
+export function slowToolQueue(): Queue<SlowToolJob> {
+  if (!_slowToolQueue) {
+    _slowToolQueue = new Queue<SlowToolJob>(SLOW_TOOL_QUEUE, {
+      connection: bullConnection(),
+      defaultJobOptions: {
+        // Uma única tentativa: a API é lenta de propósito, e repetir uma
+        // consulta de 2 min faria o cliente esperar o dobro por uma resposta
+        // que provavelmente falharia de novo. O erro vira aviso, não retry.
+        attempts: 1,
+        removeOnComplete: { count: 200 },
+        removeOnFail: { count: 500 },
+      },
+    });
+  }
+  return _slowToolQueue;
+}
+
+/**
+ * Põe a chamada lenta na fila. Best-effort: se o Redis estiver fora, o turno
+ * que chamou NÃO pode cair — devolve false e quem chamou avisa o cliente.
+ */
+export async function enqueueSlowTool(job: SlowToolJob): Promise<boolean> {
+  try {
+    await slowToolQueue().add('slow-tool', job, {
+      // Uma consulta em voo por conversa: se o cliente repetir a pergunta
+      // enquanto a primeira roda, não saem duas respostas.
+      jobId: `slow-${job.conversationId}`,
+    });
+    return true;
+  } catch (err) {
+    console.error('[slow-tool] enfileirar falhou:', err instanceof Error ? err.message : err);
+    return false;
+  }
 }
 
 const ORCH_NUDGE_DELAY_MS = 20_000;

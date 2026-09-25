@@ -2985,6 +2985,10 @@ export const agentTools = pgTable("agent_tools", {
 	enabled: boolean().default(true).notNull(),
 	// Ao rodar com sucesso, cria também o card no funil do Fluxia (migr 0143).
 	createsDeal: boolean("creates_deal").default(false).notNull(),
+	/** API LENTA (migr 0193): não cabe nos 12s do turno. A IA avisa que está
+	 *  consultando, a chamada roda numa fila e a resposta volta como mensagem
+	 *  nova. Ver lib/ai/slow-tool.ts. */
+	slow: boolean().default(false).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [

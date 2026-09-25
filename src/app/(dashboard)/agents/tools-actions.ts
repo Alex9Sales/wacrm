@@ -43,6 +43,8 @@ export interface AgentToolRow {
   risk: 'read' | 'write' | 'critical'
   dedupScope?: 'args' | 'conversation' | 'off'
   enabled: boolean
+  /** API lenta: avisa e responde depois, fora do turno. */
+  slow: boolean
 }
 
 function toSlug(name: string): string {
@@ -101,6 +103,7 @@ export async function listAgentExternalTools(
     risk: (r.risk as AgentToolRow['risk']) ?? 'read',
     dedupScope: (r.dedupScope as AgentToolRow['dedupScope']) ?? 'args',
     enabled: r.enabled,
+    slow: r.slow === true,
   }))
 }
 
@@ -118,6 +121,8 @@ export async function saveAgentTool(input: {
   risk: 'read' | 'write' | 'critical'
   dedupScope?: 'args' | 'conversation' | 'off'
   enabled: boolean
+  /** API lenta: responde fora do turno (ver lib/ai/slow-tool.ts). */
+  slow?: boolean
 }): Promise<{ error: string | null; id?: string }> {
   try {
     const ctx = await requireRole('admin')
@@ -182,6 +187,7 @@ export async function saveAgentTool(input: {
           risk,
           dedupScope,
           enabled: input.enabled,
+          slow: input.slow === true,
           // undefined = mantém o segredo guardado; objeto = substitui.
           ...(input.headers !== undefined
             ? { headersEnc: encryptToolHeaders(input.headers ?? {}) }
@@ -217,6 +223,7 @@ export async function saveAgentTool(input: {
         risk,
         dedupScope,
         enabled: input.enabled,
+        slow: input.slow === true,
       })
       .returning()
     return { error: null, id: row.id }
@@ -274,6 +281,20 @@ export async function testAgentTool(
     // mas o tipo exige o campo, e 'off' é o que descreve o teste.
     dedupScope: 'off',
     createsDeal: r.createsDeal === true,
+    // O teste é SÍNCRONO: o admin está na tela esperando ver o retorno. Se
+    // esta ferramenta é lenta, a chamada abaixo usa o caminho de prazo longo
+    // em vez de enfileirar — senão a única que ele não conseguiria testar
+    // seria justamente a que mais precisa de teste.
+    slow: false,
+  }
+  if (r.slow) {
+    const { callSlowTool } = await import('@/lib/ai/slow-tool')
+    const out = await callSlowTool(r, args)
+    return {
+      status: out.ok ? 'ok' : 'error',
+      summary: out.payload.slice(0, 1500),
+      httpStatus: out.httpStatus,
+    }
   }
   // Teste manual ignora o bloqueio de crítica (é o ADMIN validando a config).
   const testTool = tool.risk === 'critical' ? { ...tool, risk: 'write' as const } : tool

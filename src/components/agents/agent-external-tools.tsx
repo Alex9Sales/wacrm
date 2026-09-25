@@ -67,6 +67,7 @@ interface FormState {
   risk: 'read' | 'write' | 'critical';
   dedupScope?: 'args' | 'conversation' | 'off';
   enabled: boolean;
+  slow: boolean;
 }
 
 const EMPTY_FORM: FormState = {
@@ -82,6 +83,7 @@ const EMPTY_FORM: FormState = {
   risk: 'read',
   dedupScope: 'args',
   enabled: true,
+  slow: false,
 };
 
 export function AgentExternalTools({ agentId }: { agentId: string }) {
@@ -161,6 +163,7 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
       bodyTemplate: t.bodyTemplate ?? '',
       risk: t.risk,
       dedupScope: t.dedupScope ?? 'args',
+      slow: t.slow === true,
       enabled: t.enabled,
     });
   };
@@ -186,6 +189,7 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
       bodyTemplate: form.bodyTemplate || null,
       risk: form.risk,
       dedupScope: form.dedupScope ?? 'args',
+      slow: form.slow === true,
       enabled: form.enabled,
     });
     setSaving(false);
@@ -480,6 +484,26 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
                   </p>
                 </div>
               )}
+
+              {/* 🐢 API lenta. A chamada normal acontece enquanto o cliente
+                  espera no WhatsApp, então ela aborta em 12s. Marcada aqui, a
+                  consulta sai do turno: a IA avisa e responde depois. */}
+              <label className="flex items-start gap-2 rounded-md border border-border p-3 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={form.slow === true}
+                  onChange={(e) => setForm({ ...form, slow: e.target.checked })}
+                />
+                <span>
+                  <span className="font-medium">Esta consulta demora (mais de 10 segundos)</span>
+                  <span className="mt-1 block text-[10px] text-muted-foreground">
+                    {form.slow
+                      ? 'A IA vai avisar o cliente que está verificando e mandar a resposta numa segunda mensagem, assim que a consulta voltar (aguarda até 2 minutos).'
+                      : 'A consulta acontece enquanto o cliente espera e é cancelada em 12 segundos. Marque isto se a API for lenta, senão a chamada nunca vai concluir.'}
+                  </span>
+                </span>
+              </label>
 
               <div className="space-y-1">
                 <Label>Descrição para a IA (quando usar)</Label>

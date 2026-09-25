@@ -1,0 +1,11 @@
+-- Ferramenta externa com resposta LENTA (25/09).
+--
+-- A chamada normal aborta em 12s, porque ela acontece DENTRO do turno: o
+-- cliente está esperando a resposta no WhatsApp. Uma API que leva 25s (o tutor
+-- da RA Play) nunca fecha, e subir o teto só trocaria o erro por dois minutos
+-- de silêncio.
+--
+-- Marcada como lenta, a ferramenta sai do turno: a IA avisa que está
+-- consultando, a chamada roda numa fila com prazo próprio e a resposta volta
+-- como mensagem nova.
+ALTER TABLE "agent_tools" ADD COLUMN IF NOT EXISTS "slow" boolean DEFAULT false NOT NULL;

@@ -19,6 +19,7 @@ import { and, desc, eq, gte } from 'drizzle-orm'
 import { assertPublicUrl } from '@/lib/net/safe-url'
 
 import { db, agentTools, agentToolRuns } from '@/db'
+import { enqueueSlowTool } from '@/lib/queue/queues'
 import { decrypt, encrypt } from '@/lib/whatsapp/encryption'
 import { generateReply, type GenerateArgs } from './generate'
 import { neutralizeUntrusted } from './untrusted'
@@ -46,6 +47,8 @@ export interface ExternalTool {
   dedupScope: 'args' | 'conversation' | 'off'
   /** Ao rodar com sucesso, também cria o card no funil do Fluxia (fallback). */
   createsDeal: boolean
+  /** API lenta: roda fora do turno e responde depois (migr 0193). */
+  slow: boolean
 }
 
 /** Dados de um pedido criado por uma ferramenta `createsDeal`, pra virar card
@@ -64,6 +67,17 @@ export interface OrderForCard {
 const MAX_TOOL_STEPS = 8
 const FETCH_TIMEOUT_MS = 12_000
 const RESULT_CAP = 4_000
+
+/**
+ * O que o modelo vê quando a consulta é LENTA e saiu do turno.
+ *
+ * Tem que ser explícito nos dois sentidos: avise que está consultando E não
+ * invente o resultado. Sem a segunda metade o modelo preenche o silêncio com
+ * um palpite — e um palpite entregue como se fosse a consulta é pior do que
+ * a demora que estamos tentando resolver.
+ */
+const PENDING_SUMMARY =
+  'A consulta foi iniciada e leva cerca de meio minuto. Diga ao cliente, em UMA frase curta e natural, que você está verificando e já volta com a resposta. NÃO invente nem adiante o resultado: ele chega em outra mensagem, automaticamente.'
 
 /** Cifra headers de auth pro banco (JSON → ciphertext AES-GCM). */
 export function encryptToolHeaders(headers: Record<string, string>): string | null {
@@ -113,6 +127,7 @@ export async function listEnabledTools(
     risk: (r.risk as ExternalTool['risk']) ?? 'read',
     dedupScope: (r.dedupScope as ExternalTool['dedupScope']) ?? 'args',
     createsDeal: r.createsDeal === true,
+    slow: r.slow === true,
   }))
 }
 
@@ -207,7 +222,8 @@ function fillPlaceholders(
 }
 
 export interface ToolRunResult {
-  status: 'ok' | 'error' | 'blocked' | 'invalid'
+  /** `pending` = ferramenta LENTA, saiu do turno e responde depois (slow-tool). */
+  status: 'ok' | 'error' | 'blocked' | 'invalid' | 'pending'
   summary: string
   httpStatus?: number
   /** A trava anti-duplicidade segurou a chamada: NADA foi gravado. O modelo vê
@@ -231,6 +247,15 @@ const WRITE_DEDUP_WINDOW_MS = SAME_ORDER_WINDOW_MS
  *  mas não criou pedido nenhum (caso 11/09: card duplicado 6 s depois). */
 export function outcomeCreatesCard(tool: Pick<ExternalTool, 'createsDeal'> | undefined, outcome: ToolRunResult): boolean {
   return !!tool?.createsDeal && outcome.status === 'ok' && !outcome.deduped
+}
+
+/** A última fala do cliente no histórico — é a pergunta que a consulta lenta
+ *  vai responder quando voltar. */
+function latestUserText(messages: { role: string; content: string }[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') return messages[i].content.slice(0, 2_000)
+  }
+  return ''
 }
 
 /** Texto que a IA recebe quando a trava segura uma escrita repetida. */
@@ -353,7 +378,15 @@ async function previousSuccessfulRun(
 export async function executeTool(
   tool: ExternalTool,
   args: Record<string, unknown>,
-  ctx: { accountId: string; agentId: string | null; conversationId: string | null },
+  ctx: {
+    accountId: string
+    agentId: string | null
+    conversationId: string | null
+    /** Só para ferramenta LENTA: quem recebe a resposta que vem depois. */
+    contactId?: string | null
+    /** Só para ferramenta LENTA: a pergunta que originou a consulta. */
+    question?: string
+  },
   opts?: {
     /** false = não grava em agent_tool_runs (sync em massa do ERP, 01/09:
      *  milhares de chamadas/dia poluiriam o Histórico de ações). */
@@ -413,6 +446,33 @@ export async function executeTool(
           )
         }
       }
+      if (tool.slow) {
+        // 🐢 API LENTA: sai do turno. O cliente está esperando no WhatsApp e a
+        // chamada não cabe nos 12s daqui; a fila faz a chamada com prazo
+        // próprio e a resposta volta como mensagem nova (lib/ai/slow-tool.ts).
+        result = !ctx.conversationId
+          ? {
+              status: 'error',
+              summary:
+                'Esta consulta demora e só funciona dentro de uma conversa. Diga ao cliente que você não conseguiu consultar agora.',
+            }
+          : (await enqueueSlowTool({
+                accountId: ctx.accountId,
+                agentId: ctx.agentId,
+                conversationId: ctx.conversationId,
+                contactId: ctx.contactId ?? null,
+                toolId: tool.id,
+                args,
+                question: ctx.question ?? '',
+                askedAt: new Date().toISOString(),
+              }))
+            ? { status: 'pending', summary: PENDING_SUMMARY }
+            : {
+                status: 'error',
+                summary:
+                  'Não consegui iniciar a consulta agora. Diga ao cliente que houve uma falha e que você vai verificar.',
+              }
+      } else {
       try {
         const { out: baseUrl, used } = fillPlaceholders(tool.url, args, true)
         // 🛡️ Anti-SSRF: só destino público (auditoria 02/09).
@@ -461,6 +521,7 @@ export async function executeTool(
           status: 'error',
           summary: `Falha na chamada: ${err instanceof Error ? err.message.slice(0, 300) : 'erro desconhecido'}`,
         }
+      }
       }
     }
   }
@@ -608,6 +669,10 @@ export async function generateWithExternalTools(
             accountId: args.accountId,
             agentId: args.agentId,
             conversationId: args.conversationId,
+            // Só a ferramenta LENTA usa: quem recebe a resposta que vem depois
+            // e qual pergunta ela responde.
+            contactId: args.contactId ?? null,
+            question: latestUserText(args.messages),
           })
     const firstFailure = tool && outcome.status === 'error' && !failedCalls.has(callKey)
     if (firstFailure) failedCalls.add(callKey)
@@ -641,6 +706,21 @@ export async function generateWithExternalTools(
       role: 'user',
       content: `[RESULTADO DA FERRAMENTA ${call.slug} — ${outcome.status}]\n${neutralizeUntrusted(shownSummary, { maxChars: 6000 })}\n[FIM DO RESULTADO — responda ao cliente agora usando esse dado; não mencione a ferramenta]`,
     })
+
+    // 🐢 Consulta lenta na fila: este turno acabou. O que falta é avisar o
+    // cliente que estamos verificando — qualquer outra ferramenta agora só
+    // atrasaria esse aviso, e o resultado real chega em outra mensagem.
+    if (outcome.status === 'pending') {
+      const espera = await generateReply({ ...args, systemPrompt, messages })
+      const text = (espera.text ?? '').replace(TOOL_MARKER_RE, '').trim()
+      return {
+        ...espera,
+        // Silêncio aqui deixaria o cliente sem nada enquanto a consulta roda.
+        text: visibleReplyText(text) ? text : 'Só um instante, estou verificando isso e já te respondo.',
+        orderForCard,
+        wroteSomething: writeSucceeded,
+      }
+    }
   }
   // inalcançável (o loop retorna antes), mas o TS quer um retorno.
   return { ...(await generateReply({ ...args, systemPrompt, messages })), orderForCard, wroteSomething: writeSucceeded }
