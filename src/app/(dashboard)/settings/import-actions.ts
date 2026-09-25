@@ -103,27 +103,59 @@ export interface ImportContactRow {
   segment?: string | null
 }
 
+/**
+ * Destino opcional no funil (25/09, pedido da Appia Saúde via Rafael):
+ * "na hora de importar os contatos, ter uma opção de colocar em uma etapa do
+ * funil específica". Antes só a importação de NEGOCIAÇÕES criava card, e
+ * quem só tinha uma lista de contatos ficava sem — ou tinha que refazer a
+ * planilha como negociação, que ninguém adivinha sozinho.
+ */
+export interface ImportContactsTarget {
+  pipelineId: string
+  /** Etapa escolhida. Vazio = primeira etapa do funil. */
+  stageId?: string | null
+}
+
 export interface ImportContactsResult {
   companiesCreated: number
   contactsCreated: number
   contactsLinked: number
+  /** Cards abertos no funil (só quando veio um destino). */
+  dealsCreated: number
   skipped: number
   error?: string
 }
 
 export async function importCompaniesContacts(
   rows: ImportContactRow[],
+  target?: ImportContactsTarget | null,
 ): Promise<ImportContactsResult> {
   const res: ImportContactsResult = {
     companiesCreated: 0,
     contactsCreated: 0,
     contactsLinked: 0,
+    dealsCreated: 0,
     skipped: 0,
   }
   try {
     const ctx = await requireRole('agent')
     if (!Array.isArray(rows) || rows.length === 0)
       return { ...res, error: 'Nada para importar.' }
+
+    // Destino no funil: resolve a etapa UMA vez, antes do laço. Funil sem
+    // etapa é erro na hora, não linha a linha depois de já ter criado gente.
+    let targetStageId: string | null = null
+    if (target?.pipelineId) {
+      const stages = await db
+        .select({ id: pipelineStages.id })
+        .from(pipelineStages)
+        .where(eq(pipelineStages.pipelineId, target.pipelineId))
+        .orderBy(asc(pipelineStages.position))
+      if (stages.length === 0)
+        return { ...res, error: 'O funil escolhido não tem etapas.' }
+      const escolhida = target.stageId && stages.find((s) => s.id === target.stageId)
+      targetStageId = escolhida ? escolhida.id : stages[0].id
+    }
 
     for (const row of rows) {
       const companyName = clean(row.companyName)
@@ -175,6 +207,25 @@ export async function importCompaniesContacts(
               )
             res.contactsLinked++
           }
+          // Card no funil, quando pediram destino. O título segue o que dá
+          // pra ler: nome da pessoa, senão a empresa.
+          if (target?.pipelineId && targetStageId) {
+            const now = new Date().toISOString()
+            await db.insert(deals).values({
+              userId: ctx.userId,
+              accountId: ctx.accountId,
+              pipelineId: target.pipelineId,
+              stageId: targetStageId,
+              contactId: id,
+              companyId,
+              title: contactName ?? companyName ?? phone,
+              value: '0',
+              currency: 'BRL',
+              status: 'open',
+              stageChangedAt: now,
+            })
+            res.dealsCreated++
+          }
         } catch {
           res.skipped++
         }
@@ -182,6 +233,7 @@ export async function importCompaniesContacts(
     }
     revalidatePath('/contacts')
     revalidatePath('/empresas')
+    if (res.dealsCreated > 0) revalidatePath('/pipelines')
     return res
   } catch (err) {
     return {

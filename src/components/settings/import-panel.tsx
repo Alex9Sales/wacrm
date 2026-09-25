@@ -14,8 +14,8 @@ import {
   exportContactsData,
   exportDealsData,
 } from '@/app/(dashboard)/settings/import-actions'
-import { listPipelines } from '@/app/(dashboard)/pipelines/actions'
-import type { Pipeline } from '@/types'
+import { listPipelines, listStages } from '@/app/(dashboard)/pipelines/actions'
+import type { Pipeline, PipelineStage } from '@/types'
 import { parseSheet, downloadCsv } from '@/lib/import/sheet'
 import { Button } from '@/components/ui/button'
 import {
@@ -93,6 +93,11 @@ export function ImportPanel() {
   const [type, setType] = useState<ImportType>('contacts')
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
   const [pipelineId, setPipelineId] = useState('')
+  // 🎯 Destino no funil ao importar CONTATOS (25/09, pedido da Appia Saúde
+  // via Rafael). Opcional: desmarcado, a importação segue como sempre.
+  const [contactsToFunnel, setContactsToFunnel] = useState(false)
+  const [stages, setStages] = useState<PipelineStage[]>([])
+  const [stageId, setStageId] = useState('')
   const [rowsC, setRowsC] = useState<ImportContactRow[]>([])
   const [rowsD, setRowsD] = useState<ImportDealRow[]>([])
   const [rowsT, setRowsT] = useState<ImportTransactionRow[]>([])
@@ -292,19 +297,50 @@ export function ImportPanel() {
         ? rowsT.length
         : rowsD.length
 
+  // Etapas do funil escolhido — só quando o destino está ligado.
+  useEffect(() => {
+    if (!contactsToFunnel || !pipelineId) {
+      setStages([])
+      setStageId('')
+      return
+    }
+    let cancelado = false
+    listStages(pipelineId)
+      .then((s) => {
+        if (cancelado) return
+        setStages(s)
+        setStageId(s[0]?.id ?? '')
+      })
+      .catch(() => {
+        if (!cancelado) setStages([])
+      })
+    return () => {
+      cancelado = true
+    }
+  }, [contactsToFunnel, pipelineId])
+
   async function runImport() {
     if (count === 0) return
     setImporting(true)
     setDone(null)
     try {
       if (type === 'contacts') {
-        const r = await importCompaniesContacts(rowsC)
+        if (contactsToFunnel && !pipelineId) {
+          toast.error('Escolha o funil de destino.')
+          return
+        }
+        const r = await importCompaniesContacts(
+          rowsC,
+          contactsToFunnel && pipelineId ? { pipelineId, stageId: stageId || null } : null,
+        )
         if (r.error) {
           toast.error(r.error)
           return
         }
         setDone(
-          `${r.companiesCreated} empresa(s) e ${r.contactsCreated} contato(s) criados · ${r.contactsLinked} vinculado(s)${r.skipped ? ` · ${r.skipped} ignorado(s)` : ''}.`,
+          `${r.companiesCreated} empresa(s) e ${r.contactsCreated} contato(s) criados · ${r.contactsLinked} vinculado(s)` +
+            `${r.dealsCreated ? ` · ${r.dealsCreated} card(s) no funil` : ''}` +
+            `${r.skipped ? ` · ${r.skipped} ignorado(s)` : ''}.`,
         )
       } else if (type === 'transactions') {
         const r = await importTransactions(rowsT)
@@ -399,6 +435,57 @@ export function ImportPanel() {
           )
         })}
       </div>
+
+      {/* 🎯 Contatos direto no funil (25/09, pedido da Appia Saúde via
+          Rafael): antes só a importação de NEGOCIAÇÕES criava card, e quem
+          tinha só uma lista de contatos precisava refazer a planilha — o que
+          ninguém adivinha sozinho. */}
+      {type === 'contacts' && pipelines.length > 0 && (
+        <div className="space-y-2 rounded-lg border border-border p-3">
+          <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <input
+              type="checkbox"
+              checked={contactsToFunnel}
+              onChange={(e) => setContactsToFunnel(e.target.checked)}
+              className="size-4 accent-primary"
+            />
+            Abrir um card no funil para cada contato
+          </label>
+          {contactsToFunnel && (
+            <div className="flex flex-wrap gap-2">
+              <select
+                value={pipelineId}
+                onChange={(e) => setPipelineId(e.target.value)}
+                className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+              >
+                <option value="">Escolha o funil…</option>
+                {pipelines.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              {stages.length > 0 && (
+                <select
+                  value={stageId}
+                  onChange={(e) => setStageId(e.target.value)}
+                  className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                >
+                  {stages.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
+          <p className="text-[11px] text-muted-foreground">
+            Cada contato importado vira um card nessa etapa. Sem marcar, os
+            contatos entram só na agenda, como sempre.
+          </p>
+        </div>
+      )}
 
       {/* Funil (só negociações) */}
       {type === 'deals' && pipelines.length > 0 && (
