@@ -312,6 +312,12 @@ export async function enqueueSlowTool(job: SlowToolJob): Promise<boolean> {
       // Uma consulta em voo por conversa: se o cliente repetir a pergunta
       // enquanto a primeira roda, não saem duas respostas.
       jobId: `slow-${job.conversationId}`,
+      // ⏱️ Folga para o aviso "estou verificando" sair primeiro. O turno que
+      // enfileirou ainda vai gerar e mandar essa frase; sem isto, uma falha
+      // rápida da API (um 401 volta em meio segundo) faz a RESPOSTA chegar
+      // antes do aviso, e o cliente lê as duas fora de ordem — foi o que
+      // aconteceu no primeiro teste real, 25/09.
+      delay: 8_000,
     });
     return true;
   } catch (err) {

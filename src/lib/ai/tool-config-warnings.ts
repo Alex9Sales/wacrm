@@ -17,7 +17,14 @@ export interface ToolConfigInput {
   paramNames: string[]
   bodyTemplate: string
   url: string
+  /** Nome do header de autenticação (ex.: Authorization). */
+  authHeader?: string
+  /** Valor digitado agora. Vazio ao editar = manter o que está guardado. */
+  authValue?: string
 }
+
+/** Esquemas que um header Authorization espera antes do token. */
+const AUTH_SCHEMES = ['bearer ', 'basic ', 'token ', 'apikey ', 'digest ']
 
 export interface ToolWarning {
   /** 'blocker' = a chamada não tem como funcionar; 'check' = provável engano. */
@@ -73,7 +80,20 @@ export function toolConfigWarnings(input: ToolConfigInput): ToolWarning[] {
     })
   }
 
-  // 4) Parâmetro declarado que não aparece em lugar nenhum. Em POST sem corpo
+  // 4) Token colado sem o esquema. A API devolve "token ausente" mesmo com a
+  //    chave certa no campo, e a mensagem manda procurar no lugar errado —
+  //    foi exatamente isto no primeiro uso real (25/09): o cliente colou só
+  //    o token e passou meia hora achando que a chave estava errada.
+  const header = (input.authHeader ?? '').trim().toLowerCase()
+  const valor = (input.authValue ?? '').trim()
+  if (header === 'authorization' && valor && !AUTH_SCHEMES.some((s) => valor.toLowerCase().startsWith(s))) {
+    out.push({
+      level: 'blocker',
+      text: 'O valor do Authorization parece estar sem o esquema na frente. A maioria das APIs espera "Bearer " antes da chave (com o espaço). Sem ele, elas respondem que o token está ausente, mesmo com a chave certa aqui.',
+    })
+  }
+
+  // 5) Parâmetro declarado que não aparece em lugar nenhum. Em POST sem corpo
   //    isso é normal (os parâmetros viram o corpo inteiro), então só avisa
   //    quando há corpo escrito à mão e o parâmetro ficou de fora dele.
   if (corpo) {

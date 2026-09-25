@@ -672,6 +672,8 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
                   paramNames: form.params.map((p) => p.name),
                   bodyTemplate: form.bodyTemplate,
                   url: form.url,
+                  authHeader: form.authHeader,
+                  authValue: form.authValue,
                 });
                 if (avisos.length === 0) return null;
                 return (

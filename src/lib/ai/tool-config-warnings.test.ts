@@ -96,3 +96,48 @@ describe('placeholdersIn', () => {
     expect(placeholdersIn('')).toEqual([])
   })
 })
+
+// 25/09, primeiro uso real: o cliente colou a chave sem "Bearer " no campo
+// Authorization. A API respondeu "Token is missing" — mensagem que manda
+// procurar no lugar errado, porque a chave ESTAVA lá, só sem o esquema.
+describe('token colado sem o esquema', () => {
+  it('Authorization com a chave crua é bloqueio', () => {
+    const w = toolConfigWarnings({
+      ...base,
+      authHeader: 'Authorization',
+      authValue: 'nch_abc123',
+    })
+    expect(w.some((x) => x.level === 'blocker' && /Bearer/.test(x.text))).toBe(true)
+  })
+
+  it('com "Bearer " na frente, nada a avisar', () => {
+    const w = toolConfigWarnings({
+      ...base,
+      authHeader: 'Authorization',
+      authValue: 'Bearer nch_abc123',
+    })
+    expect(w).toHaveLength(0)
+  })
+
+  it('Basic e Token também são esquemas válidos', () => {
+    for (const v of ['Basic dXNlcjpwYXNz', 'Token abc123']) {
+      expect(
+        toolConfigWarnings({ ...base, authHeader: 'Authorization', authValue: v }),
+      ).toHaveLength(0)
+    }
+  })
+
+  it('outro header (X-API-Key) recebe a chave crua e está certo', () => {
+    const w = toolConfigWarnings({
+      ...base,
+      authHeader: 'X-API-Key',
+      authValue: 'abc123',
+    })
+    expect(w).toHaveLength(0)
+  })
+
+  it('editando sem redigitar o valor, não reclama do que está guardado', () => {
+    const w = toolConfigWarnings({ ...base, authHeader: 'Authorization', authValue: '' })
+    expect(w).toHaveLength(0)
+  })
+})
