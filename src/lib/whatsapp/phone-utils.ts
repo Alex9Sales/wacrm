@@ -99,8 +99,13 @@ export function isPlausibleDDD(dd: string): boolean {
  */
 export function normalizeInboundPhoneBR(raw: string): string {
   const digits = (raw || '').replace(/\D/g, '')
-  // Clean numbers (no trunk 0) are already E.164-shaped — never touch them.
-  if (!digits || digits[0] !== '0') return digits
+  // Sem o 0 de tronco: ou já está em E.164, ou é um nacional brasileiro
+  // limpo a que falta só o 55 — "11960974661" digitado no formulário do
+  // cliente. Até 25/09 esse caso voltava intacto e o contato nascia sem o
+  // DDI: o WhatsApp lê "11 96097-4661" como +1 (EUA/Canadá), então a
+  // mensagem dele nunca casava com a ficha. toBrE164IfNational só completa
+  // o que é brasileiro possível, então número estrangeiro passa incólume.
+  if (!digits || digits[0] !== '0') return toBrE164IfNational(digits)
   const d = digits.replace(/^0+/, '') // strip the trunk zero(s)
   if (d.startsWith('55')) return d // "0 + 55…" already carries the country code
   // National number reached with the trunk 0:
@@ -118,7 +123,7 @@ export function normalizeInboundPhoneBR(raw: string): string {
       return '55' + rest
     }
   }
-  return d // fallback: at least the leading zeros are gone
+  return toBrE164IfNational(d) // fallback: ao menos os zeros da frente saíram
 }
 
 /**

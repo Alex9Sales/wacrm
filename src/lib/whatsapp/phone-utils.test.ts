@@ -208,6 +208,24 @@ describe("normalizeInboundPhoneBR", () => {
     expect(normalizeInboundPhoneBR("")).toBe("");
     expect(normalizeInboundPhoneBR(undefined as unknown as string)).toBe("");
   });
+
+  // 25/09: o formulário de uma clínica pedia telefone e o paciente digitava
+  // "11 96097-4661", sem o 55. O contato nascia assim e a mensagem dele no
+  // WhatsApp (que chega como 5511…) nunca casava com a ficha: a recepção via
+  // um cadastro sem conversa nenhuma e achava que a mensagem tinha sumido.
+  it("completa o 55 do nacional limpo digitado em formulário/planilha", () => {
+    expect(normalizeInboundPhoneBR("11960974661")).toBe("5511960974661"); // celular
+    expect(normalizeInboundPhoneBR("(11) 96097-4661")).toBe("5511960974661");
+    expect(normalizeInboundPhoneBR("1133334444")).toBe("551133334444"); // fixo
+  });
+
+  it("mas não inventa um brasileiro a partir de número estrangeiro", () => {
+    // 11 dígitos com DDD plausível só vira BR quando o local começa com 9
+    // (celular). Estes não começam, então continuam como estão.
+    expect(normalizeInboundPhoneBR("12025550181")).toBe("12025550181"); // US
+    expect(normalizeInboundPhoneBR("37061234567")).toBe("37061234567"); // LT
+    expect(normalizeInboundPhoneBR("442079460958")).toBe("442079460958"); // UK, 12 díg.
+  });
 });
 
 describe("isRecipientNotAllowedError", () => {
