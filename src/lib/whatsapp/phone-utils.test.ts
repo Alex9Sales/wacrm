@@ -210,9 +210,9 @@ describe("normalizeInboundPhoneBR", () => {
   });
 
   // 25/09: o formulário de uma clínica pedia telefone e o paciente digitava
-  // "11 96097-4661", sem o 55. O contato nascia assim e a mensagem dele no
-  // WhatsApp (que chega como 5511…) nunca casava com a ficha: a recepção via
-  // um cadastro sem conversa nenhuma e achava que a mensagem tinha sumido.
+  // "11 96097-4661", sem o 55 — e o contato nascia assim. A conversa ainda
+  // encontra a ficha (phonesMatch compara DDD + 8 dígitos), mas o número
+  // guardado está errado: quem o usar cru manda para +1, EUA/Canadá.
   it("completa o 55 do nacional limpo digitado em formulário/planilha", () => {
     expect(normalizeInboundPhoneBR("11960974661")).toBe("5511960974661"); // celular
     expect(normalizeInboundPhoneBR("(11) 96097-4661")).toBe("5511960974661");
