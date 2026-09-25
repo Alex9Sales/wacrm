@@ -102,6 +102,24 @@ describe('ferramenta lenta sai do turno', () => {
   })
 })
 
+describe('cada pergunta gera a sua consulta', () => {
+  // 25/09, primeiro cliente: o jobId era fixo por conversa, para garantir
+  // "uma consulta em voo". O BullMQ ignora EM SILÊNCIO um add com jobId
+  // repetido enquanto o anterior existe — então a ferramenta respondia UMA
+  // vez por conversa e emudecia, sem erro em lugar nenhum.
+  it('duas perguntas na MESMA conversa enfileiram duas vezes', async () => {
+    await executeTool({ ...base, slow: true }, { email: 'a@b.com', question: 'primeira' }, ctx)
+    await executeTool({ ...base, slow: true }, { email: 'a@b.com', question: 'segunda' }, ctx)
+    expect(enqueueMock.fn).toHaveBeenCalledTimes(2)
+  })
+
+  it('cada chamada leva o seu próprio instante — é o que separa os jobs', async () => {
+    await executeTool({ ...base, slow: true }, { email: 'a@b.com' }, ctx)
+    const job = enqueued[0] as { askedAt?: string }
+    expect(job.askedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+  })
+})
+
 describe('quando não dá para enfileirar, o cliente não fica no vácuo', () => {
   it('fila fora do ar vira erro com orientação, não silêncio', async () => {
     enqueueMock.fn.mockResolvedValue(false)

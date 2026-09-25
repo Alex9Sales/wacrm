@@ -309,14 +309,21 @@ export function slowToolQueue(): Queue<SlowToolJob> {
 export async function enqueueSlowTool(job: SlowToolJob): Promise<boolean> {
   try {
     await slowToolQueue().add('slow-tool', job, {
-      // Uma consulta em voo por conversa: se o cliente repetir a pergunta
-      // enquanto a primeira roda, não saem duas respostas.
-      jobId: `slow-${job.conversationId}`,
+      // ⚠️ jobId ÚNICO por chamada, nunca por conversa. A primeira versão
+      // usava `slow-<conversationId>` para garantir "uma consulta em voo",
+      // e o efeito foi o oposto do pretendido: o BullMQ ignora EM SILÊNCIO
+      // um add com jobId repetido enquanto o job anterior existe — e os
+      // concluídos ficam retidos por `removeOnComplete`. Na prática, a
+      // ferramenta funcionava UMA vez por conversa e depois emudecia, sem
+      // erro em lugar nenhum (25/09, primeiro cliente: duas perguntas
+      // seguidas ficaram sem resposta e o pending mentia que ia chegar).
+      // Duas respostas para duas perguntas é um problema pequeno; nenhuma
+      // resposta nunca mais é um problema grande.
+      jobId: `slow-${job.conversationId}-${job.askedAt}`,
       // ⏱️ Folga para o aviso "estou verificando" sair primeiro. O turno que
       // enfileirou ainda vai gerar e mandar essa frase; sem isto, uma falha
       // rápida da API (um 401 volta em meio segundo) faz a RESPOSTA chegar
-      // antes do aviso, e o cliente lê as duas fora de ordem — foi o que
-      // aconteceu no primeiro teste real, 25/09.
+      // antes do aviso, e o cliente lê as duas fora de ordem.
       delay: 8_000,
     });
     return true;
