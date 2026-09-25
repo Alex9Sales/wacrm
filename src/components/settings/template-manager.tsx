@@ -11,6 +11,7 @@ import {
   X,
   Pencil,
   RotateCcw,
+  Send,
   Upload,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
@@ -260,6 +261,34 @@ export function TemplateManager() {
       name: template.name,
       category: template.category,
       language: template.language || 'en_US',
+      header_format: (template.header_type ?? 'none') as HeaderFormat,
+      header_content: template.header_content ?? '',
+      header_media_url: template.header_media_url ?? '',
+      header_sample: template.sample_values?.header?.[0] ?? '',
+      body_text: template.body_text,
+      body_samples: template.sample_values?.body ?? [],
+      footer_text: template.footer_text ?? '',
+      buttons: template.buttons ?? [],
+    });
+    setDialogOpen(true);
+  }
+
+  /**
+   * Rascunho → enviar pra Meta.
+   *
+   * ⚠️ 25/09: o status DRAFT era exibido mas não tinha NENHUMA ação — nem
+   * editar nem enviar, só a lixeira. Quem tinha um rascunho ficava preso com
+   * ele na tela. Abre o formulário preenchido SEM `editingId`: o PATCH recusa
+   * template que nunca foi à Meta, e o POST de envio já faz upsert por
+   * (usuário, nome, idioma), então a mesma linha é reaproveitada em vez de
+   * virar duas.
+   */
+  function openDraft(template: MessageTemplate) {
+    setEditingId(null);
+    setForm({
+      name: template.name,
+      category: template.category,
+      language: template.language || 'pt_BR',
       header_format: (template.header_type ?? 'none') as HeaderFormat,
       header_content: template.header_content ?? '',
       header_media_url: template.header_media_url ?? '',
@@ -598,6 +627,19 @@ export function TemplateManager() {
                     )}
                   </div>
                   <div className="flex items-center gap-1 shrink-0 ml-2">
+                    {statusKey === 'DRAFT' && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => openDraft(template)}
+                        title="Revisar o texto e enviar para a Meta aprovar."
+                        aria-label="Enviar template para aprovação"
+                        className="text-muted-foreground hover:text-primary hover:bg-primary/10 h-8 px-2"
+                      >
+                        <Send className="size-3.5" />
+                        Enviar
+                      </Button>
+                    )}
                     {statusKey === 'APPROVED' && (
                       <Button
                         variant="ghost"
