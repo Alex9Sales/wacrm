@@ -32,6 +32,7 @@ import {
   type ToolRunRow,
 } from '@/app/(dashboard)/agents/tools-actions';
 import type { ToolParamDef } from '@/lib/ai/external-tools';
+import { toolConfigWarnings } from '@/lib/ai/tool-config-warnings';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -660,6 +661,36 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
                 />
                 Este agente pode usar esta ferramenta
               </label>
+
+              {/* ⚠️ 25/09: a tela deixava salvar uma ferramenta POST sem
+                  parâmetro e sem corpo — toda chamada saía "{}" e a API do
+                  cliente recusava. O erro só aparecia no primeiro cliente
+                  real, como "não consegui consultar". Agora avisa aqui. */}
+              {(() => {
+                const avisos = toolConfigWarnings({
+                  method: form.method,
+                  paramNames: form.params.map((p) => p.name),
+                  bodyTemplate: form.bodyTemplate,
+                  url: form.url,
+                });
+                if (avisos.length === 0) return null;
+                return (
+                  <div className="space-y-1.5">
+                    {avisos.map((a, i) => (
+                      <p
+                        key={i}
+                        className={
+                          a.level === 'blocker'
+                            ? 'rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive'
+                            : 'rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-400'
+                        }
+                      >
+                        {a.text}
+                      </p>
+                    ))}
+                  </div>
+                );
+              })()}
 
               <div className="flex justify-end gap-2">
                 <Button variant="ghost" onClick={() => setForm(null)}>

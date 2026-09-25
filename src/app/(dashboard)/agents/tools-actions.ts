@@ -289,7 +289,27 @@ export async function testAgentTool(
   }
   if (r.slow) {
     const { callSlowTool } = await import('@/lib/ai/slow-tool')
+    const started = Date.now()
     const out = await callSlowTool(r, args)
+    // O teste da ferramenta lenta também entra no Histórico de ações. Sem
+    // isto ele não deixava rastro nenhum (a normal deixa, porque passa pelo
+    // executeTool) — e ninguém conseguia responder "o cliente chegou a
+    // testar?" olhando a tela.
+    await db
+      .insert(agentToolRuns)
+      .values({
+        accountId: ctx.accountId,
+        toolId: r.id,
+        agentId: r.agentId,
+        conversationId: null,
+        toolSlug: r.slug,
+        args,
+        status: out.ok ? 'ok' : 'error',
+        resultSummary: out.payload.slice(0, 2_000),
+        httpStatus: out.httpStatus,
+        durationMs: Date.now() - started,
+      })
+      .catch((err) => console.error('[tools-actions] histórico do teste lento:', err))
     return {
       status: out.ok ? 'ok' : 'error',
       summary: out.payload.slice(0, 1500),
