@@ -92,3 +92,33 @@ describe('renderMessageVars', () => {
     expect(renderMessageVars('x {{a}} y', { a: '1' })).toBe('x 1 y');
   });
 });
+
+// 25/09 (Dra. Joyce, via Rafael): "ela quer saber quem está enviando". Numa
+// cadência não tem ninguém apertando enviar — o nome de quem assina vem do
+// responsável pelo card ou da assinatura da conta.
+describe('{{atendente}} — quem assina a mensagem', () => {
+  const contato = { name: 'Ana Paula', phone: '5511999999999', email: null, company: null }
+
+  it('entra no texto como qualquer outro token', () => {
+    const vars = contactTokenValues(contato, 'Camila')
+    expect(vars.atendente).toBe('Camila')
+    expect(renderMessageVars('Aqui é a {{atendente}}, da clínica.', vars)).toBe(
+      'Aqui é a Camila, da clínica.',
+    )
+  })
+
+  it('sem ninguém pra assinar, o token SOME — nunca aparece "{{atendente}}" pro cliente', () => {
+    for (const vazio of [null, undefined, '   ']) {
+      const vars = contactTokenValues(contato, vazio)
+      const texto = renderMessageVars('Oi, {{primeiro_nome}}! Aqui é a {{atendente}}, da clínica.', vars)
+      expect(texto).not.toContain('{{')
+      expect(texto).not.toContain('atendente')
+    }
+  })
+
+  it('não atropela as variáveis do cliente', () => {
+    const vars = contactTokenValues(contato, 'Camila')
+    expect(vars.primeiro_nome).toBe('Ana')
+    expect(vars.nome).toBe('Ana Paula')
+  })
+})

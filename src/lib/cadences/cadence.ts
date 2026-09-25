@@ -13,6 +13,8 @@ import {
   deals,
   dealEvents,
   pipelineStages,
+  user,
+  aiConfigs,
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { findOrCreateConversation } from '@/lib/channels/inbound'
@@ -391,6 +393,36 @@ interface ScheduleOptions {
  *  roteia pro canal certo (pula o que o lead não tem), interpola as variáveis
  *  e enfileira. `sendAtMsFor` decide QUANDO cada degrau sai (epoch ms). Reusado
  *  por enroll (offset desde o início) e resume (offset relativo à retomada). */
+/**
+ * O nome que assina a cadência: responsável pelo card > assinatura da conta.
+ * Best-effort — sem nenhum dos dois, o token some do texto sozinho.
+ */
+async function senderName(accountId: string, dealId: string | null): Promise<string | null> {
+  try {
+    if (dealId) {
+      const dono = firstOrNull(
+        await db
+          .select({ name: user.name })
+          .from(deals)
+          .innerJoin(user, eq(user.id, deals.assignedTo))
+          .where(and(eq(deals.id, dealId), eq(deals.accountId, accountId)))
+          .limit(1),
+      )
+      if (dono?.name?.trim()) return dono.name.trim()
+    }
+    const cfg = firstOrNull(
+      await db
+        .select({ name: aiConfigs.signatureName })
+        .from(aiConfigs)
+        .where(and(eq(aiConfigs.accountId, accountId), eq(aiConfigs.isDefault, true)))
+        .limit(1),
+    )
+    return cfg?.name?.trim() || null
+  } catch {
+    return null
+  }
+}
+
 async function scheduleCadenceSteps(
   ctx: CadenceCtx,
   enrollment: { id: string; cadenceId: string; contactId: string; dealId: string | null },
@@ -404,12 +436,19 @@ async function scheduleCadenceSteps(
   let firstAtMs: number | null = null
   // Inclui `primeiro_nome` (1ª palavra do nome). contactTokenValues é a fonte
   // única (mesmos tokens do disparo/agendamento).
-  const vars = contactTokenValues({
-    name: contact.name,
-    phone: contact.phone,
-    email: contact.email,
-    company: contact.company,
-  })
+  //
+  // `{{atendente}}` (25/09, Dra. Joyce): quem assina a mensagem. Numa cadência
+  // não tem ninguém apertando enviar — o nome vem do responsável pelo card e,
+  // na falta dele, da assinatura da conta. Vazio some do texto sozinho.
+  const vars = contactTokenValues(
+    {
+      name: contact.name,
+      phone: contact.phone,
+      email: contact.email,
+      company: contact.company,
+    },
+    await senderName(ctx.accountId, enrollment.dealId),
+  )
   let scheduled = 0
   let skipped = 0
   for (const step of steps) {

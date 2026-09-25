@@ -28,7 +28,18 @@ export interface ContactVars {
 }
 
 /** Map of supported token → resolved value from a contact. */
-export function contactTokenValues(c: ContactVars): Record<string, string> {
+export function contactTokenValues(
+  c: ContactVars,
+  /**
+   * Quem assina a mensagem: `{{atendente}}` (25/09, Dra. Joyce via Rafael —
+   * "ela quer saber quem está enviando"). Numa cadência não existe alguém
+   * apertando enviar, então o nome vem do responsável pelo card ou da
+   * assinatura da conta. Vazio some do texto junto com a pontuação à volta,
+   * como qualquer outro token — nunca fica "{{atendente}}" na cara do
+   * cliente.
+   */
+  sender?: string | null,
+): Record<string, string> {
   const name = (c.name ?? '').trim();
   return {
     nome: name,
@@ -36,6 +47,7 @@ export function contactTokenValues(c: ContactVars): Record<string, string> {
     telefone: (c.phone ?? '').trim(),
     email: (c.email ?? '').trim(),
     empresa: (c.company ?? '').trim(),
+    atendente: (sender ?? '').trim(),
   };
 }
 
@@ -46,6 +58,7 @@ export const SUPPORTED_TOKENS = [
   'telefone',
   'email',
   'empresa',
+  'atendente',
 ] as const;
 
 // O separador ANTES do token (", " ou espaços) e a vírgula DEPOIS vêm juntos

@@ -20,7 +20,6 @@ import {
   MessageCircle,
   Mail,
   AtSign,
-  GripVertical,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -460,7 +459,7 @@ export default function CadenciasPage() {
                 <Label>Degraus</Label>
                 <span className="text-xs text-muted-foreground">
                   Variáveis: {'{{primeiro_nome}}'} {'{{nome}}'} {'{{empresa}}'}{' '}
-                  {'{{telefone}}'} {'{{email}}'}
+                  {'{{telefone}}'} {'{{email}}'} {'{{atendente}}'}
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">
@@ -476,8 +475,12 @@ export default function CadenciasPage() {
                     key={i}
                     className="rounded-lg border border-border bg-background p-3"
                   >
+                    {/* ⚠️ 25/09: aqui tinha um ícone de arrastar que NUNCA
+                        arrastou — nenhum handler, só o desenho. O Rafael
+                        tentou e não funcionou. E nem deveria existir: os
+                        toques saem pela ordem do TEMPO, não pela da lista,
+                        como o próprio aviso abaixo diz. */}
                     <div className="mb-2 flex items-center gap-2">
-                      <GripVertical className="h-4 w-4 text-muted-foreground" />
                       <span className="text-xs font-medium text-muted-foreground">
                         Toque {i + 1}
                       </span>
