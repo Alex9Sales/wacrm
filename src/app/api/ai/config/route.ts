@@ -13,6 +13,7 @@ import { validateAiCredentials } from '@/lib/ai/validate'
 import { embedTexts } from '@/lib/ai/embeddings'
 import { AiError, type AiProvider } from '@/lib/ai/types'
 import { toAiHoursMode } from '@/lib/ai/hours-gate'
+import { normalizeAgentSwitches } from '@/lib/ai/switches'
 import { sanitizeTools } from '@/lib/ai/tools'
 import { sanitizeAutonomy } from '@/lib/ai/autonomy'
 import { ORCH_ACTIONS, levelFor, readPolicy } from '@/lib/orchestration/policy'
@@ -164,8 +165,13 @@ export async function POST(request: Request) {
       typeof body.system_prompt === 'string' && body.system_prompt.trim()
         ? body.system_prompt.trim()
         : null
-    const isActive = body.is_active === true
-    const autoReplyEnabled = body.auto_reply_enabled === true
+    // Assistente desligado = nada da IA roda, então a auto-resposta desce
+    // junto. Sem isto a tela gravava a dupla impossível e dizia ao cliente
+    // que a IA continuava respondendo sozinha (ver lib/ai/switches).
+    const { isActive, autoReplyEnabled } = normalizeAgentSwitches({
+      isActive: body.is_active === true,
+      autoReplyEnabled: body.auto_reply_enabled === true,
+    })
     // Canais onde a IA responde (multi). Vazio = todos os canais.
     const autoReplyChannelIds = Array.isArray(body.auto_reply_channel_ids)
       ? (body.auto_reply_channel_ids as unknown[]).filter(

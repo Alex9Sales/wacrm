@@ -232,8 +232,11 @@ export function AiConfig({
         setModel(data.model);
         setCredentialId(data.credential_id ?? '');
         setSystemPrompt(data.system_prompt ?? '');
+        // Conta que ficou com a dupla impossível gravada (assistente
+        // desligado + auto-resposta ligada) abre a tela dizendo a verdade:
+        // com o assistente desligado, nada da IA roda.
         setIsActive(data.is_active);
-        setAutoReplyEnabled(data.auto_reply_enabled);
+        setAutoReplyEnabled(data.is_active && data.auto_reply_enabled);
         setChannelIds(
           Array.isArray(data.auto_reply_channel_ids)
             ? data.auto_reply_channel_ids
@@ -1155,7 +1158,14 @@ export function AiConfig({
               </div>
               <Switch
                 checked={isActive}
-                onCheckedChange={setIsActive}
+                // Desligar o assistente desliga a auto-resposta junto: o
+                // interruptor de baixo fica cinza, e se ficasse aceso o
+                // cliente sairia da tela achando que a IA continua atendendo
+                // sozinha — sem ter como desmarcar. Ver lib/ai/switches.
+                onCheckedChange={(v) => {
+                  setIsActive(v);
+                  if (!v) setAutoReplyEnabled(false);
+                }}
                 disabled={disabled}
               />
             </div>

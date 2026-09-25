@@ -19,6 +19,7 @@ import { resolveAuditUserId } from '@/lib/api/v1/contacts';
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption';
 import { validateAiCredentials } from '@/lib/ai/validate';
 import { AiError, type AiProvider } from '@/lib/ai/types';
+import { normalizeAgentSwitches } from '@/lib/ai/switches';
 
 function serialize(row: {
   provider: string;
@@ -86,8 +87,12 @@ export async function PUT(request: Request) {
       typeof body.system_prompt === 'string' && body.system_prompt.trim()
         ? body.system_prompt.trim()
         : null;
-    const isActive = body.is_active === true;
-    const autoReplyEnabled = body.auto_reply_enabled === true;
+    // Assistant off = nothing AI runs, so auto-reply goes down with it.
+    // See lib/ai/switches for why the pair can't be stored out of sync.
+    const { isActive, autoReplyEnabled } = normalizeAgentSwitches({
+      isActive: body.is_active === true,
+      autoReplyEnabled: body.auto_reply_enabled === true,
+    });
     let maxPer = Number(body.auto_reply_max_per_conversation);
     if (!Number.isFinite(maxPer)) maxPer = 3;
     maxPer = Math.min(20, Math.max(1, Math.floor(maxPer)));
