@@ -111,6 +111,15 @@ import('./meta-health-worker')
     console.error('[worker] meta-health failed to start:', err);
   });
 
+// 🔔 Lembrete da mensalidade — tick de 1h: avisa 5 dias antes, no dia e 3
+// dias depois do vencimento. Antes existia só o botão no /admin, e alguém
+// tinha que lembrar de clicar cliente por cliente (25/09).
+import('./billing-reminder-worker')
+  .then((m) => m.startBillingReminderWorker())
+  .catch((err) => {
+    console.error('[worker] billing-reminders failed to start:', err);
+  });
+
 // 📅 Agenda do Google — tick de 5 min: importa os compromissos das agendas
 // conectadas. Antes só rodava no clique de "Sincronizar", e a IA acabava
 // oferecendo horário em cima de compromisso marcado pelo celular.

@@ -170,6 +170,10 @@ export const organizationBilling = pgTable("organization_billing", {
 	// preço de tabela do plano. Existe porque o contratado nem sempre é a
 	// tabela: implantação parcelada, preço travado, degrau de reajuste.
 	monthlyValue: numeric("monthly_value", { precision: 12, scale: 2 }),
+	// Degraus de lembrete já enviados, por vencimento (migr 0192):
+	// {"2026-10-04": [-5, 0]}. `last_reminder_at` só diz quando saiu o
+	// último; sem isto um deploy no meio do dia reenviaria tudo.
+	remindersSent: jsonb("reminders_sent").default({}).notNull(),
 	// Ciclo de vida (migr 0102): cancel_at = fim do período pago quando o cliente
 	// cancela (o acesso vale ATÉ lá; depois vira 'canceled'). deleted_at =
 	// soft-delete (mantém o registro + histórico, mas bloqueia e some da lista).
