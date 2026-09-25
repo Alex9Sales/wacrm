@@ -401,6 +401,22 @@ export function AdminClients() {
               <TableBody>
                 {visibleClients.map((c) => {
                   const overdue = isOverdue(c.dueAt, c.status);
+                  // ⚠️ 25/09: sete clientes estavam com o telefone do próprio
+                  // responsável no campo de cobrança. Se o lembrete
+                  // disparasse, ele receberia a cobrança de todos e nenhum
+                  // cliente receberia nada. Sem telefone também não recebe —
+                  // e nada disso aparecia sem alguém ir procurar.
+                  const foneDigitos = (c.billingPhone ?? "")
+                    .replace(/\D/g, "")
+                    .replace(/^55/, "");
+                  const foneRepetido = foneDigitos
+                    ? clients.filter(
+                        (o) =>
+                          o.id !== c.id &&
+                          (o.billingPhone ?? "").replace(/\D/g, "").replace(/^55/, "") ===
+                            foneDigitos,
+                      ).length
+                    : 0;
                   const mine = !!myId && c.responsible?.id === myId;
                   // Cancelamento agendado ainda no futuro (conta segue ativa).
                   const cancelPending =
@@ -476,6 +492,22 @@ export function AdminClients() {
                         {cancelPending ? (
                           <span className="block text-[10px] text-amber-400">
                             cancela em {formatDate(c.cancelAt)}
+                          </span>
+                        ) : null}
+                        {c.status === "active" && c.dueAt && !c.billingPhone ? (
+                          <span
+                            className="block text-[10px] text-amber-400"
+                            title="Sem telefone de cobrança: este cliente não recebe os lembretes de vencimento."
+                          >
+                            sem telefone — não recebe lembrete
+                          </span>
+                        ) : null}
+                        {foneRepetido ? (
+                          <span
+                            className="block text-[10px] text-destructive"
+                            title="O mesmo telefone está em mais de um cliente. O lembrete de todos vai cair no mesmo aparelho."
+                          >
+                            telefone repetido em +{foneRepetido} cliente(s)
                           </span>
                         ) : null}
                       </TableCell>
