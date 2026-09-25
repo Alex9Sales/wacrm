@@ -80,6 +80,23 @@ export async function transcribeAudioFromUrl(
 }
 
 /**
+ * Transcreve bytes que o chamador JÁ tem em mãos.
+ *
+ * O inbound baixa a mídia para guardar no nosso storage e antes jogava os
+ * bytes fora — a transcrição ia buscar de novo na origem, um segundo
+ * download de URL curta que não precisa existir. Aqui ela usa o que já está
+ * na memória.
+ */
+export async function transcribeAudioBytes(
+  accountId: string,
+  bytes: Buffer,
+  mimetype?: string,
+): Promise<string | null> {
+  const base64 = bytes.toString('base64')
+  return transcribeInboundAudio(accountId, { kind: 'audio', base64, mimetype })
+}
+
+/**
  * Transcribe an inbound audio note to text, or null when it can't (no key,
  * unsupported format, too large, API error). Never throws.
  */

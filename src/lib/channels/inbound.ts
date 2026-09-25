@@ -47,7 +47,7 @@ import {
   enqueueDealSuggestDebounced,
 } from '@/lib/queue/queues';
 import { aiReplyBufferMs } from '@/lib/ai/defaults';
-import { transcribeInboundAudio } from '@/lib/ai/transcribe';
+import { transcribeAudioBytes, transcribeInboundAudio } from '@/lib/ai/transcribe';
 import { describeImage } from '@/lib/ai/vision';
 import { IMAGE_BURST_LIMIT, shouldDescribeImage } from '@/lib/ai/image-burst';
 import { describeDocument } from '@/lib/ai/document';
@@ -254,8 +254,10 @@ export async function dispatchInboundMessage(
   //    Providers without inbound media (EvoGo) never set ev.media, so a
   //    text placeholder falls out naturally from contentText below.
   let mediaUrl: string | null = null;
+  let storedMedia: StoredMedia | null = null;
   if (ev.media && (ev.media.base64 || ev.media.url)) {
-    mediaUrl = await storeInboundMedia(ev.media);
+    storedMedia = await storeInboundMedia(ev.media);
+    mediaUrl = storedMedia?.url ?? null;
   }
 
   // Map contentType to an allowed messages.content_type.
@@ -276,7 +278,11 @@ export async function dispatchInboundMessage(
     try {
       const { audioTranscriptionEnabled } = await getAccountSettings(accountId);
       if (audioTranscriptionEnabled) {
-        transcription = await transcribeInboundAudio(accountId, ev.media);
+        // Usa os bytes que o upload JÁ baixou, em vez de buscar a origem de
+        // novo. Sem mídia guardada, tenta a origem.
+        transcription = storedMedia
+          ? await transcribeAudioBytes(accountId, storedMedia.bytes, storedMedia.mimetype)
+          : await transcribeInboundAudio(accountId, ev.media);
       }
     } catch (err) {
       console.error('[inbound] transcription failed:', err);
@@ -997,14 +1003,38 @@ async function ingestGroupMessage(
 
   // 5) Media (reuse the same MinIO upload path).
   let mediaUrl: string | null = null;
+  let storedMedia: StoredMedia | null = null;
   if (ev.media && (ev.media.base64 || ev.media.url)) {
-    mediaUrl = await storeInboundMedia(ev.media);
+    storedMedia = await storeInboundMedia(ev.media);
+    mediaUrl = storedMedia?.url ?? null;
   }
 
   const contentType = ALLOWED_CONTENT_TYPES.has(ev.contentType)
     ? ev.contentType
     : 'text';
   const isFromMe = ev.fromMe === true;
+
+  // 🎙️ Transcrição do áudio — 25/09. Este caminho (grupo) simplesmente NÃO
+  // transcrevia: a chamada só existia no inbound de conversa privada. Com a
+  // opção ligada na conta, 698 dos 703 áudios privados viravam texto e
+  // apenas 1 de 16 áudios de grupo — e como a transcrição é best-effort e
+  // silenciosa, ninguém tinha como notar. Caso real: um grupo de cliente em
+  // que todo o relato veio por áudio e o histórico ficou mudo por uma semana.
+  let transcription: string | null = null;
+  if (contentType === 'audio' && storedMedia) {
+    try {
+      const { audioTranscriptionEnabled } = await getAccountSettings(accountId);
+      if (audioTranscriptionEnabled) {
+        transcription = await transcribeAudioBytes(
+          accountId,
+          storedMedia.bytes,
+          storedMedia.mimetype,
+        );
+      }
+    } catch (err) {
+      console.error('[inbound] group transcription failed:', err);
+    }
+  }
   let baseText =
     ev.contentText ??
     (ev.media
@@ -1100,7 +1130,9 @@ async function ingestGroupMessage(
     }
   }
 
-  // 6) Insert. No transcription/AI/flows — a group is watched, not answered.
+  // 6) Insert. Sem IA e sem fluxos — grupo se acompanha, não se responde.
+  //     A TRANSCRIÇÃO entra (25/09): ela serve a quem lê, não ao robô, e sem
+  //     ela um grupo tocado a áudio vira um histórico ilegível.
   try {
     await db.insert(messages).values({
       conversationId: conversation.id,
@@ -1108,6 +1140,7 @@ async function ingestGroupMessage(
       contentType,
       contentText,
       mediaUrl,
+      transcription,
       viewOnce: ev.viewOnce ?? ev.media?.viewOnce ?? false,
       messageId: ev.externalMessageId || null,
       replyToMessageId,
@@ -1415,10 +1448,20 @@ async function maybeSendOutOfHoursReply(
 
 /**
  * Download / decode inbound media and store it in MinIO, returning the
- * stable public URL. Best-effort: returns null on any failure so a media
- * hiccup never drops the whole inbound message.
+ * stable public URL **and the bytes it already downloaded**. Best-effort:
+ * returns null on any failure so a media hiccup never drops the whole
+ * inbound message.
+ *
+ * ⚠️ Os bytes voltam de propósito: quem precisa do conteúdo (a transcrição
+ * do áudio) baixava a mídia DE NOVO da origem. Ver transcribeAudioBytes.
  */
-async function storeInboundMedia(media: NonNullable<NormalizedInbound['media']>): Promise<string | null> {
+interface StoredMedia {
+  url: string
+  bytes: Buffer
+  mimetype: string | undefined
+}
+
+async function storeInboundMedia(media: NonNullable<NormalizedInbound['media']>): Promise<StoredMedia | null> {
   try {
     let bytes: Buffer | null = null;
     if (media.base64) {
@@ -1447,7 +1490,7 @@ async function storeInboundMedia(media: NonNullable<NormalizedInbound['media']>)
       bytes,
       media.mimetype || 'application/octet-stream',
     );
-    return publicUrl(MEDIA_BUCKET, key);
+    return { url: publicUrl(MEDIA_BUCKET, key), bytes, mimetype: media.mimetype };
   } catch (err) {
     console.error('[inbound] storeInboundMedia failed:', err);
     return null;
