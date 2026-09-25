@@ -216,9 +216,24 @@ function fillPlaceholders(
     used.add(key)
     const v = args[key]
     const s = v === undefined || v === null ? '' : String(v)
-    return encode ? encodeURIComponent(s) : s.replace(/"/g, '\\"')
+    return encode ? encodeURIComponent(s) : jsonEscape(s)
   })
   return { out, used }
+}
+
+/**
+ * Escapa um valor para dentro de um corpo JSON.
+ *
+ * ⚠️ Antes trocava só `"` por `\"`. Aspas eram o caso óbvio, mas o que chega
+ * aqui é texto de WhatsApp: quebra de linha, tabulação e barra invertida
+ * passavam cruas e produziam um JSON inválido — a API do cliente respondia
+ * 400 e a IA dizia que "não conseguiu consultar", sem ninguém entender por
+ * quê. `JSON.stringify` cobre todos eles (as aspas continuam escapadas do
+ * mesmo jeito); as aspas da ponta é que não entram, porque o template já as
+ * tem em volta do `{placeholder}`.
+ */
+function jsonEscape(s: string): string {
+  return JSON.stringify(s).slice(1, -1)
 }
 
 export interface ToolRunResult {

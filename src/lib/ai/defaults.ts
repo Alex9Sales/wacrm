@@ -507,7 +507,7 @@ export function buildSystemPrompt(args: {
   /** Contato da conversa (nome do WhatsApp + telefone). Com o telefone a IA
    *  consegue consultar o cadastro do cliente em ferramentas externas SEM
    *  pedir o número — sem isso ela não tem como preencher {telefone}. */
-  contact?: { name?: string | null; phone?: string | null } | null
+  contact?: { name?: string | null; phone?: string | null; email?: string | null } | null
   /** "Não perde venda": resumo do que o MESMO contato falou em OUTRAS conversas
    *  (ex.: outro número de WhatsApp da loja). Background pra dar continuidade. */
   priorContactContext?: string | null
@@ -547,7 +547,7 @@ export function buildSystemPrompt(args: {
   // Contato desta conversa — nome do WhatsApp + telefone. O telefone permite
   // consultar o cadastro do cliente em ferramentas externas sem perguntar o
   // número (caso Maria 26/08: pedia CPF em vez de buscar pelo telefone).
-  if (args.contact && (args.contact.name || args.contact.phone)) {
+  if (args.contact && (args.contact.name || args.contact.phone || args.contact.email)) {
     const bits: string[] = []
     if (args.contact.name) bits.push(`WhatsApp profile name: ${args.contact.name}`)
     if (args.contact.phone) {
@@ -564,8 +564,12 @@ export function buildSystemPrompt(args: {
         `phone: ${digits}${lookup !== digits ? ` (for customer-registry lookups use: ${lookup})` : ''}`,
       )
     }
+    // 📧 E-mail do cadastro. Um agente que identifica a pessoa por e-mail
+    // (plataforma de curso, área de membros) só tinha o telefone aqui e
+    // acabava PERGUNTANDO o e-mail a quem já está cadastrado.
+    if (args.contact.email) bits.push(`email: ${args.contact.email}`)
     parts.push(
-      `CONTACT OF THIS CONVERSATION — ${bits.join(' · ')}. When an external tool needs the customer's phone number, use the registry-lookup version given here exactly as written (never ask the customer for their own number, and do not re-format it). The profile name may be a nickname — prefer the registered name from your customer-registry tool when you have it.`,
+      `CONTACT OF THIS CONVERSATION — ${bits.join(' · ')}. When an external tool needs the customer's phone number, use the registry-lookup version given here exactly as written (never ask the customer for their own number, and do not re-format it). If an external tool needs the customer's e-mail and one is given here, use it as written — only ask the customer for their e-mail when none is listed. The profile name may be a nickname — prefer the registered name from your customer-registry tool when you have it.`,
     )
   }
 

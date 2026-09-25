@@ -42,11 +42,20 @@ export interface SlowToolOutcome {
   why: string
 }
 
-/** Preenche {placeholders} da URL/body com os argumentos. */
-function fill(template: string, args: Record<string, unknown>): string {
+/**
+ * Preenche {placeholders} com os argumentos.
+ *
+ * O escape muda conforme o destino, e errar isso quebra a chamada em
+ * silêncio: na URL vale `encodeURIComponent`; no corpo JSON vale o escape do
+ * próprio JSON — a pergunta de um aluno vem de um WhatsApp, com quebra de
+ * linha e aspas, e sem isso o corpo sai inválido.
+ */
+function fill(template: string, args: Record<string, unknown>, target: 'url' | 'json'): string {
   return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (whole, key: string) => {
     const v = args[key]
-    return v === undefined || v === null ? whole : String(v)
+    if (v === undefined || v === null) return whole
+    const s = String(v)
+    return target === 'url' ? encodeURIComponent(s) : JSON.stringify(s).slice(1, -1)
   })
 }
 
@@ -114,7 +123,7 @@ export async function callSlowTool(
   let httpStatus: number | undefined
 
   try {
-    const url = await assertPublicUrl(new URL(fill(tool.url, args)))
+    const url = await assertPublicUrl(new URL(fill(tool.url, args, 'url')))
     const isGet = tool.method === 'GET' || tool.method === 'DELETE'
     if (isGet) {
       for (const [k, v] of Object.entries(args)) {
@@ -126,7 +135,7 @@ export async function callSlowTool(
     const body = isGet
       ? undefined
       : tool.bodyTemplate
-        ? fill(tool.bodyTemplate, args)
+        ? fill(tool.bodyTemplate, args, 'json')
         : JSON.stringify(args)
 
     let headers: Record<string, string> = {}

@@ -168,6 +168,38 @@ describe('buildSystemPrompt — contato da conversa', () => {
     expect(p).not.toContain('679990005678')
   })
 
+  // 25/09: um agente que identifica a pessoa por e-mail (plataforma de curso,
+  // área de membros) só recebia o telefone aqui — e acabava PERGUNTANDO o
+  // e-mail a quem já está cadastrado.
+  it('e-mail do cadastro entra no prompt, para a ferramenta não precisar perguntar', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      contact: { name: 'Aluno Teste', phone: '5511999990000', email: 'aluno@exemplo.com' },
+    })
+    expect(p).toContain('email: aluno@exemplo.com')
+    expect(p).toMatch(/only ask the customer for their e-mail when none is listed/i)
+  })
+
+  it('contato SEM e-mail não ganha linha de e-mail nenhuma', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      contact: { name: 'Aluno Teste', phone: '5511999990000' },
+    })
+    expect(p).not.toContain('email:')
+  })
+
+  it('só o e-mail já basta para o bloco do contato existir', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      contact: { name: null, phone: null, email: 'so-email@exemplo.com' },
+    })
+    expect(p).toContain('CONTACT OF THIS CONVERSATION')
+    expect(p).toContain('so-email@exemplo.com')
+  })
+
   it('não perde venda: histórico de outra conversa entra como PRIOR CONTEXT', () => {
     const p = buildSystemPrompt({
       userPrompt: null,

@@ -767,7 +767,7 @@ export async function dispatchInboundToAiReply(
     // — ela pedia o CPF em vez de consultar o cadastro sozinha).
     const contactRow = firstOrNull(
       await db
-        .select({ name: contacts.name, phone: contacts.phone })
+        .select({ name: contacts.name, phone: contacts.phone, email: contacts.email })
         .from(contacts)
         .where(eq(contacts.id, contactId))
         .limit(1),
@@ -870,7 +870,7 @@ export async function dispatchInboundToAiReply(
       audioReplies: config.audioRepliesEnabled !== false,
       agentRoster: agentRoster.map((a) => ({ name: a.name ?? 'Agente' })),
       contact: contactRow
-        ? { name: contactRow.name, phone: contactRow.phone }
+        ? { name: contactRow.name, phone: contactRow.phone, email: contactRow.email }
         : null,
       priorContactContext,
       customerFacts,
