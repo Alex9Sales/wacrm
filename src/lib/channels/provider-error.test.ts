@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  IG_ONLY_HEART_MESSAGE,
   OUTSIDE_WINDOW_MESSAGE,
+  PROVIDER_FLAKY_MESSAGE,
   humanProviderError,
   isOutsideWindowError,
 } from './provider-error'
@@ -25,6 +27,27 @@ describe('a janela de 24h ganha nome próprio', () => {
   })
 })
 
+describe('os dois erros que o Alex viu testando no Instagram', () => {
+  it('👍 → "Reação inválida" vira a explicação do coração', () => {
+    expect(
+      humanProviderError('instagram send falhou: 400 Reação inválida.'),
+    ).toBe(IG_ONLY_HEART_MESSAGE)
+  })
+
+  it('500 da Meta não vira culpa do atendente', () => {
+    expect(
+      humanProviderError(
+        'instagram send falhou: 500 An unexpected error has occurred. Please retry your request later.',
+      ),
+    ).toBe(PROVIDER_FLAKY_MESSAGE)
+  })
+
+  it('a janela de 24h ganha prioridade sobre o código HTTP', () => {
+    // 403 casaria com nada, mas o texto é o que manda.
+    expect(humanProviderError(ERRO_REAL)).toBe(OUTSIDE_WINDOW_MESSAGE)
+  })
+})
+
 describe('tira os prefixos dos adaptadores', () => {
   it('sobra o que a Meta escreveu, sem "instagram send falhou: 403"', () => {
     expect(humanProviderError('instagram send falhou: 403 Token inválido')).toBe(
@@ -38,8 +61,15 @@ describe('tira os prefixos dos adaptadores', () => {
 
   it('nunca devolve vazio', () => {
     // O corte não pode engolir a mensagem toda e deixar o atendente sem nada.
-    expect(humanProviderError('500 ')).toBe('500')
+    expect(humanProviderError('404 ')).toBe('404')
     expect(humanProviderError('')).toMatch(/não disse o motivo/)
+  })
+
+  it('número 5xx no MEIO do texto não vira "erro interno"', () => {
+    // A primeira versão da regra casava `\b5\d{2}\b` em qualquer lugar.
+    expect(humanProviderError('o pedido 500 não foi encontrado')).toBe(
+      'o pedido 500 não foi encontrado',
+    )
   })
 
   it('número que NÃO é código HTTP não vira corte', () => {

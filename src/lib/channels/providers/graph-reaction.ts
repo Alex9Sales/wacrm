@@ -89,6 +89,14 @@ export async function sendGraphReaction(args: GraphReactionArgs): Promise<void> 
       })
       return
     } catch (err) {
+      // ⚠️ Cada tentativa é logada. Sem isso, quando as duas falham só o
+      // primeiro erro aparece e ficamos cegos sobre o formato: foi o que
+      // aconteceu em 25/09 (👍 → 400 "Reação inválida"; ❤️ → 500). É esta
+      // linha que diz qual formato a API aceita.
+      console.warn(
+        `[graph-reaction] tentativa reaction=${JSON.stringify(reaction)} falhou:`,
+        err instanceof Error ? err.message : err,
+      )
       firstError ??= err
     }
   }

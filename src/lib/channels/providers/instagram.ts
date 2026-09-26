@@ -19,6 +19,7 @@ import { CAPABILITIES } from '../provider'
 import type {
   ChannelCtx,
   NormalizedInbound,
+  NormalizedReaction,
   NormalizedStatus,
   OutboundMedia,
   ParsedWebhook,
@@ -133,6 +134,16 @@ interface IgMessaging {
   }
   read?: { mid?: string }
   delivery?: { mids?: string[] }
+  // 💟 Reação do cliente a uma mensagem NOSSA. Só chega se a conta estiver
+  // inscrita no campo `message_reactions` (ver IG_WEBHOOK_FIELDS) — foi por
+  // isso que reagir no app não aparecia no CRM. No unreact vem `action:
+  // 'unreact'` e o `emoji` pode não vir.
+  reaction?: {
+    mid?: string
+    action?: 'react' | 'unreact'
+    reaction?: string
+    emoji?: string
+  }
 }
 interface IgEntry {
   id?: string
@@ -657,12 +668,31 @@ export const instagramProvider: WhatsAppProvider = {
     const b = body as IgWebhookBody
     const messages: NormalizedInbound[] = []
     const statuses: NormalizedStatus[] = []
+    const reactions: NormalizedReaction[] = []
 
     for (const entry of b.entry ?? []) {
       for (const ev of entry.messaging ?? []) {
         // read receipt → status.
         if (ev.read?.mid) {
           statuses.push({ externalMessageId: ev.read.mid, level: 3 })
+          continue
+        }
+
+        // 💟 Reação do cliente (25/09: o Alex reagiu 👍 pelo app e nada
+        // apareceu no CRM). O IG manda o emoji em `emoji` e o apelido em
+        // `reaction`; no unreact o emoji some — e emoji vazio é exatamente
+        // como o pipeline representa "tirou a reação".
+        if (ev.reaction?.mid) {
+          const removeu = ev.reaction.action === 'unreact'
+          reactions.push({
+            targetExternalId: ev.reaction.mid,
+            // Sem telefone no Instagram: quem consome atribui pelo contato da
+            // conversa da mensagem alvo (target.contactId vem antes).
+            fromPhoneE164: '',
+            // O echo da NOSSA reação chega com o sender sendo a conta IG.
+            fromMe: ev.sender?.id === entry.id,
+            emoji: removeu ? '' : (ev.reaction.emoji ?? ev.reaction.reaction ?? ''),
+          })
           continue
         }
         const m = ev.message
@@ -740,7 +770,7 @@ export const instagramProvider: WhatsAppProvider = {
         messages.push(norm)
       }
     }
-    return { messages, statuses }
+    return { messages, statuses, reactions }
   },
 }
 
@@ -755,7 +785,7 @@ export const instagramProvider: WhatsAppProvider = {
 // ------------------------------------------------------------
 
 /** Campos que a automação precisa receber do Instagram. */
-export const IG_WEBHOOK_FIELDS = ['messages', 'comments'] as const
+export const IG_WEBHOOK_FIELDS = ['messages', 'comments', 'message_reactions'] as const
 
 /**
  * O token do Instagram morreu? A Meta devolve OAuthException com code 190
