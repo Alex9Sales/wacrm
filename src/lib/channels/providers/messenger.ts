@@ -34,8 +34,18 @@ function messagingTypeOf(opts?: SendOptions): Record<string, string> {
     : { messaging_type: 'RESPONSE' }
 }
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
+import { sendGraphReaction } from './graph-reaction'
 
 const DEFAULT_GRAPH_BASE = 'https://graph.facebook.com/v21.0'
+
+/** Destinatário da reação (PSID), posto no canal por api/whatsapp/react. */
+function reactionRecipientOf(ch: ChannelCtx): string {
+  const to = ch.providerMeta.reaction_to
+  if (typeof to !== 'string' || !to) {
+    throw new Error(`messenger channel ${ch.id}: reação sem destinatário`)
+  }
+  return to
+}
 
 function accessTokenOf(ch: ChannelCtx): string {
   const token = ch.credentials.accessToken
@@ -197,6 +207,19 @@ export const messengerProvider: WhatsAppProvider = {
       }
     }
     return { externalMessageId: data.message_id ?? '' }
+  },
+
+  async sendReaction(ch, targetExternalId, emoji) {
+    // O destinatário (PSID) chega por providerMeta.reaction_to, do mesmo jeito
+    // que no adaptador do WhatsApp oficial.
+    await sendGraphReaction({
+      url: `${graphBaseOf(ch)}/${pageIdOf(ch)}/messages`,
+      token: accessTokenOf(ch),
+      recipientId: reactionRecipientOf(ch),
+      targetMessageId: targetExternalId,
+      emoji,
+      post: graphPost,
+    })
   },
 
   async verifyWebhook(ctx: WebhookVerifyCtx, ch: ChannelCtx | null) {

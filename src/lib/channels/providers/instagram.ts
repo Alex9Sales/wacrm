@@ -27,8 +27,22 @@ import type {
   WhatsAppProvider,
 } from '../provider'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
+import { STORY_REPLY_PREFIX } from '../story-engagement'
+import { sendGraphReaction } from './graph-reaction'
 
 const DEFAULT_GRAPH_BASE = 'https://graph.facebook.com/v21.0'
+
+/**
+ * Destinatário da reação (IGSID), posto no canal por quem chama
+ * (api/whatsapp/react) porque a assinatura unificada não o carrega.
+ */
+function reactionRecipientOf(ch: ChannelCtx): string {
+  const to = ch.providerMeta.reaction_to
+  if (typeof to !== 'string' || !to) {
+    throw new Error(`instagram channel ${ch.id}: reação sem destinatário`)
+  }
+  return to
+}
 
 function accessTokenOf(ch: ChannelCtx): string {
   const token = ch.credentials.accessToken
@@ -615,6 +629,21 @@ export const instagramProvider: WhatsAppProvider = {
     return { externalMessageId: data.message_id ?? '' }
   },
 
+  async sendReaction(ch, targetExternalId, emoji) {
+    // O destinatário (IGSID) chega por providerMeta.reaction_to, do mesmo jeito
+    // que no adaptador do WhatsApp oficial — a assinatura unificada só carrega
+    // o id da mensagem e o emoji.
+    const recipientId = reactionRecipientOf(ch)
+    await sendGraphReaction({
+      url: `${graphBaseOf(ch)}/${igIdOf(ch)}/messages`,
+      token: accessTokenOf(ch),
+      recipientId,
+      targetMessageId: targetExternalId,
+      emoji,
+      post: graphPost,
+    })
+  },
+
   async verifyWebhook(ctx: WebhookVerifyCtx, ch: ChannelCtx | null) {
     const sig = ctx.headers.get('x-hub-signature-256')
     const appSecret =
@@ -696,7 +725,7 @@ export const instagramProvider: WhatsAppProvider = {
           contentType,
           contentText:
             storyContext === 'reply' && m.text
-              ? `↩️ Respondeu seu story: ${m.text}`
+              ? `${STORY_REPLY_PREFIX}${m.text}`
               : (m.text ?? attachmentText ?? null),
         }
         if (storyContext) norm.storyContext = storyContext

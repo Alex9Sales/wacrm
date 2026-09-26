@@ -16,6 +16,7 @@ import {
 } from '@/lib/auth/account';
 import { loadChannel } from '@/lib/channels/channels';
 import { getProvider } from '@/lib/channels/registry';
+import { pickProviderTarget } from '@/lib/channels/target';
 import { publishEvent } from '@/lib/events/publish';
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils';
 import {
@@ -104,6 +105,8 @@ export async function POST(request: Request) {
           id: conversations.id,
           channelId: conversations.channelId,
           contactPhone: contacts.phone,
+          contactExternalId: contacts.externalId,
+          contactEmail: contacts.email,
         })
         .from(conversations)
         .leftJoin(contacts, eq(conversations.contactId, contacts.id))
@@ -123,16 +126,9 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!conversation.contactPhone) {
-      return NextResponse.json(
-        { error: 'Contact phone number not found' },
-        { status: 400 },
-      );
-    }
-
     if (!conversation.channelId) {
       return NextResponse.json(
-        { error: 'WhatsApp not configured.' },
+        { error: 'Canal não configurado.' },
         { status: 400 },
       );
     }
@@ -142,24 +138,48 @@ export async function POST(request: Request) {
     const channel = await loadChannel(conversation.channelId);
     if (!channel) {
       return NextResponse.json(
-        { error: 'WhatsApp not configured.' },
+        { error: 'Canal não configurado.' },
         { status: 400 },
       );
     }
 
     const provider = getProvider(channel.provider);
     if (!provider.capabilities.reactions || !provider.sendReaction) {
+      console.warn(
+        `[whatsapp/react] provider ${channel.provider} não envia reação (canal ${channel.id})`,
+      );
       return NextResponse.json(
-        { error: 'This channel does not support reactions.' },
+        { error: 'Este canal não aceita reação.' },
         { status: 400 },
       );
     }
 
-    const sanitizedPhone = sanitizePhoneForMeta(conversation.contactPhone);
+    // 25/09 (Rafael Odonto): esta rota lia `contacts.phone` direto, e no
+    // Instagram/Messenger o contato NÃO tem telefone — a identidade é o
+    // external_id (IGSID/PSID). Resultado: reagir no Instagram morria num
+    // "Contact phone number not found", ANTES de qualquer tentativa de envio,
+    // e a tela mostrava a reação e a desfazia. O resto do sistema já resolvia
+    // isso com pickProviderTarget ("o CANAL decide o alvo"); só a reação ficou
+    // para trás.
+    const picked = pickProviderTarget({
+      provider: channel.provider,
+      phoneDigits: sanitizePhoneForMeta(conversation.contactPhone ?? ''),
+      externalId: conversation.contactExternalId,
+      email: conversation.contactEmail,
+    });
+    if (!picked) {
+      console.warn(
+        `[whatsapp/react] contato sem alvo para ${channel.provider} (conversa ${conversation.id})`,
+      );
+      return NextResponse.json(
+        { error: 'Este contato não tem um destino válido neste canal.' },
+        { status: 400 },
+      );
+    }
 
     // The unified sendReaction signature carries only the target message
-    // id + emoji; the recipient phone is threaded through
-    // providerMeta.reaction_to (the Meta adapter reads it there). The WAHA/gows
+    // id + emoji; the recipient is threaded through providerMeta.reaction_to
+    // (the Meta/IG/Messenger adapters read it there). The WAHA/gows
     // adapter also needs the target's DIRECTION to rebuild the serialized id
     // (`<fromMe>_<chatId>_<HASH>`) — threaded as reaction_from_me.
     const targetFromMe =
@@ -169,7 +189,7 @@ export async function POST(request: Request) {
       ...channel,
       providerMeta: {
         ...channel.providerMeta,
-        reaction_to: sanitizedPhone,
+        reaction_to: picked.target,
         reaction_from_me: targetFromMe,
       },
     };

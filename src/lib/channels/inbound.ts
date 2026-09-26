@@ -76,6 +76,7 @@ import { handleCaptureWaRef } from '@/lib/capture/wa-ref';
 import { linkBroadcastCreatorsOnFirstReply } from '@/lib/broadcasts/conversation-link';
 import { getProvider } from './registry';
 import type { ChannelCtx, NormalizedInbound } from './provider';
+import { isStoryEngagementOnly } from './story-engagement';
 
 /** Bucket for inbound media — public-read, same as the rest of Phase 3. */
 const MEDIA_BUCKET = 'media';
@@ -690,12 +691,17 @@ export async function dispatchInboundMessage(
     (aiCfg.autoReplyChannelIds.length === 0 ||
       aiCfg.autoReplyChannelIds.includes(channel.id));
 
+  // 📸 Reação/menção de story não é pergunta (story-engagement.ts): um 🔥 no
+  // story não merece "estamos fechados". Resposta a story COM pergunta segue
+  // recebendo o aviso.
+  const storyCarinho = isStoryEngagementOnly(ev.storyContext, ev.contentText);
+
   // Out-of-hours auto-reply. When the customer writes outside business hours
   // (and we haven't already sent a closed-notice recently), send the account's
   // configured message and skip the AI auto-reply below — a human isn't
   // available, so the closed notice stands in for it. Pulado quando a IA vai
   // atender o fora-do-horário (ela É o respondente).
-  const outOfHoursSent = aiHandlesOffHours
+  const outOfHoursSent = aiHandlesOffHours || storyCarinho
     ? false
     : await maybeSendOutOfHoursReply(
         accountId,
