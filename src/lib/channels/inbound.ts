@@ -275,9 +275,13 @@ export async function dispatchInboundMessage(
   // deduplicated, so it isn't transcribed here — that's a separate path.)
   // Best-effort: null on any failure.
   let transcription: string | null = null;
+  // Por que a transcrição ficou vazia: desligada na conta, ou ligada e
+  // FALHOU. O aviso ao dono depende disso — ver a nota 🔇 mais abaixo.
+  let transcricaoLigada = false;
   if (contentType === 'audio' && ev.media) {
     try {
       const { audioTranscriptionEnabled } = await getAccountSettings(accountId);
+      transcricaoLigada = audioTranscriptionEnabled;
       if (audioTranscriptionEnabled) {
         // Usa os bytes que o upload JÁ baixou, em vez de buscar a origem de
         // novo. Sem mídia guardada, tenta a origem.
@@ -790,6 +794,7 @@ export async function dispatchInboundMessage(
               eq(messages.conversationId, conversation.id),
               eq(messages.senderType, 'agent'),
               sql`${messages.contentText} LIKE '🔇 A IA não conseguiu ouvir%'`,
+              // (o LIKE cobre as duas versões do aviso — ambas começam igual)
               gte(
                 messages.createdAt,
                 new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
@@ -804,8 +809,14 @@ export async function dispatchInboundMessage(
           accountId,
           senderType: 'agent',
           contentType: 'text',
-          contentText:
-            '🔇 A IA não conseguiu ouvir este áudio, então não respondeu. Ligue a transcrição em Configurações → Atendimento → Transcrição de áudio (precisa da chave OpenAI em Agentes IA).',
+          // ⚠️ 26/09 (Ivone, Família do Gás): o aviso era SEMPRE "ligue a
+          // transcrição", mesmo quando ela já estava ligada e tinha acabado de
+          // funcionar — o áudio anterior da mesma cliente foi transcrito, e o
+          // seguinte caiu num timeout da OpenAI. Mandar o dono ligar o que já
+          // está ligado faz ele perder a viagem e desconfiar do aviso.
+          contentText: transcricaoLigada
+            ? '🔇 A IA não conseguiu ouvir este áudio, então não respondeu. A transcrição ESTÁ ligada — foi a conversão que falhou agora (instabilidade do serviço ou chave OpenAI sem crédito). Ouça o áudio e responda; se repetir muito, me avise.'
+            : '🔇 A IA não conseguiu ouvir este áudio, então não respondeu. Ligue a transcrição em Configurações → Atendimento → Transcrição de áudio (precisa da chave OpenAI em Agentes IA).',
           status: 'sent',
           isInternal: true,
         });

@@ -17,6 +17,13 @@ const OPENAI_TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions'
 
 /** Modelo de transcrição. Fica aqui porque o preço do medidor é por modelo. */
 const TRANSCRIBE_MODEL = 'whisper-1'
+/**
+ * Teto por tentativa. O inbound espera por isto, então não pode ser generoso:
+ * áudio de WhatsApp é curto e o Whisper responde em poucos segundos. Com duas
+ * tentativas, o pior caso fica em ~1 minuto — e o cliente tem uma nota no
+ * histórico em vez de silêncio.
+ */
+const TRANSCRIBE_TIMEOUT_MS = 30_000
 // OpenAI caps the audio file at 25 MB.
 const MAX_TRANSCRIBE_BYTES = 25 * 1024 * 1024
 
@@ -113,23 +120,49 @@ export async function transcribeInboundAudio(
     const data = await mediaBytes(media)
     if (!data || data.bytes.length > MAX_TRANSCRIBE_BYTES) return null
 
-    const form = new FormData()
-    form.append(
-      'file',
-      new Blob([data.bytes as unknown as BlobPart], { type: data.mimetype }),
-      data.filename,
-    )
-    form.append('model', TRANSCRIBE_MODEL)
-    form.append('language', 'pt')
-    // verbose_json traz `duration` (segundos) — é o que o Whisper cobra, e sem
-    // isso a transcrição ficava fora do medidor de custo (23/09, Alex).
-    form.append('response_format', 'verbose_json')
+    // O FormData é montado a CADA tentativa: o corpo é um stream e já foi
+    // consumido quando a primeira falha no meio do caminho.
+    const montarForm = () => {
+      const form = new FormData()
+      form.append(
+        'file',
+        new Blob([data.bytes as unknown as BlobPart], { type: data.mimetype }),
+        data.filename,
+      )
+      form.append('model', TRANSCRIBE_MODEL)
+      form.append('language', 'pt')
+      // verbose_json traz `duration` (segundos) — é o que o Whisper cobra, e sem
+      // isso a transcrição ficava fora do medidor de custo (23/09, Alex).
+      form.append('response_format', 'verbose_json')
+      return form
+    }
 
-    const res = await fetch(OPENAI_TRANSCRIBE_URL, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: form,
-    })
+    // ⚠️ 26/09 (Ivone, Família do Gás): um `HeadersTimeoutError` num áudio
+    // deixou a cliente sem resposta — o áudio ANTERIOR dela tinha sido
+    // transcrito normalmente, ou seja, falha passageira do serviço. Sem
+    // retentativa, um soluço de rede vira silêncio da IA no atendimento.
+    // Só repete o que adianta repetir: erro de REDE/timeout. HTTP 4xx
+    // (chave errada, sem crédito, áudio grande demais) repetido é só atraso.
+    let res: Response | null = null
+    for (let tentativa = 1; tentativa <= 2; tentativa++) {
+      try {
+        res = await fetch(OPENAI_TRANSCRIBE_URL, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}` },
+          body: montarForm(),
+          signal: AbortSignal.timeout(TRANSCRIBE_TIMEOUT_MS),
+        })
+        break
+      } catch (err) {
+        if (tentativa === 2) throw err
+        console.warn(
+          `[transcribe] tentativa ${tentativa} falhou na rede, repetindo:`,
+          err instanceof Error ? err.message : err,
+        )
+        await new Promise((r) => setTimeout(r, 800))
+      }
+    }
+    if (!res) return null
     if (!res.ok) {
       console.error(
         `[transcribe] OpenAI ${res.status}: ${(await res.text()).slice(0, 300)}`,
