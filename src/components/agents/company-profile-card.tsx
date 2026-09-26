@@ -131,11 +131,19 @@ export function CompanyProfileCard({ canEdit }: { canEdit: boolean }) {
                   disabled={!canEdit || saving}
                 />
               </Field>
-              <Field label="Horário de atendimento">
+              {/* ⚠️ 26/09: este campo repetia, à mão, um dado que já está em
+                  Configurações → Atendimento. O Alex mudou o fechamento lá e a
+                  IA seguiu dizendo o horário velho daqui. Agora vazio = usa o
+                  configurado; escrever aqui é para quando se quer dizer algo
+                  que a configuração não expressa. */}
+              <Field
+                label="Horário de atendimento"
+                hint="Vazio: a IA usa o horário de Configurações → Atendimento. Preencha só para dizer algo diferente."
+              >
                 <Input
                   value={form.hours ?? ''}
                   onChange={(e) => set('hours', e.target.value)}
-                  placeholder="ex.: Seg a Sáb, 8h às 18h"
+                  placeholder="vazio: usa o de Configurações → Atendimento"
                   disabled={!canEdit || saving}
                 />
               </Field>

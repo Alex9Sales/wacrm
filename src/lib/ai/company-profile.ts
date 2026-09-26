@@ -101,12 +101,28 @@ const FIELD_LABELS: Array<[keyof CompanyProfile, string]> = [
  */
 export function formatCompanyProfileForPrompt(
   p: CompanyProfile | null,
+  /**
+   * Horário derivado de Configurações → Atendimento. Usado quando o perfil
+   * não tem horário PRÓPRIO escrito.
+   *
+   * ⚠️ 26/09 (Família do Gás): o Alex mudou o fechamento pra 20h em
+   * Atendimento e a IA seguiu dizendo "até 20h30" — o texto do perfil tinha
+   * sido escrito à mão meses antes. Dado configurado duplicado em texto livre
+   * envelhece calado. Agora o configurado é o padrão; o texto do perfil só
+   * vence quando alguém escreveu algo lá de propósito (ex.: "feriados sob
+   * consulta"), porque aí ele diz algo que a configuração não expressa.
+   */
+  fallbackHours?: string | null,
 ): string | null {
-  if (!p) return null
+  if (!p && !fallbackHours) return null
   const lines: string[] = []
   for (const [key, label] of FIELD_LABELS) {
-    const value = (p[key] as string | null)?.trim()
-    if (value) lines.push(`${label}: ${value}`)
+    const value = (p?.[key] as string | null)?.trim()
+    if (value) {
+      lines.push(`${label}: ${value}`)
+    } else if (key === 'hours' && fallbackHours?.trim()) {
+      lines.push(`${label}: ${fallbackHours.trim()}`)
+    }
   }
   return lines.length > 0 ? lines.join('\n') : null
 }

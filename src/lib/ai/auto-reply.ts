@@ -6,6 +6,7 @@ import { loadAiConfigForChannel, loadAiConfigById } from './config'
 import { hasActiveAutoReplyAgent } from './agents'
 import { aiHoursAllows } from './hours-gate'
 import { getAccountSettings } from '@/lib/settings/account-settings'
+import { businessHoursText } from '@/lib/settings/hours-text'
 import { buildCustomerFactsBlock } from '@/lib/cdl/metrics'
 import {
   buildConversationContext,
@@ -711,8 +712,13 @@ export async function dispatchInboundToAiReply(
     if (looksLikeInjection(lastCustomerText)) {
       void noteInjectionAttempt(accountId, conversationId, lastCustomerText)
     }
+    // Horário: o configurado em Atendimento é o padrão; o texto do perfil só
+    // vence quando alguém escreveu um de propósito (ver company-profile.ts).
     const companyProfile = formatCompanyProfileForPrompt(
       await getCompanyProfile(accountId),
+      businessHoursText(
+        (await getAccountSettings(accountId).catch(() => null))?.businessDays,
+      ),
     )
     const catalog = await formatCatalogForPrompt(accountId)
 
