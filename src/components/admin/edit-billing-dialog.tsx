@@ -15,6 +15,7 @@ import {
   CYCLES,
   type BillingCycle,
 } from "@/lib/billing/cycle";
+import { PLAN_LIST } from "@/lib/billing/plans";
 import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -324,12 +325,28 @@ export function EditBillingDialog({
           </div>
 
           <div className="space-y-2">
+            {/* ⚠️ 26/09: era campo de texto livre, e o banco já tinha QUATRO
+                grafias do mesmo plano — "Pro" (9), "PRO" (2), "pro" (1) e um
+                vazio. `planPriceOf` tolera a caixa, mas contar cliente por
+                plano vira loteria. Seletor resolve na origem.
+                Valor fora da lista (dado antigo) vira opção própria em vez de
+                ser apagado em silêncio ao abrir o formulário. */}
             <Label className="text-muted-foreground">Plano</Label>
-            <Input
-              placeholder="ex.: Pro, Essencial…"
+            <select
               value={plan}
               onChange={(e) => setPlan(e.target.value)}
-            />
+              className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+            >
+              <option value="">— (sem plano)</option>
+              {PLAN_LIST.map((pl) => (
+                <option key={pl.key} value={pl.name}>
+                  {pl.name} — {brl(pl.price)}/mês
+                </option>
+              ))}
+              {plan && !PLAN_LIST.some((pl) => pl.name === plan) && (
+                <option value={plan}>{plan} (como está no cadastro)</option>
+              )}
+            </select>
           </div>
 
           <div className="space-y-2">
@@ -547,13 +564,22 @@ export function EditBillingDialog({
                 avisa em vez de oferecer o botão. */}
             {!asaasSubscriptionId && (asaasBilling?.installments.length ?? 0) > 0 && (
               <p className="border-t border-border pt-3 text-xs text-amber-600 dark:text-amber-400">
-                Este cliente já tem parcelamento no Asaas. Não crie assinatura
-                aqui — ele receberia duas cobranças. Use o valor da parcela
-                acima e salve.
+                Atenção: este cliente já tem parcelamento no Asaas. Se o
+                parcelamento JÁ É o pagamento do CRM, use o valor da parcela
+                acima e salve — criar assinatura geraria cobrança dobrada. Se
+                for de outro produto (Agente de Cobrança, implantação), pode
+                criar a assinatura do CRM abaixo normalmente.
               </p>
             )}
 
-            {!asaasSubscriptionId && (asaasBilling?.installments.length ?? 0) === 0 && (
+            {/* ⚠️ 26/09: isto ficava ESCONDIDO quando havia qualquer
+                parcelamento no Asaas. O João tem 12× do Agente de Cobrança —
+                produto diferente — e a assinatura do CRM simplesmente não
+                tinha como ser criada pela tela. A regra assumia que
+                parcelamento = pagamento do CRM, que é só um dos casos. Agora
+                o bloco aparece sempre; quem decide é quem conhece o cliente,
+                com o aviso acima e a confirmação do próprio botão. */}
+            {!asaasSubscriptionId && (
               <div className="space-y-2 border-t border-border pt-3">
                 <Label className="text-xs text-muted-foreground">
                   Criar assinatura mensal no Asaas
