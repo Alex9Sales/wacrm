@@ -366,26 +366,49 @@ export function EditBillingDialog({
             </p>
           </div>
 
+          {/* ⚠️ 26/09: este campo VIVIA DENTRO do quadro "Cobrança no Asaas",
+              colado no botão Buscar e sem rótulo — parecia ferramenta de
+              busca, não cadastro. O Alex digitou o CPF do João, clicou em
+              Buscar, e o documento nunca foi salvo (banco vazio). O campo
+              sempre gravou; o que enganava era o lugar. CPF é dado do
+              CLIENTE: fica aqui, com os outros dados dele. */}
+          <div className="space-y-1">
+            <Label className="text-muted-foreground">CPF/CNPJ do cliente</Label>
+            <Input
+              placeholder="só números — ex.: 34729715845"
+              value={cpfCnpj}
+              onChange={(e) => setCpfCnpj(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Fica salvo no cadastro ao clicar em <strong>Salvar</strong>. Sem
+              ele não dá para criar a cobrança no Asaas — a conta lá só abre
+              com documento.
+            </p>
+          </div>
+
           {/* 🔗 Asaas — o que o cliente paga de verdade (24/09). Sem isto o
               painel somava o preço de TABELA e mostrava MRR errado. */}
           <div className="space-y-2 rounded-lg border border-border p-3">
             <Label className="text-muted-foreground">Cobrança no Asaas</Label>
 
-            <div className="flex gap-2">
-              <Input
-                placeholder="CPF ou CNPJ do cliente"
-                value={cpfCnpj}
-                onChange={(e) => setCpfCnpj(e.target.value)}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void buscarNoAsaas()}
-                disabled={asaasBusy}
-              >
-                {asaasBusy ? <Loader2 className="size-4 animate-spin" /> : "Buscar"}
-              </Button>
-            </div>
+            <p className="text-xs text-muted-foreground">
+              Procura no Asaas pelo CPF/CNPJ acima (ou pelo nome/e-mail do
+              cliente) e traz o valor que ele já paga lá. Buscar NÃO salva
+              nada — quem salva é o botão Salvar.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              onClick={() => void buscarNoAsaas()}
+              disabled={asaasBusy}
+            >
+              {asaasBusy ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                "Buscar no Asaas"
+              )}
+            </Button>
 
             {asaasFound && asaasFound.length > 0 && (
               <div className="space-y-1 rounded-md bg-muted/40 p-2">
