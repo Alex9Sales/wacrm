@@ -27,6 +27,7 @@ import {
 } from "@/app/(dashboard)/inbox/actions";
 import { isStaleActionError, reloadForStaleAction } from "@/lib/stale-action";
 import { CAPABILITIES, type ProviderId } from "@/lib/channels/provider";
+import { OUTSIDE_WINDOW_MESSAGE } from "@/lib/channels/provider-error";
 import { promptCsatOnClose } from "./csat-prompt";
 import {
   ParticipantActionSheet,
@@ -1186,6 +1187,20 @@ export function MessageThread({
         return;
       }
 
+      // ⚠️ 25/09 (teste do Alex no IG): fora da janela de 24h a Meta recusa
+      // TUDO, inclusive reação — devolvia "403 Essa mensagem foi enviada fora
+      // do período permitido" depois de a bolha já ter mostrado o emoji. A
+      // tela JÁ sabia que a sessão tinha expirado (o aviso "use um template"
+      // estava logo abaixo) e mesmo assim deixava tentar. Agora avisa antes,
+      // com a mesma regra do composer: só nos canais que têm janela.
+      if (
+        sessionInfo.expired &&
+        CAPABILITIES[conversation.channel?.provider ?? "meta"]?.session24hWindow
+      ) {
+        toast.error(OUTSIDE_WINDOW_MESSAGE);
+        return;
+      }
+
       const convId = conversation.id;
       const userId = user.id;
       let snapshot: MessageReaction[] = [];
@@ -1232,7 +1247,7 @@ export function MessageThread({
         setReactions(snapshot);
       }
     },
-    [conversation, user?.id],
+    [conversation, user?.id, sessionInfo.expired],
   );
 
   // Sectors (departments) — set which team sees this conversation.

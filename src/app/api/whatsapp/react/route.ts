@@ -17,6 +17,7 @@ import {
 import { loadChannel } from '@/lib/channels/channels';
 import { getProvider } from '@/lib/channels/registry';
 import { pickProviderTarget } from '@/lib/channels/target';
+import { humanProviderError } from '@/lib/channels/provider-error';
 import { publishEvent } from '@/lib/events/publish';
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils';
 import {
@@ -204,8 +205,12 @@ export async function POST(request: Request) {
       const message =
         err instanceof Error ? err.message : 'Unknown provider error';
       console.error('[whatsapp/react] provider send failed:', message);
+      // O log fica com o texto cru; a TELA recebe só a explicação da Meta
+      // (que já vem em português) sem os prefixos empilhados — o atendente
+      // via "Meta API error: instagram send falhou: 403 Essa mensagem…",
+      // onde só a última parte diz alguma coisa a ele.
       return NextResponse.json(
-        { error: `Meta API error: ${message}` },
+        { error: humanProviderError(message) },
         { status: 502 },
       );
     }
