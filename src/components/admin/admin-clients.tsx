@@ -39,6 +39,17 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { priceLabelFor } from "@/lib/billing/custom-price";
+
+/** R$ curto pra caber na célula: sem centavos quando for redondo. */
+function brlShort(v: number): string {
+  return v.toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    minimumFractionDigits: Number.isInteger(v) ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
+}
 import type {
   AdminClientsResponse,
   ClientListRow,
@@ -459,8 +470,31 @@ export function AdminClients() {
                       <TableCell>
                         <StatusBadge status={c.status} />
                       </TableCell>
+                      {/* Plano + valor NEGOCIADO. Sem isto a coluna mentia:
+                          dizia "Start" num cliente que paga 139,90 enquanto o
+                          Start de tabela vai a 297 — e ninguém sabia se era
+                          desconto combinado ou erro de cadastro. */}
                       <TableCell className="text-muted-foreground">
-                        {c.plan ?? "—"}
+                        {(() => {
+                          const p = priceLabelFor(c.plan, c.monthlyValue);
+                          return (
+                            <div className="flex flex-col gap-0.5">
+                              <span>{c.plan ?? "—"}</span>
+                              {p.custom && (
+                                <span
+                                  className="inline-flex w-fit items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700 dark:bg-violet-950 dark:text-violet-300"
+                                  title={
+                                    p.differs && p.listPrice > 0
+                                      ? `Valor combinado com o cliente. Tabela do plano: ${brlShort(p.listPrice)}`
+                                      : "Valor combinado com o cliente — não acompanha mudança de tabela."
+                                  }
+                                >
+                                  personalizado · {brlShort(p.price)}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {formatDate(c.startedAt)}
