@@ -1,5 +1,5 @@
-import { and, desc, eq, gt, inArray, or, sql } from 'drizzle-orm'
-import { db, automations, conversations, contacts, messages as messagesTable, aiConfigs, agentActionRequests } from '@/db'
+import { and, desc, eq, gt, gte, inArray, or, sql } from 'drizzle-orm'
+import { db, automations, conversations, contacts, messages as messagesTable, aiConfigs, agentActionRequests, agentToolRuns, agentTools } from '@/db'
 import { levelFor, readPolicy } from '@/lib/orchestration/policy'
 import { firstOrNull } from '@/db/helpers'
 import { loadAiConfigForChannel, loadAiConfigById } from './config'
@@ -18,6 +18,7 @@ import { looksLikeInjection } from './untrusted'
 import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-profile'
 import { formatCatalogForPrompt } from './catalog'
 import { generateWithExternalTools } from './external-tools'
+import { GHOST_NOTE, claimsCompletedAction, isGhostConfirmation } from './claimed-action'
 import { buildSystemPrompt, chargeInstruction, collectionInstruction, HANDOFF_FAREWELL, parseCloseDirectives } from './defaults'
 import { documentFromConversation, emitChargeFromDirective, resolveChargeDocument } from '@/lib/collections/emit'
 import { handleOwnerCommand, isOwnerPhone, ownerCommandApplies } from '@/lib/collections/owner-command'
@@ -1893,6 +1894,52 @@ export async function dispatchInboundToAiReply(
         console.log('[ai auto-reply] material enviado:', mat.name)
       } catch (err) {
         console.error('[ai auto-reply] envio de material falhou:', mat.name, err)
+      }
+    }
+
+    // 👻 PROMESSA SEM LASTRO (claimed-action.ts): a IA disse ao cliente que o
+    // pedido está confirmado e o entregador a caminho, mas NENHUMA ferramenta
+    // de escrita rodou — o pedido não existe no CRM nem no ERP e o cliente
+    // está esperando. Aconteceu 2x em 7 dias (Thiago 26/09, Jonathan 25/09).
+    // Não dá pra criar o pedido aqui (faltam os dados que só a ferramenta
+    // sabe montar), mas dá pra impedir que passe despercebido.
+    if (sentAny && !wroteSomething && claimsCompletedAction(body)) {
+      try {
+        const escritaRecente = firstOrNull(
+          await db
+            .select({ id: agentToolRuns.id })
+            .from(agentToolRuns)
+            .innerJoin(agentTools, eq(agentTools.id, agentToolRuns.toolId))
+            .where(
+              and(
+                eq(agentToolRuns.conversationId, conversationId),
+                eq(agentToolRuns.status, 'ok'),
+                gte(
+                  agentToolRuns.createdAt,
+                  new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+                ),
+                // Só ESCRITA conta: consulta de estoque não cria pedido.
+                inArray(agentTools.risk, ['write', 'critical']),
+              ),
+            )
+            .limit(1),
+        )
+        if (
+          isGhostConfirmation({
+            text: body,
+            wroteSomething: !!wroteSomething,
+            wroteRecently: !!escritaRecente,
+          })
+        ) {
+          console.warn(
+            '[ai auto-reply] confirmou pedido SEM gravar nada:',
+            conversationId,
+          )
+          await postInternalNote({ conversationId, text: GHOST_NOTE });
+        }
+      } catch (err) {
+        // Rede de segurança nunca derruba o atendimento.
+        console.error('[ai auto-reply] checagem de promessa falhou:', err);
       }
     }
 
