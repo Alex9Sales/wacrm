@@ -11,12 +11,13 @@
 // ============================================================
 
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, ne } from "drizzle-orm";
 
 import { db, organization, organizationBilling } from "@/db";
 import { firstOrNull } from "@/db/helpers";
 import { toErrorResponse } from "@/lib/auth/account";
 import { requirePlatformAdmin, listPlatformAdmins } from "@/lib/auth/platform";
+import { phonesMatch } from "@/lib/whatsapp/phone-utils";
 
 const VALID_STATUS = new Set(["active", "suspended", "trial"]);
 
@@ -192,6 +193,39 @@ export async function PATCH(
     if (asaasSubscriptionId !== undefined)
       updates.asaasSubscriptionId = asaasSubscriptionId;
 
+    // ⚠️ 25/09: 5 clientes tinham o telefone do RESPONSÁVEL (Rafael) no lugar
+    // do telefone do cliente — ou seja, o lembrete da mensalidade de 3
+    // clientes ATIVOS ia para o WhatsApp dele e o cliente nunca recebia.
+    // Ninguém viu porque salvar o mesmo número em vários clientes não dizia
+    // nada. Agora a resposta traz o aviso (não bloqueia: dois CNPJs do mesmo
+    // dono são caso legítimo) e a tela mostra de quem é o número.
+    let phoneWarning: string | null = null;
+    if (billingPhone) {
+      const outros = await db
+        .select({
+          name: organization.name,
+          phone: organizationBilling.billingPhone,
+        })
+        .from(organizationBilling)
+        .innerJoin(
+          organization,
+          eq(organization.id, organizationBilling.organizationId),
+        )
+        .where(
+          and(
+            ne(organizationBilling.organizationId, orgId),
+            isNull(organizationBilling.deletedAt),
+            isNotNull(organizationBilling.billingPhone),
+          ),
+        );
+      const donos = outros
+        .filter((o) => o.phone && phonesMatch(o.phone, billingPhone))
+        .map((o) => o.name);
+      if (donos.length > 0) {
+        phoneWarning = `Este telefone já é o de cobrança de ${donos.join(', ')}. Confirme que é o número de quem paga ESTE cliente, e não o de quem cuida da conta.`;
+      }
+    }
+
     const existing = firstOrNull(
       await db
         .select({ organizationId: organizationBilling.organizationId })
@@ -229,7 +263,7 @@ export async function PATCH(
         .returning();
     }
 
-    return NextResponse.json(row);
+    return NextResponse.json({ ...row, phoneWarning });
   } catch (err) {
     return toErrorResponse(err);
   }

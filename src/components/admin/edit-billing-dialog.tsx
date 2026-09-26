@@ -144,7 +144,17 @@ export function EditBillingDialog({
         toast.error(payload.error || "Não foi possível salvar.");
         return;
       }
-      toast.success("Cobrança atualizada.");
+      // ⚠️ 25/09: salvou, MAS este telefone já é o de cobrança de outro
+      // cliente — foi assim que 5 clientes ficaram com o número do
+      // responsável. O aviso fica na tela até o clique, senão passa batido.
+      const saved = (await res.json().catch(() => ({}))) as {
+        phoneWarning?: string | null;
+      };
+      if (saved.phoneWarning) {
+        toast.warning(saved.phoneWarning, { duration: 15_000 });
+      } else {
+        toast.success("Cobrança atualizada.");
+      }
       onSaved();
       onOpenChange(false);
     } catch (err) {

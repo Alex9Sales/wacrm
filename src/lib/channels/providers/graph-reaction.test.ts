@@ -12,9 +12,15 @@ const base = {
   targetMessageId: 'mid.abc',
 }
 
+// O tipo importa: sem ele o vi.fn infere parâmetros como tupla VAZIA e
+// `calls[0][2]` (o corpo do POST — justo o que estes testes conferem) nem
+// compila. O typecheck do CI cobre os testes; o `tsc` de um arquivo só, não.
+type Post = (url: string, token: string, body: unknown) => Promise<unknown>
+const postOk = () => vi.fn<Post>(async () => ({}))
+
 describe('payload da reação', () => {
   it('emoji vazio remove a reação (unreact, sem campo reaction)', async () => {
-    const post = vi.fn(async () => ({}))
+    const post = postOk()
     await sendGraphReaction({ ...base, emoji: '', post })
     expect(post).toHaveBeenCalledTimes(1)
     expect(post.mock.calls[0][2]).toEqual({
@@ -25,7 +31,7 @@ describe('payload da reação', () => {
   })
 
   it('emoji conhecido vai pelo NOME — o único formato que a doc mostra', async () => {
-    const post = vi.fn(async () => ({}))
+    const post = postOk()
     await sendGraphReaction({ ...base, emoji: '❤️', post })
     expect(post.mock.calls[0][2]).toMatchObject({
       sender_action: 'react',
@@ -34,7 +40,7 @@ describe('payload da reação', () => {
   })
 
   it('emoji sem nome vai cru — senão 🙏 não teria como sair', async () => {
-    const post = vi.fn(async () => ({}))
+    const post = postOk()
     await sendGraphReaction({ ...base, emoji: '🙏', post })
     expect(post).toHaveBeenCalledTimes(1)
     expect(post.mock.calls[0][2]).toMatchObject({
@@ -45,8 +51,7 @@ describe('payload da reação', () => {
 
 describe('quando a API recusa o formato', () => {
   it('nome recusado tenta o emoji cru antes de desistir', async () => {
-    const post = vi
-      .fn()
+    const post = vi.fn<Post>()
       .mockRejectedValueOnce(new Error('instagram send falhou: 400 invalid reaction'))
       .mockResolvedValueOnce({})
     await sendGraphReaction({ ...base, emoji: '👍', post })
@@ -56,8 +61,7 @@ describe('quando a API recusa o formato', () => {
   })
 
   it('os dois recusados relançam o PRIMEIRO erro (descreve a aposta principal)', async () => {
-    const post = vi
-      .fn()
+    const post = vi.fn<Post>()
       .mockRejectedValueOnce(new Error('primeiro'))
       .mockRejectedValueOnce(new Error('segundo'))
     await expect(
@@ -66,7 +70,7 @@ describe('quando a API recusa o formato', () => {
   })
 
   it('unreact que falha NÃO é tentado de novo — não há formato alternativo', async () => {
-    const post = vi.fn().mockRejectedValue(new Error('nada a remover'))
+    const post = vi.fn<Post>().mockRejectedValue(new Error('nada a remover'))
     await expect(
       sendGraphReaction({ ...base, emoji: '', post }),
     ).rejects.toThrow('nada a remover')
