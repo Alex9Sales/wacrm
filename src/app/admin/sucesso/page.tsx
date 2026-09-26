@@ -158,6 +158,71 @@ export default async function AdminSucessoPage() {
         />
       </div>
 
+      {/* 1b) Dinheiro que ENTROU — o MRR é contratado, isto é o que caiu na
+          conta. Divergem de propósito: implantação parcelada não entra no MRR
+          mas é dinheiro do mês; mensalidade não paga é o contrário. */}
+      <div className="rounded-lg border border-border bg-card p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <p className="text-sm font-semibold text-foreground">
+            💰 Recebido no mês
+            <span className="ml-2 font-normal text-muted-foreground">
+              (entrou de verdade no Asaas — diferente do MRR contratado)
+            </span>
+          </p>
+          <p className="text-2xl font-semibold tabular-nums text-foreground">
+            {d.money.received === null ? '—' : brl(d.money.received)}
+          </p>
+        </div>
+
+        {d.money.received === null ? (
+          <p className="mt-2 text-xs text-amber-600 dark:text-amber-500">
+            Não deu pra consultar o Asaas agora. Isto é falha de consulta, não
+            quer dizer que ninguém pagou — tente recarregar em instantes.
+          </p>
+        ) : d.money.payers.length === 0 ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Nenhum pagamento recebido neste mês até agora.
+          </p>
+        ) : (
+          <>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {d.money.receivedCount} pagamento(s) ·{' '}
+              {d.money.payers.length} cliente(s)
+            </p>
+            <ul className="mt-3 space-y-1.5">
+              {d.money.payers.map((p) => (
+                <li
+                  key={p.name}
+                  className="flex items-center justify-between gap-3 rounded-md bg-muted/40 px-3 py-2 text-sm"
+                >
+                  <span
+                    className={
+                      p.linked ? 'text-foreground' : 'text-muted-foreground'
+                    }
+                  >
+                    {p.name}
+                    {!p.linked && (
+                      <span className="ml-2 text-xs">
+                        — vincule este cliente ao Asaas no /admin pra aparecer
+                        pelo nome
+                      </span>
+                    )}
+                  </span>
+                  <span className="shrink-0 tabular-nums text-foreground">
+                    {brl(p.value)}
+                    {p.date && (
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        {p.date.slice(8, 10)}/{p.date.slice(5, 7)}
+                      </span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+
       {/* 2) Ativação — onde o cliente novo para */}
       <div>
         <p className="mb-2 text-sm font-semibold text-foreground">

@@ -255,6 +255,59 @@ export async function listCustomerInstallments(
   return r.data ?? []
 }
 
+export interface AsaasReceivedPayment {
+  id: string
+  customer: string
+  value: number
+  netValue?: number
+  paymentDate?: string
+  billingType?: string
+  description?: string
+  installmentNumber?: number
+}
+
+/**
+ * Dinheiro que ENTROU num período — o que o painel chama de "recebido".
+ *
+ * ⚠️ Só RECEIVED e CONFIRMED contam como receita. Cobrança que "saiu da
+ * carteira" (deixou de estar em aberto) NÃO quer dizer que foi paga — pode ter
+ * sido cancelada ou estornada (ver crmfluxia-saiu-da-carteira-nao-e-pago).
+ *
+ * O filtro é por `paymentDate`, a data em que o dinheiro entrou, e não por
+ * vencimento: a parcela que vence dia 30 e o cliente paga dia 2 é receita de
+ * FEVEREIRO, não de janeiro.
+ *
+ * Pagina até o fim (o Asaas devolve 100 por vez) com um teto de segurança —
+ * um painel não pode ficar preso num laço se a API mudar de comportamento.
+ */
+export async function listReceivedPayments(
+  fromISO: string,
+  toISO: string,
+): Promise<AsaasReceivedPayment[]> {
+  const out: AsaasReceivedPayment[] = []
+  const PAGE = 100
+  for (let offset = 0; offset < 2000; offset += PAGE) {
+    const r = await asaasFetch<{ data?: AsaasReceivedPayment[]; hasMore?: boolean }>(
+      `/payments?status=RECEIVED&paymentDate%5Bge%5D=${fromISO}&paymentDate%5Ble%5D=${toISO}` +
+        `&limit=${PAGE}&offset=${offset}`,
+    )
+    const page = r.data ?? []
+    out.push(...page)
+    if (!r.hasMore || page.length === 0) break
+  }
+  // CONFIRMED = pago e ainda não repassado; também é dinheiro do mês.
+  for (let offset = 0; offset < 2000; offset += PAGE) {
+    const r = await asaasFetch<{ data?: AsaasReceivedPayment[]; hasMore?: boolean }>(
+      `/payments?status=CONFIRMED&paymentDate%5Bge%5D=${fromISO}&paymentDate%5Ble%5D=${toISO}` +
+        `&limit=${PAGE}&offset=${offset}`,
+    )
+    const page = r.data ?? []
+    out.push(...page)
+    if (!r.hasMore || page.length === 0) break
+  }
+  return out
+}
+
 /** Próxima cobrança em aberto do cliente (pro painel dizer quando vence). */
 export async function nextOpenCharge(
   customerId: string,

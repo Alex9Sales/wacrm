@@ -55,6 +55,13 @@ export interface SuccessDashboard {
     canceledThisMonth: number
     churnedMrr: number
     churnRate: number | null
+    /** Dinheiro que ENTROU no mês (Asaas, RECEIVED/CONFIRMED). null = não deu
+     *  pra consultar o gateway agora — diferente de "ninguém pagou". */
+    received: number | null
+    receivedCount: number
+    /** Quem pagou, do maior pro menor. Nome da conta quando o cliente está
+     *  vinculado no /admin; senão o nome que está no Asaas. */
+    payers: { name: string; value: number; date: string | null; linked: boolean }[]
   }
   activation: {
     /** Funil das contas criadas nos últimos 90 dias. */
@@ -281,6 +288,59 @@ export async function getSuccessDashboard(): Promise<SuccessDashboard> {
   const baseCount = active.length + canceledThisMonth
   const churnRate = baseCount > 0 ? canceledThisMonth / baseCount : null
 
+  // ---- Dinheiro RECEBIDO no mês (pedido do Alex, 26/09) ----
+  // O MRR é o que está CONTRATADO; isto é o que efetivamente caiu na conta.
+  // Os dois divergem o tempo todo: implantação parcelada (caso do Renato) não
+  // é assinatura e não entra no MRR, mas é dinheiro que entrou; e mensalidade
+  // contratada que ninguém pagou entra no MRR e não no recebido.
+  //
+  // Falha do gateway devolve `null`, NUNCA 0 — zero significaria "ninguém
+  // pagou este mês", que é uma mentira cara de se contar ao dono.
+  let received: number | null = null
+  let receivedCount = 0
+  let payers: SuccessDashboard['money']['payers'] = []
+  try {
+    const { listReceivedPayments } = await import('@/lib/billing/asaas')
+    const hoje = new Date()
+    const fim = hoje.toISOString().slice(0, 10)
+    const ini = monthStart.toISOString().slice(0, 10)
+    const pagos = await listReceivedPayments(ini, fim)
+
+    // customer do Asaas → nome da conta no CRM (só as que foram vinculadas).
+    const vinculos = new Map<string, string>()
+    for (const r of toRows(await db.execute(sql`
+      SELECT ob.asaas_customer_id AS cid, o.name AS nome
+        FROM organization_billing ob
+        JOIN organization o ON o.id = ob.organization_id
+       WHERE ob.asaas_customer_id IS NOT NULL AND ob.deleted_at IS NULL
+    `))) {
+      if (r.cid) vinculos.set(String(r.cid), String(r.nome ?? ''))
+    }
+
+    const porCliente = new Map<string, { value: number; date: string | null }>()
+    for (const p of pagos) {
+      const k = p.customer || p.id
+      const at = porCliente.get(k) ?? { value: 0, date: null }
+      at.value += Number(p.value) || 0
+      // Guarda o pagamento mais RECENTE do cliente no mês.
+      if (p.paymentDate && (!at.date || p.paymentDate > at.date)) at.date = p.paymentDate
+      porCliente.set(k, at)
+    }
+
+    received = pagos.reduce((s, p) => s + (Number(p.value) || 0), 0)
+    receivedCount = pagos.length
+    payers = [...porCliente.entries()]
+      .map(([cid, v]) => ({
+        name: vinculos.get(cid) ?? `(não vinculado · ${cid.slice(-8)})`,
+        value: v.value,
+        date: v.date,
+        linked: vinculos.has(cid),
+      }))
+      .sort((a, b) => b.value - a.value)
+  } catch (err) {
+    console.error('[admin/sucesso] recebido do Asaas indisponível:', err)
+  }
+
   // ---- Ativação (funil das contas dos últimos 90 dias) ----
   const recent = accounts.filter(
     (a) => now - new Date(a.createdAt).getTime() < 90 * 86_400_000,
@@ -352,6 +412,9 @@ export async function getSuccessDashboard(): Promise<SuccessDashboard> {
       canceledThisMonth,
       churnedMrr,
       churnRate,
+      received,
+      receivedCount,
+      payers,
     },
     activation: {
       created: recent.length,
