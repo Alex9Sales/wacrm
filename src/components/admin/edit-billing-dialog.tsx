@@ -10,6 +10,11 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
+import {
+  BILLING_CYCLES,
+  CYCLES,
+  type BillingCycle,
+} from "@/lib/billing/cycle";
 import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -79,6 +84,7 @@ export function EditBillingDialog({
   // travado) e manda sobre o preço de tabela no painel de MRR.
   const [cpfCnpj, setCpfCnpj] = useState("");
   const [monthlyValue, setMonthlyValue] = useState("");
+  const [billingCycle, setBillingCycle] = useState("");
   const [asaasCustomerId, setAsaasCustomerId] = useState("");
   const [asaasSubscriptionId, setAsaasSubscriptionId] = useState("");
   const [asaasBusy, setAsaasBusy] = useState(false);
@@ -107,6 +113,7 @@ export function EditBillingDialog({
     setResponsibleAdminId(client.responsible?.id ?? "");
     setCpfCnpj(client.cpfCnpj ?? "");
     setMonthlyValue(client.monthlyValue != null ? String(client.monthlyValue).replace(".", ",") : "");
+    setBillingCycle(client.billingCycle ?? "");
     setAsaasCustomerId(client.asaasCustomerId ?? "");
     setAsaasSubscriptionId(client.asaasSubscriptionId ?? "");
     setAsaasFound(null);
@@ -135,6 +142,7 @@ export function EditBillingDialog({
           responsible_admin_id: responsibleAdminId || null,
           cpf_cnpj: cpfCnpj.trim() || null,
           monthly_value: monthlyValue.trim() || null,
+          billing_cycle: billingCycle || null,
           asaas_customer_id: asaasCustomerId.trim() || null,
           asaas_subscription_id: asaasSubscriptionId.trim() || null,
         }),
@@ -462,6 +470,45 @@ export function EditBillingDialog({
                 É este valor que entra no MRR do painel. Deixe vazio para usar o
                 preço de tabela do plano.
               </p>
+            </div>
+
+            {/* Periodicidade (migr 0194). Aprovado 26/09: mensal cheio,
+                semestral −20%, anual −30%. ⚠️ O valor acima continua sendo
+                POR MÊS — este campo diz o compromisso, não muda a unidade,
+                senão o MRR inflaria 6x num semestral. */}
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">
+                Periodicidade do contrato
+              </Label>
+              <select
+                className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                value={billingCycle}
+                onChange={(e) => setBillingCycle(e.target.value)}
+              >
+                <option value="">Não declarado</option>
+                {BILLING_CYCLES.map((c) => (
+                  <option key={c} value={c}>
+                    {CYCLES[c].label} ({CYCLES[c].short})
+                    {CYCLES[c].discount > 0
+                      ? ` — tabela: -${Math.round(CYCLES[c].discount * 100)}%`
+                      : ""}
+                  </option>
+                ))}
+              </select>
+              {billingCycle && billingCycle !== "monthly" && (
+                <p className="text-xs text-muted-foreground">
+                  Compromisso de {CYCLES[billingCycle as BillingCycle].months} meses.
+                  {monthlyValue.trim()
+                    ? ` Total do contrato: ${(
+                        Number(monthlyValue.replace(/\./g, "").replace(",", ".")) *
+                        CYCLES[billingCycle as BillingCycle].months
+                      ).toLocaleString("pt-BR", {
+                        style: "currency",
+                        currency: "BRL",
+                      })}.`
+                    : ""}
+                </p>
+              )}
             </div>
 
             {(asaasCustomerId || asaasSubscriptionId) && (

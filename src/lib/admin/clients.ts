@@ -57,6 +57,8 @@ export interface ClientListRow {
   cpfCnpj: string | null;
   /** Valor realmente contratado por mês. null = usa o preço do plano. */
   monthlyValue: number | null;
+  /** Compromisso: monthly | semiannual | annual. null = não declarado. */
+  billingCycle: string | null;
   asaasCustomerId: string | null;
   asaasSubscriptionId: string | null;
 }
@@ -109,6 +111,7 @@ export async function listClients(): Promise<ClientListRow[]> {
       lastReminderAt: organizationBilling.lastReminderAt,
       cpfCnpj: organizationBilling.cpfCnpj,
       monthlyValue: organizationBilling.monthlyValue,
+      billingCycle: organizationBilling.billingCycle,
       asaasCustomerId: organizationBilling.asaasCustomerId,
       asaasSubscriptionId: organizationBilling.asaasSubscriptionId,
       ownerEmail: user.email,
@@ -156,6 +159,7 @@ export async function listClients(): Promise<ClientListRow[]> {
     cpfCnpj: r.cpfCnpj ?? null,
     // numeric vem como string no driver — o painel quer número.
     monthlyValue: r.monthlyValue === null || r.monthlyValue === undefined ? null : Number(r.monthlyValue),
+    billingCycle: r.billingCycle ?? null,
     asaasCustomerId: r.asaasCustomerId ?? null,
     asaasSubscriptionId: r.asaasSubscriptionId ?? null,
   }));

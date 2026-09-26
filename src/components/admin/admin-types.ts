@@ -31,6 +31,8 @@ export interface ClientListRow {
   cpfCnpj: string | null;
   /** Valor realmente contratado por mês. null = usa o preço do plano. */
   monthlyValue: number | null;
+  /** Compromisso do contrato: monthly | semiannual | annual. */
+  billingCycle: string | null;
   asaasCustomerId: string | null;
   asaasSubscriptionId: string | null;
 }

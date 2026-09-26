@@ -18,6 +18,7 @@ import { firstOrNull } from "@/db/helpers";
 import { toErrorResponse } from "@/lib/auth/account";
 import { requirePlatformAdmin, listPlatformAdmins } from "@/lib/auth/platform";
 import { phonesMatch } from "@/lib/whatsapp/phone-utils";
+import { parseBillingCycle } from "@/lib/billing/cycle";
 
 const VALID_STATUS = new Set(["active", "suspended", "trial"]);
 
@@ -33,6 +34,8 @@ interface PatchBody {
   // contratado e os ids de lá. Ver drizzle/0191.
   cpf_cnpj?: unknown;
   monthly_value?: unknown;
+  /** Compromisso do contrato (migr 0194): monthly | semiannual | annual. */
+  billing_cycle?: unknown;
   asaas_customer_id?: unknown;
   asaas_subscription_id?: unknown;
 }
@@ -124,6 +127,26 @@ export async function PATCH(
       cpfCnpjRaw === undefined || cpfCnpjRaw === null
         ? cpfCnpjRaw
         : cpfCnpjRaw.replace(/\D/g, "") || null;
+    // Ciclo: undefined = não mexe, null/"" = limpa, valor inválido = 400.
+    // Não silencia lixo — gravar um ciclo torto é pior do que recusar, porque
+    // a trava do banco (organization_billing_cycle_check) rejeitaria de
+    // qualquer forma, e com uma mensagem que ninguém entende.
+    let billingCycle: string | null | undefined;
+    if ("billing_cycle" in body) {
+      const raw = body.billing_cycle;
+      if (raw === null || raw === "") {
+        billingCycle = null;
+      } else {
+        const parsed = parseBillingCycle(raw);
+        if (!parsed) {
+          return NextResponse.json(
+            { error: "billing_cycle inválido (use monthly, semiannual ou annual)." },
+            { status: 400 },
+          );
+        }
+        billingCycle = parsed;
+      }
+    }
     const asaasCustomerId = optionalText(body.asaas_customer_id);
     const asaasSubscriptionId = optionalText(body.asaas_subscription_id);
     let monthlyValue: string | null | undefined;
@@ -189,6 +212,7 @@ export async function PATCH(
       updates.responsibleAdminId = responsibleAdminId;
     if (cpfCnpj !== undefined) updates.cpfCnpj = cpfCnpj;
     if (monthlyValue !== undefined) updates.monthlyValue = monthlyValue;
+    if (billingCycle !== undefined) updates.billingCycle = billingCycle;
     if (asaasCustomerId !== undefined) updates.asaasCustomerId = asaasCustomerId;
     if (asaasSubscriptionId !== undefined)
       updates.asaasSubscriptionId = asaasSubscriptionId;
@@ -257,6 +281,7 @@ export async function PATCH(
           responsibleAdminId: responsibleAdminId ?? null,
           cpfCnpj: cpfCnpj ?? null,
           monthlyValue: monthlyValue ?? null,
+          billingCycle: billingCycle ?? null,
           asaasCustomerId: asaasCustomerId ?? null,
           asaasSubscriptionId: asaasSubscriptionId ?? null,
         })

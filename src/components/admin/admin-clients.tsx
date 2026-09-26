@@ -40,6 +40,7 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { priceLabelFor } from "@/lib/billing/custom-price";
+import { cycleLabel } from "@/lib/billing/cycle";
 
 /** R$ curto pra caber na célula: sem centavos quando for redondo. */
 function brlShort(v: number): string {
@@ -479,7 +480,14 @@ export function AdminClients() {
                           const p = priceLabelFor(c.plan, c.monthlyValue);
                           return (
                             <div className="flex flex-col gap-0.5">
-                              <span>{c.plan ?? "—"}</span>
+                              <span>
+                                {c.plan ?? "—"}
+                                {cycleLabel(c.billingCycle) && (
+                                  <span className="ml-1.5 text-xs text-muted-foreground">
+                                    · {cycleLabel(c.billingCycle)}
+                                  </span>
+                                )}
+                              </span>
                               {p.custom && (
                                 <span
                                   className="inline-flex w-fit items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700 dark:bg-violet-950 dark:text-violet-300"

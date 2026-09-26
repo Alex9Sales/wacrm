@@ -170,6 +170,12 @@ export const organizationBilling = pgTable("organization_billing", {
 	// preço de tabela do plano. Existe porque o contratado nem sempre é a
 	// tabela: implantação parcelada, preço travado, degrau de reajuste.
 	monthlyValue: numeric("monthly_value", { precision: 12, scale: 2 }),
+	// Compromisso do contrato (migr 0194): monthly | semiannual | annual.
+	// NULL = não declarado (contrato antigo) — NÃO assume mensal, porque
+	// assumir inventaria um compromisso que ninguém combinou.
+	// ⚠️ NÃO muda a unidade de monthly_value: aquele continua sendo por MÊS,
+	// senão o MRR (que é mensal por definição) inflaria 6x num semestral.
+	billingCycle: text("billing_cycle"),
 	// Degraus de lembrete já enviados, por vencimento (migr 0192):
 	// {"2026-10-04": [-5, 0]}. `last_reminder_at` só diz quando saiu o
 	// último; sem isto um deploy no meio do dia reenviaria tudo.
