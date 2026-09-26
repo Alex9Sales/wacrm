@@ -295,11 +295,32 @@ async function graphPost(
     message_id?: string
     id?: string
     success?: boolean
-    error?: { message?: string; code?: number }
+    error?: {
+      message?: string
+      code?: number
+      error_subcode?: number
+      fbtrace_id?: string
+    }
   }
   if (!res.ok || data.error) {
+    // ⚠️ 26/09: o fbtrace_id é o PRIMEIRO dado que a Meta pede num chamado —
+    // é por ele que eles acham a requisição nos servidores deles. A gente
+    // descartava, e no 500 da reação (sem explicação nenhuma no corpo) isso
+    // deixou o relato sem a única pista rastreável. Código e subcódigo também
+    // entram: distinguem "(#10) fora da janela" de "(#190) token" sem depender
+    // do texto, que a Meta traduz conforme o idioma da conta.
+    const e = data.error
+    const detalhe = [
+      e?.code != null ? `code=${e.code}` : null,
+      e?.error_subcode != null ? `subcode=${e.error_subcode}` : null,
+      e?.fbtrace_id ? `fbtrace_id=${e.fbtrace_id}` : null,
+    ]
+      .filter(Boolean)
+      .join(' ')
     throw new Error(
-      `instagram send falhou: ${res.status} ${data.error?.message ?? ''}`.trim(),
+      `instagram send falhou: ${res.status} ${e?.message ?? ''}${
+        detalhe ? ` [${detalhe}]` : ''
+      }`.trim(),
     )
   }
   return data

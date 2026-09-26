@@ -36,7 +36,9 @@ export const PROVIDER_FLAKY_MESSAGE =
   'O canal respondeu com erro interno e pediu para tentar de novo daqui a pouco. Não é a sua reação: se insistir e continuar, me avise.'
 
 export function humanProviderError(raw: string): string {
-  const texto = (raw ?? '').trim()
+  // O adaptador anexa "[code=… subcode=… fbtrace_id=…]" no fim para o LOG e
+  // para abrir chamado com a Meta. Isso não vai pra tela do atendente.
+  const texto = (raw ?? '').replace(/\s*\[(?:code|subcode|fbtrace_id)=[^\]]*\]\s*$/i, '').trim()
   if (!texto) return 'O canal recusou a ação e não disse o motivo.'
   if (isOutsideWindowError(texto)) return OUTSIDE_WINDOW_MESSAGE
   if (/rea[çc][ãa]o inv[áa]lida|invalid reaction/i.test(texto)) {

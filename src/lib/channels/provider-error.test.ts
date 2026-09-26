@@ -48,6 +48,32 @@ describe('os dois erros que o Alex viu testando no Instagram', () => {
   })
 })
 
+describe('o detalhe técnico fica no log, não na tela', () => {
+  // 26/09: o adaptador passou a anexar code/subcode/fbtrace_id para abrir
+  // chamado com a Meta. O atendente não tem o que fazer com isso.
+  it('corta o bloco [code=… fbtrace_id=…] do fim', () => {
+    expect(
+      humanProviderError(
+        'instagram send falhou: 400 Token inválido [code=190 fbtrace_id=Abc123]',
+      ),
+    ).toBe('Token inválido')
+  })
+
+  it('o 500 com fbtrace ainda cai na frase de erro interno', () => {
+    expect(
+      humanProviderError(
+        'instagram send falhou: 500 An unexpected error has occurred. [code=-1 fbtrace_id=Xyz]',
+      ),
+    ).toBe(PROVIDER_FLAKY_MESSAGE)
+  })
+
+  it('colchete no MEIO do texto não é cortado', () => {
+    expect(humanProviderError('erro no campo [nome] do cadastro')).toBe(
+      'erro no campo [nome] do cadastro',
+    )
+  })
+})
+
 describe('tira os prefixos dos adaptadores', () => {
   it('sobra o que a Meta escreveu, sem "instagram send falhou: 403"', () => {
     expect(humanProviderError('instagram send falhou: 403 Token inválido')).toBe(
