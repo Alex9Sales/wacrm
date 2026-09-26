@@ -78,6 +78,23 @@ describe('quando a API recusa o formato', () => {
   })
 })
 
+describe('cada API pede um formato', () => {
+  // graph.instagram.com documenta `"reaction": "<emoji>"`; a Messenger
+  // Platform documenta o nome. Mandar o provável primeiro poupa uma viagem.
+  it('login do Instagram → emoji primeiro', () => {
+    expect(reactionCandidates('❤️', true)).toEqual(['❤️', 'love'])
+  })
+
+  it('Messenger → nome primeiro', () => {
+    expect(reactionCandidates('❤️', false)).toEqual(['love', '❤️'])
+  })
+
+  it('emoji sem nome não muda com a preferência', () => {
+    expect(reactionCandidates('🙏', true)).toEqual(['🙏'])
+    expect(reactionCandidates('🙏', false)).toEqual(['🙏'])
+  })
+})
+
 describe('mapa de nomes', () => {
   it('cobre os 6 emojis rápidos da tela', () => {
     // A tela oferece 👍 ❤️ 😂 😮 😢 🙏 (message-actions.tsx). O 🙏 não tem

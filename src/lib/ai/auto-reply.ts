@@ -1364,7 +1364,19 @@ export async function dispatchInboundToAiReply(
     // Hop 1 tentando transferir DE NOVO (ping-pong): ignora o marcador; se
     // não sobrou texto, silêncio — nunca desliga a IA por causa disso.
     if (dirs.routeAgent && (args.routeHop ?? 0) > 0 && !text) {
+      // ⚠️ 25/09 (conta do Alex, IG): o principal transferiu pro SDR, o SDR
+      // rodou (147 tokens de saída no ai_usage) e o cliente NÃO recebeu nada.
+      // O especialista tentou transferir de novo; o anti-ping-pong barrou e o
+      // turno morreu neste console.warn — que some no primeiro restart. Da
+      // conversa só sobrava a nota "→ Agente SDR" e silêncio.
+      //
+      // O freio continua (cadeia de transferências é ruim), mas agora deixa
+      // RASTRO na conversa: quem abrir vê que o cliente está esperando.
       console.warn('[ai auto-reply] transferência em cadeia bloqueada (hop>0)')
+      await postInternalNote({
+        conversationId,
+        text: `⚠️ IA: ${config.name ?? 'o especialista'} tentou transferir de novo (para "${dirs.routeAgent.name}") em vez de responder, e a corrente foi barrada — o cliente ficou SEM resposta. Responda você, ou ajuste o prompt deste agente para ele atender em vez de repassar.`,
+      }).catch(() => {})
       return
     }
 
@@ -1374,6 +1386,15 @@ export async function dispatchInboundToAiReply(
     // perdia e o cliente ficava esperando o responsável).
     if (has('skip_reply') && dirs.skipReply && !(has('handoff') && dirs.transfer)) {
       await applyTags()
+      // Calar é legítimo numa conversa normal ("ok", "kkk"). Logo DEPOIS de uma
+      // transferência, não é: o cliente acabou de fazer a pergunta que causou o
+      // encaminhamento e está esperando o especialista. Deixa rastro.
+      if ((args.routeHop ?? 0) > 0) {
+        await postInternalNote({
+          conversationId,
+          text: `⚠️ IA: ${config.name ?? 'o especialista'} recebeu a conversa por transferência e decidiu não responder — o cliente ficou SEM resposta. Responda você, ou ajuste o prompt deste agente.`,
+        }).catch(() => {})
+      }
       return
     }
     // Handoff (sentinel "pediu humano"): desliga a IA na conversa + avisa o

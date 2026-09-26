@@ -652,6 +652,9 @@ export const instagramProvider: WhatsAppProvider = {
       targetMessageId: targetExternalId,
       emoji,
       post: graphPost,
+      // A doc desta API (graph.instagram.com) pede o EMOJI; a do Messenger
+      // pede o nome. O canal diz qual das duas estamos falando.
+      preferEmoji: graphBaseOf(ch).includes('graph.instagram.com'),
     })
   },
 

@@ -38,13 +38,19 @@ const REACTION_NAMES: Record<string, string> = {
 }
 
 /**
- * Os valores de `reaction` a tentar, em ordem de aposta. O nome vem primeiro
- * porque é o único formato que a doc mostra por escrito; o emoji cru é o
- * fallback (e o único caminho para emoji sem nome, tipo 🙏).
+ * Os valores de `reaction` a tentar, em ordem de aposta.
+ *
+ * ⚠️ As duas APIs pedem coisas diferentes, e é por isso que `preferEmoji`
+ * existe: a doc da "Instagram API com login do Instagram"
+ * (graph.instagram.com) mostra `"reaction": "<emoji>"`, enquanto o guia da
+ * Messenger Platform (graph.facebook.com) mostra o NOME (`"love"`). Manda-se
+ * o provável primeiro e o outro como rede — emoji sem nome (🙏) só tem um
+ * caminho de qualquer jeito.
  */
-export function reactionCandidates(emoji: string): string[] {
+export function reactionCandidates(emoji: string, preferEmoji = false): string[] {
   const name = REACTION_NAMES[emoji]
-  return name ? [name, emoji] : [emoji]
+  if (!name) return [emoji]
+  return preferEmoji ? [emoji, name] : [name, emoji]
 }
 
 export interface GraphReactionArgs {
@@ -59,6 +65,8 @@ export interface GraphReactionArgs {
   emoji: string
   /** POST que já trata erro da Graph (cada provider tem o seu). */
   post: (url: string, token: string, body: unknown) => Promise<unknown>
+  /** true na API com login do Instagram, cuja doc pede o emoji e não o nome. */
+  preferEmoji?: boolean
 }
 
 /**
@@ -80,7 +88,7 @@ export async function sendGraphReaction(args: GraphReactionArgs): Promise<void> 
   }
 
   let firstError: unknown = null
-  for (const reaction of reactionCandidates(args.emoji)) {
+  for (const reaction of reactionCandidates(args.emoji, args.preferEmoji)) {
     try {
       await args.post(args.url, args.token, {
         recipient,
