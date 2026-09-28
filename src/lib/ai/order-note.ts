@@ -44,7 +44,13 @@ function chave(v: string): string {
 function jaDito(notaDoModelo: string, valor: string): boolean {
   const alvo = chave(valor)
   if (!alvo) return true // nada a acrescentar
-  return chave(notaDoModelo).includes(alvo)
+  const base = chave(notaDoModelo)
+  if (base.includes(alvo)) return true
+  // O espaço também é formato: a ferramenta recebe "credito_avista" e o modelo
+  // escreve "crédito à vista" — mesma coisa, com uma palavra a mais no meio.
+  // (28/09: o primeiro card com o merge saiu "crédito à vista · pagamento:
+  // credito_avista".)
+  return base.replace(/ /g, '').includes(alvo.replace(/ /g, ''))
 }
 
 /**

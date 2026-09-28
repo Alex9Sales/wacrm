@@ -50,6 +50,14 @@ describe('compara por conteúdo, não por formato', () => {
     expect(nota).toBe('Entrega na Rua das Laranjeiras, 182')
   })
 
+  it('"crédito à vista" e "credito_avista" são a mesma forma de pagamento', () => {
+    // Caso real do primeiro card com o merge: saiu "crédito à vista ·
+    // pagamento: credito_avista". O espaço no meio é formato, não conteúdo.
+    expect(mergeOrderNote('1 botijão · crédito à vista', fields({
+      pagamento: 'credito_avista',
+    }))).toBe('1 botijão · crédito à vista')
+  })
+
   it('acento e caixa diferentes não fazem o bairro repetir', () => {
     expect(mergeOrderNote('entrega no bosque da esperanca', fields({
       bairro: 'Bosque da Esperança',
