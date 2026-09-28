@@ -165,6 +165,35 @@ export function isPlausibleBrNational(d: string): boolean {
 }
 
 /**
+ * A INVERSA: E.164 brasileiro → nacional (DDD + local), sem o 55.
+ *
+ * 28/09 (Appia). O CRM guarda telefone em E.164 — `551996390004` — e foi assim
+ * que ele saiu para o Asaas ao abrir o cliente. O Asaas espera número
+ * brasileiro SEM o código do país, então leu o **55 como DDD** e o cliente
+ * nasceu com um telefone que não existe. O Asaas avisou por e-mail; alguém
+ * teve de corrigir na mão lá dentro.
+ *
+ * Só tira o 55 quando o que sobra é um nacional possível (`isPlausibleBrNational`).
+ * Isso protege o caso que parece igual e não é: **DDD 55 existe** (Santa Maria,
+ * RS). Em `5511985856375` o 55 da frente é país; em `55985856375` ele é DDD — e
+ * a diferença está no tamanho, não em quem olha.
+ *
+ * Devolve null para o que não dá para afirmar que é brasileiro: telefone errado
+ * no cadastro do cliente é pior do que campo em branco, porque ninguém procura
+ * o que parece preenchido.
+ */
+export function toBrNationalOrNull(raw: string | null | undefined): string | null {
+  const d = (raw || '').replace(/\D/g, '')
+  if (!d) return null
+  if (isPlausibleBrNational(d)) return d // já veio nacional (aqui, DDD 55 é DDD)
+  if ((d.length === 12 || d.length === 13) && d.startsWith('55')) {
+    const nac = d.slice(2)
+    return isPlausibleBrNational(nac) ? nac : null
+  }
+  return null
+}
+
+/**
  * Número que SE DIZ brasileiro completo (55 + 10/11 dígitos) mas não pode
  * existir — ex.: 5555129888381. Número de outro país não é julgado aqui.
  */

@@ -48,6 +48,7 @@ import {
 // o número antes do clique. Não é contractTotal: aquele aplica o desconto de
 // tabela (−20% semestral), e o que chega aqui já é o valor negociado.
 import { CYCLES, chargeForCycle, parseBillingCycle } from '@/lib/billing/cycle'
+import { toBrNationalOrNull } from '@/lib/whatsapp/phone-utils'
 
 interface Body {
   value?: unknown
@@ -143,7 +144,13 @@ export async function POST(
             name: org?.name?.trim() || `Cliente ${doc}`,
             email: billing.billingEmail,
             cpfCnpj: doc,
-            mobilePhone: billing.billingPhone ?? undefined,
+            // ⚠️ SEM o 55 (28/09): o CRM guarda E.164, o Asaas espera número
+            // brasileiro sem o país. Mandando cru, ele leu o 55 como DDD e o
+            // cliente da Appia nasceu com telefone inexistente — o Asaas
+            // avisou por e-mail e alguém corrigiu na mão lá dentro. Null
+            // quando não dá para afirmar que é brasileiro: campo em branco é
+            // melhor que telefone errado, que ninguém vai procurar.
+            mobilePhone: toBrNationalOrNull(billing.billingPhone) ?? undefined,
             externalReference: orgId,
             // Endereço vai se tiver (migr 0196) — o Asaas abre cliente sem ele,
             // e travar a cobrança por causa de CEP não ajuda ninguém.

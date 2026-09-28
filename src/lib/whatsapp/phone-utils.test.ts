@@ -10,7 +10,7 @@ import {
   isImpossibleBrE164,
   isPlausibleBrNational,
   toBrE164IfNational,
-} from "./phone-utils";
+  toBrNationalOrNull,} from "./phone-utils";
 
 describe("sanitizePhoneForMeta", () => {
   it("strips +, spaces, and dashes leaving only digits", () => {
@@ -279,3 +279,42 @@ describe("número brasileiro possível (19/09, 55 dobrado)", () => {
     expect(isImpossibleBrE164("12025550181")).toBe(false);
   });
 });
+
+/**
+ * `toBrNationalOrNull` decide o telefone que vai para o cadastro do cliente no
+ * Asaas. O caso real (Appia, 28/09): mandamos E.164 e o Asaas leu o 55 como
+ * DDD — o cliente nasceu com telefone inexistente e o Asaas reclamou por
+ * e-mail. O que precisa de teste é não trocar um erro por outro: DDD 55 existe
+ * de verdade (Santa Maria/RS), e arrancar o 55 dele quebraria o número certo.
+ */
+describe('telefone para o Asaas (sem o código do país)', () => {
+  it('tira o 55 de país — o caso que gerou o e-mail do Asaas', () => {
+    expect(toBrNationalOrNull('5519996390004')).toBe('19996390004')
+    expect(toBrNationalOrNull('5511985856375')).toBe('11985856375')
+  })
+
+  it('NÃO arranca o 55 quando ele é o DDD de Santa Maria/RS', () => {
+    // 11 dígitos: 55 é DDD, o número já está nacional.
+    expect(toBrNationalOrNull('55985856375')).toBe('55985856375')
+    expect(toBrNationalOrNull('5538565375')).toBe('5538565375')
+  })
+
+  it('aceita o que já vem nacional, com e sem o 9º dígito', () => {
+    expect(toBrNationalOrNull('19996390004')).toBe('19996390004')
+    expect(toBrNationalOrNull('1932110004')).toBe('1932110004')
+  })
+
+  it('ignora máscara — o cadastro é digitado por gente', () => {
+    expect(toBrNationalOrNull('+55 (19) 99639-0004')).toBe('19996390004')
+  })
+
+  it('devolve null no que não dá para afirmar que é brasileiro', () => {
+    // Telefone errado no cadastro é pior que campo vazio: ninguém procura o
+    // que parece preenchido.
+    expect(toBrNationalOrNull('55129888381')).toBeNull() // o caso GoLink
+    expect(toBrNationalOrNull('')).toBeNull()
+    expect(toBrNationalOrNull(null)).toBeNull()
+    expect(toBrNationalOrNull('12345')).toBeNull()
+    expect(toBrNationalOrNull('12025550123')).toBeNull() // DDD 12 não casa c/ EUA
+  })
+})
