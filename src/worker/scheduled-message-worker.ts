@@ -30,6 +30,7 @@ import { renderForContact } from '@/lib/whatsapp/message-vars';
 import { bullConnection } from '@/lib/queue/connection';
 import {
   SCHEDULED_MESSAGE_QUEUE,
+  enqueueScheduledMessage,
   type ScheduledMessageJob,
 } from '@/lib/queue/queues';
 import { isPermanentSendError } from '@/lib/queue/errors';
@@ -343,6 +344,56 @@ async function processScheduledMessageJob(
   }
 }
 
+// ---- rede de segurança: pendente sem job ------------------------------
+// Este worker só trabalha por JOB. Uma linha `pending` sem job na fila não é
+// enviada por ninguém e não dá erro em lugar nenhum — ela simplesmente fica
+// lá, visível na Central de Agendamentos, até o horário passar.
+//
+// Foi o que aconteceu com a API pública, que gravava e não enfileirava
+// (corrigido em 1b2d022e): 296 mensagens de um cliente ficaram presas. Mas o
+// buraco é maior que aquele bug — Redis limpo, job perdido num restart ou
+// qualquer caminho futuro que esqueça de enfileirar cai no mesmo lugar.
+//
+// A varredura roda a cada 5 min e enfileira o que está para vencer. O `jobId`
+// é determinístico (`sched-<id>`), então reenfileirar o que JÁ tem job é
+// no-op: o BullMQ ignora id repetido. Idempotente por construção.
+const RESCUE_EVERY_MS = 5 * 60_000;
+
+export async function rescueOrphanScheduledMessages(): Promise<number> {
+  try {
+    const rows = await db
+      .select({ id: scheduledMessages.id, scheduledAt: scheduledMessages.scheduledAt })
+      .from(scheduledMessages)
+      .where(
+        and(
+          eq(scheduledMessages.status, 'pending'),
+          // Pra frente: o que vence antes do próximo tick, com folga.
+          sql`${scheduledMessages.scheduledAt} <= now() + interval '10 minutes'`,
+          // Pra trás: atraso de até 2h ainda vale entregar. Mais velho que
+          // isso não é entrega atrasada, é mensagem fora de hora caindo do
+          // nada no cliente — fica parado pra uma pessoa decidir.
+          sql`${scheduledMessages.scheduledAt} > now() - interval '2 hours'`,
+        ),
+      )
+      .limit(200);
+    let n = 0;
+    for (const r of rows) {
+      const delayMs = Math.max(0, new Date(r.scheduledAt).getTime() - Date.now());
+      try {
+        await enqueueScheduledMessage(r.id, { delayMs });
+        n += 1;
+      } catch (err) {
+        log(`rescue ${r.id} falhou:`, err instanceof Error ? err.message : err);
+      }
+    }
+    if (n > 0) log(`rescue: ${n} agendada(s) sem job reenfileirada(s)`);
+    return n;
+  } catch (err) {
+    log('rescue error:', err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
+
 /**
  * Start the scheduled-message worker. Returned so the bootstrap can close
  * it on graceful shutdown alongside the broadcast workers.
@@ -360,6 +411,13 @@ export function startScheduledMessageWorker(): Worker<ScheduledMessageJob> {
     log(`${job?.data.scheduledMessageId} failed:`, err?.message),
   );
   worker.on('error', (err) => log('worker error:', err.message));
+
+  // Rede de segurança: pega o que está pendente sem job (ver acima). Roda uma
+  // vez no start — restart é justamente quando job se perde — e depois a cada
+  // 5 min. `unref` pra não segurar o processo no shutdown.
+  void rescueOrphanScheduledMessages();
+  setInterval(() => void rescueOrphanScheduledMessages(), RESCUE_EVERY_MS).unref();
+
   log(`listening on '${SCHEDULED_MESSAGE_QUEUE}'.`);
   return worker;
 }
