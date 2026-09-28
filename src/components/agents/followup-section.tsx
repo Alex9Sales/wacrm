@@ -122,14 +122,16 @@ interface MeetingRem {
   templateName: string;
   templateLanguage: string;
   templateParamsText: string;
+  /** Vazio = manda sempre. Com etapa = só manda se o card ainda estiver nela. */
+  onlyIfStage: string;
 }
 
 /** Lembretes padrão (estilo n8n): 24h, 12h, 1h antes + 2h depois. */
 const MEETING_DEFAULTS: MeetingRem[] = [
-  { offsetValue: 24, offsetUnit: 'hours', when: 'before', instructions: '', templateName: '', templateLanguage: '', templateParamsText: '' },
-  { offsetValue: 12, offsetUnit: 'hours', when: 'before', instructions: '', templateName: '', templateLanguage: '', templateParamsText: '' },
-  { offsetValue: 1, offsetUnit: 'hours', when: 'before', instructions: '', templateName: '', templateLanguage: '', templateParamsText: '' },
-  { offsetValue: 2, offsetUnit: 'hours', when: 'after', instructions: '', templateName: '', templateLanguage: '', templateParamsText: '' },
+  { offsetValue: 24, offsetUnit: 'hours', when: 'before', instructions: '', templateName: '', templateLanguage: '', templateParamsText: '', onlyIfStage: '' },
+  { offsetValue: 12, offsetUnit: 'hours', when: 'before', instructions: '', templateName: '', templateLanguage: '', templateParamsText: '', onlyIfStage: '' },
+  { offsetValue: 1, offsetUnit: 'hours', when: 'before', instructions: '', templateName: '', templateLanguage: '', templateParamsText: '', onlyIfStage: '' },
+  { offsetValue: 2, offsetUnit: 'hours', when: 'after', instructions: '', templateName: '', templateLanguage: '', templateParamsText: '', onlyIfStage: '' },
 ];
 /** Opções prontas (o "tem opções ou escreve" do Alex): preenche um gatilho que
  *  o usuário edita (nome da etapa + tempo). */
@@ -269,6 +271,7 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
             templateParamsText: Array.isArray(x.templateParams)
               ? (x.templateParams as string[]).join(', ')
               : '',
+            onlyIfStage: (x.onlyIfStage as string) ?? '',
           })),
         );
       }
@@ -348,6 +351,7 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
               templateName: '',
               templateLanguage: '',
               templateParamsText: '',
+              onlyIfStage: '',
             },
           ],
     );
@@ -408,6 +412,7 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
               .split(',')
               .map((p) => p.trim())
               .filter(Boolean),
+            onlyIfStage: m.onlyIfStage.trim(),
           })),
         }),
       });
@@ -909,6 +914,15 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                   disabled={!canEdit}
                   className="mt-2 h-8"
                 />
+                {m.when === 'after' && (
+                  <Input
+                    value={m.onlyIfStage}
+                    onChange={(e) => setRem(i, { onlyIfStage: e.target.value })}
+                    placeholder="Só se o card ainda estiver nesta etapa (ex.: Reunião agendada) — vazio manda sempre"
+                    disabled={!canEdit}
+                    className="mt-2 h-8"
+                  />
+                )}
                 <div className="mt-2 border-t border-dashed border-border pt-2">
                   <Label className="text-[11px] text-muted-foreground">
                     Modelo p/ fora da janela de 24h (canal oficial)

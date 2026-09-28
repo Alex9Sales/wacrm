@@ -141,6 +141,14 @@ export interface MeetingReminder {
   templateName: string | null
   templateLanguage: string | null
   templateParams: string[]
+  /**
+   * Só dispara se o card ligado à conversa ainda estiver NESTA etapa (casa por
+   * nome). É o que faz o "no-show" existir sem coluna própria (Zelo, 28/09):
+   * 4 h depois da reunião, quem o responsável moveu pra "Reunião realizada" não
+   * ouve "sentimos sua falta" — só quem ficou parado em "Reunião agendada".
+   * null = dispara sempre (comportamento de antes).
+   */
+  onlyIfStage: string | null
 }
 export interface FollowUpConfig {
   enabled: boolean
@@ -464,6 +472,10 @@ function readMeetingReminder(raw: unknown): MeetingReminder | null {
         .map((p) => p.slice(0, 300))
         .slice(0, 10)
     : []
+  const onlyIfStage =
+    typeof bag.onlyIfStage === 'string' && bag.onlyIfStage.trim()
+      ? bag.onlyIfStage.trim().slice(0, 200)
+      : null
   return {
     offsetValue,
     offsetUnit,
@@ -472,6 +484,7 @@ function readMeetingReminder(raw: unknown): MeetingReminder | null {
     templateName,
     templateLanguage,
     templateParams,
+    onlyIfStage,
   }
 }
 
@@ -1453,6 +1466,30 @@ export async function planStageFollowUp(input: {
   }
 }
 
+/** Etapa do card ABERTO ligado à conversa (null = conversa sem card aberto). */
+async function currentStageName(
+  accountId: string,
+  conversationId: string,
+): Promise<string | null> {
+  try {
+    const res = await db.execute(sql`
+      SELECT ps.name
+        FROM deals d
+        JOIN pipeline_stages ps ON ps.id = d.stage_id
+       WHERE d.account_id = ${accountId}
+         AND d.conversation_id = ${conversationId}
+         AND d.status = 'open'
+       ORDER BY d.created_at DESC
+       LIMIT 1
+    `)
+    const row = res.rows[0] as { name: string } | undefined
+    return row?.name ?? null
+  } catch (err) {
+    console.error('[currentStageName] falhou:', err)
+    return null
+  }
+}
+
 /** Atualiza o "próximo follow-up" visível no card (planejado, ainda não saiu). */
 async function setNextFollowUp(dealId: string, iso: string): Promise<void> {
   try {
@@ -1663,6 +1700,19 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
         continue
       }
       const r = reminders[dueIdx]
+
+      // Lembrete preso a uma etapa (no-show): só vale se o card AINDA estiver
+      // nela. Quem o responsável já moveu pra "Reunião realizada" compareceu —
+      // mandar "sentimos sua falta" pra essa pessoa é pior que não mandar nada.
+      // Carimba assim mesmo: a hora daquele lembrete passou.
+      if (r.onlyIfStage) {
+        const stage = await currentStageName(agent.account_id, e.conversation_id)
+        if (!stage || normStage(stage) !== normStage(r.onlyIfStage)) {
+          await stampReminder(e.event_id, dueIdx + 1)
+          continue
+        }
+      }
+
       const windowOpen =
         !!meta.lastInboundAt &&
         Date.now() - new Date(meta.lastInboundAt).getTime() < WINDOW_MS
