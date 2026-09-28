@@ -19,6 +19,7 @@ import { looksLikeInjection } from './untrusted'
 import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-profile'
 import { formatCatalogForPrompt } from './catalog'
 import { generateWithExternalTools } from './external-tools'
+import { mergeOrderNote } from './order-note'
 import { GHOST_NOTE, claimsCompletedAction, isGhostConfirmation } from './claimed-action'
 import { buildSystemPrompt, chargeInstruction, collectionInstruction, HANDOFF_FAREWELL, parseCloseDirectives } from './defaults'
 import { documentFromConversation, emitChargeFromDirective, resolveChargeDocument } from '@/lib/collections/emit'
@@ -1256,11 +1257,27 @@ export async function dispatchInboundToAiReply(
       // "PEDIDO CONFIRMADO" saía antes do handoff). Pedido gravado no sistema
       // da loja continua virando card: esse existe de verdade.
       const handingOff = !!handoff || (has('handoff') && !!dirs.transfer)
-      if (has('create_card') && dirs.createCard && !handingOff) {
-        await createDealAndAlert(dirs.createCard)
-      }
+      const marcador = has('create_card') && dirs.createCard && !handingOff ? dirs.createCard : null
+      // 📦 Pedido GRAVADO na loja: cria UMA vez, com o texto do modelo E os
+      // dados que foram pra ferramenta. Antes eram duas chamadas — a do
+      // marcador criava o card e disparava o aviso, e a dos argumentos chegava
+      // depois só pra ser descartada por `createDealFromAi` (card da conversa
+      // reaproveitado). Resultado: o endereço ia certo pro sistema da loja e
+      // faltava no aviso do despacho quando o modelo não o repetia no
+      // marcador (28/09, Família do Gás). Ver `mergeOrderNote`.
       if (orderForCard) {
-        await createDealAndAlert(orderForCard, true)
+        await createDealAndAlert(
+          {
+            title: marcador?.title || orderForCard.title,
+            value: orderForCard.value ?? marcador?.value ?? null,
+            note: mergeOrderNote(marcador?.note, orderForCard.fields),
+          },
+          true,
+        )
+        return
+      }
+      if (marcador) {
+        await createDealAndAlert(marcador)
       }
     }
     // Transferir pra humano por etiqueta (ferramenta 'handoff' + [[TRANSFERIR]]).

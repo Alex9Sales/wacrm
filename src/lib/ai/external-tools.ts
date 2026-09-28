@@ -12,6 +12,7 @@
 // ============================================================
 
 import { crmFallbackForTool } from './crm-fallback'
+import { mergeOrderNote, type OrderFields } from './order-note'
 import { SAME_ORDER_WINDOW_MS } from './order-window'
 import { failureKey, retryBlockedSummary, withFailureGuidance } from './tool-failure'
 import { idsInText, looksLikeId, repairIdArgs, type IdRepair } from './tool-id-repair'
@@ -57,6 +58,9 @@ export interface OrderForCard {
   title: string
   value: number | null
   note: string | null
+  /** Os campos separados, pro resumo do card poder completar o que o modelo
+   *  esqueceu de escrever no marcador (ver `mergeOrderNote`). */
+  fields: OrderFields
 }
 
 // Quantas rodadas de ferramenta a IA pode encadear num único turno antes de ser
@@ -149,14 +153,18 @@ export function orderForCardFromArgs(
   const qtd = num('quantidade') ?? num('qtd') ?? 1
   const unit = num('valor_unitario') ?? num('valor') ?? num('preco') ?? num('amount')
   const value = unit != null ? unit * (qtd || 1) : null
-  const obs = s('obs_entrega') || s('observacao') || s('obs') || s('descricao')
-  const endereco = [s('endereco'), s('bairro')].filter(Boolean).join(', ')
-  const pagamento = s('pagamento') || s('forma_pagamento') || s('payment')
-  const note =
-    [obs || null, endereco || null, pagamento ? `pagamento: ${pagamento}` : null]
-      .filter(Boolean)
-      .join(' · ') || null
-  return { title: (nome ? `${nome} — pedido` : 'Pedido').slice(0, 200), value, note }
+  const fields: OrderFields = {
+    obs: s('obs_entrega') || s('observacao') || s('obs') || s('descricao'),
+    endereco: s('endereco') || s('rua') || s('logradouro'),
+    bairro: s('bairro'),
+    pagamento: s('pagamento') || s('forma_pagamento') || s('payment'),
+  }
+  return {
+    title: (nome ? `${nome} — pedido` : 'Pedido').slice(0, 200),
+    value,
+    note: mergeOrderNote(null, fields),
+    fields,
+  }
 }
 
 /** Seção do prompt: o cardápio de ferramentas + o protocolo do marcador. */
