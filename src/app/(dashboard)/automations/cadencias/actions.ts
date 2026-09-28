@@ -18,6 +18,12 @@ import {
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
 import {
+  getCadenceFunnel,
+  getCadenceOverview,
+  type CadenceFunnel,
+  type CadenceOverviewRow,
+} from '@/lib/cadences/metrics'
+import {
   enrollContactInCadence,
   cancelEnrollment,
   resumeEnrollment,
@@ -718,6 +724,34 @@ export async function listDealsInCadence(dealIds: string[]): Promise<string[]> {
       )
     return rows.map((r) => r.dealId).filter((id): id is string => !!id)
   } catch {
+    return []
+  }
+}
+
+// ------------------------------------------------------------
+// 📊 Resultados — "qual dá mais resultado e onde ela para" (Rafael, 28/09)
+// ------------------------------------------------------------
+
+/** O funil de uma cadência: cada degrau com quem respondeu nele. */
+export async function getCadenceResults(
+  cadenceId: string,
+): Promise<CadenceFunnel | null> {
+  try {
+    const ctx = await getCurrentAccount()
+    return await getCadenceFunnel(ctx.accountId, cadenceId)
+  } catch (err) {
+    console.error('[getCadenceResults]', err)
+    return null
+  }
+}
+
+/** Uma linha por cadência para a lista — a comparação entre elas. */
+export async function listCadenceResults(): Promise<CadenceOverviewRow[]> {
+  try {
+    const ctx = await getCurrentAccount()
+    return await getCadenceOverview(ctx.accountId)
+  } catch (err) {
+    console.error('[listCadenceResults]', err)
     return []
   }
 }

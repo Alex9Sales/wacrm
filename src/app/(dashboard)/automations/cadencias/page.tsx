@@ -20,9 +20,12 @@ import {
   MessageCircle,
   Mail,
   AtSign,
+  BarChart3,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { CadenceResults } from '@/components/cadences/cadence-results'
+import type { CadenceOverviewRow } from '@/lib/cadences/metrics'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -36,6 +39,7 @@ import {
 } from '@/components/ui/dialog'
 import {
   listCadences,
+  listCadenceResults,
   getCadence,
   createCadence,
   updateCadence,
@@ -113,9 +117,21 @@ export default function CadenciasPage() {
   const [busyId, setBusyId] = useState<string | null>(null)
   const [stageOptions, setStageOptions] = useState<StagePickerOption[]>([])
   const [templateOptions, setTemplateOptions] = useState<CadenceTemplateOption[]>([])
+  // Resultados por cadência: a taxa de resposta fica NA LISTA, senão ninguém
+  // descobre qual régua funciona sem abrir uma por uma.
+  const [results, setResults] = useState<Record<string, CadenceOverviewRow>>({})
+  const [openResults, setOpenResults] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setItems(await listCadences())
+    // Best-effort: a lista não pode ficar esperando a métrica pra aparecer.
+    listCadenceResults()
+      .then((rows) => {
+        const m: Record<string, CadenceOverviewRow> = {}
+        for (const r of rows) m[r.id] = r
+        setResults(m)
+      })
+      .catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -274,8 +290,9 @@ export default function CadenciasPage() {
           {items.map((c) => (
             <li
               key={c.id}
-              className="flex items-center gap-3 rounded-xl border border-border bg-card p-4"
+              className="rounded-xl border border-border bg-card p-4"
             >
+             <div className="flex items-center gap-3">
               <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-violet-500 to-fuchsia-500 text-white">
                 <Send className="h-5 w-5" />
               </span>
@@ -297,7 +314,38 @@ export default function CadenciasPage() {
                     : ''}
                   {c.description ? ` · ${c.description}` : ''}
                 </p>
+                {results[c.id] && results[c.id].enrolled > 0 && (
+                  <p className="mt-1 text-xs">
+                    <span
+                      className={
+                        results[c.id].replyRate >= 0.3
+                          ? 'font-semibold text-emerald-600 dark:text-emerald-400'
+                          : results[c.id].replied === 0
+                            ? 'font-semibold text-amber-600 dark:text-amber-500'
+                            : 'font-semibold text-foreground'
+                      }
+                    >
+                      {Math.round(results[c.id].replyRate * 100)}% responderam
+                    </span>
+                    <span className="text-muted-foreground">
+                      {' '}
+                      ({results[c.id].replied} de {results[c.id].enrolled})
+                      {results[c.id].repliedAt.length > 0
+                        ? ` · respostas no degrau ${results[c.id].repliedAt.join(', ')}`
+                        : ''}
+                    </span>
+                  </p>
+                )}
               </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setOpenResults(openResults === c.id ? null : c.id)}
+                title="Ver resultados desta cadência"
+                className={openResults === c.id ? 'text-primary' : ''}
+              >
+                <BarChart3 className="h-4 w-4" />
+              </Button>
               <Button
                 size="sm"
                 variant="ghost"
@@ -319,6 +367,12 @@ export default function CadenciasPage() {
               >
                 <Trash2 className="h-4 w-4" />
               </Button>
+             </div>
+              {openResults === c.id && (
+                <div className="mt-4 border-t border-border pt-4">
+                  <CadenceResults cadenceId={c.id} />
+                </div>
+              )}
             </li>
           ))}
         </ul>

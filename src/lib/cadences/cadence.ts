@@ -302,6 +302,35 @@ async function cancelPendingSteps(accountId: string, enrollmentId: string): Prom
   for (const r of rows) await removeScheduledMessageJob(r.id)
 }
 
+/** O último degrau que chegou a SAIR nesta inscrição. É nele que a pessoa
+ *  respondeu (ou desistiu em cima) — sem isso o "respondeu" não tem lugar no
+ *  funil por degrau, e a métrica vira um join adivinhado entre eventos. */
+async function lastSentStep(
+  accountId: string,
+  enrollmentId: string,
+): Promise<number | null> {
+  try {
+    const row = firstOrNull(
+      await db
+        .select({ position: cadenceEvents.stepPosition })
+        .from(cadenceEvents)
+        .where(
+          and(
+            eq(cadenceEvents.accountId, accountId),
+            eq(cadenceEvents.enrollmentId, enrollmentId),
+            eq(cadenceEvents.type, 'step_sent'),
+          ),
+        )
+        .orderBy(desc(cadenceEvents.createdAt))
+        .limit(1),
+    )
+    return row?.position ?? null
+  } catch (err) {
+    console.error('[cadence] lastSentStep falhou:', err)
+    return null
+  }
+}
+
 /** Encerra uma inscrição (pausa OU cancela) + cancela os degraus pendentes. */
 async function endEnrollment(
   accountId: string,
@@ -315,6 +344,7 @@ async function endEnrollment(
     .set({ status, updatedAt: new Date().toISOString() })
     .where(and(eq(cadenceEnrollments.id, enrollment.id), eq(cadenceEnrollments.accountId, accountId)))
   await recordCadenceEvent(accountId, enrollment, status === 'paused' ? 'paused' : 'cancelled', {
+    stepPosition: await lastSentStep(accountId, enrollment.id),
     data: { reason },
   })
 }
