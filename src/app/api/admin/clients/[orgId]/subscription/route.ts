@@ -33,12 +33,13 @@
 import { NextResponse } from 'next/server'
 import { eq } from 'drizzle-orm'
 
-import { db, organizationBilling } from '@/db'
+import { db, organization, organizationBilling } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { toErrorResponse } from '@/lib/auth/account'
 import { requirePlatformAdmin } from '@/lib/auth/platform'
 import {
   AsaasError,
+  createCustomer,
   createPayment,
   createSubscription,
   findCustomerByCpfCnpj,
@@ -113,7 +114,11 @@ export async function POST(
       )
     }
 
-    // Quem vamos cobrar: o customer já vinculado, ou o que o documento achar.
+    // Quem vamos cobrar: o customer já vinculado, ou o que o documento achar —
+    // e, desde 28/09, o que a gente abre no Asaas com os dados que já estão no
+    // cadastro. "Não cria cadastro no escuro" continua valendo: o que mudou é
+    // que existe onde guardar o e-mail (migr 0195), que era exatamente o dado
+    // que faltava para abrir cliente lá. Sem e-mail, ainda recusa.
     let customerId = billing.asaasCustomerId
     if (!customerId) {
       const doc = (billing.cpfCnpj ?? '').replace(/\D/g, '')
@@ -124,11 +129,46 @@ export async function POST(
         )
       }
       customerId = await findCustomerByCpfCnpj(doc)
+
+      if (!customerId && billing.billingEmail) {
+        const org = firstOrNull(
+          await db
+            .select({ name: organization.name })
+            .from(organization)
+            .where(eq(organization.id, orgId))
+            .limit(1),
+        )
+        try {
+          customerId = await createCustomer({
+            name: org?.name?.trim() || `Cliente ${doc}`,
+            email: billing.billingEmail,
+            cpfCnpj: doc,
+            mobilePhone: billing.billingPhone ?? undefined,
+            externalReference: orgId,
+            // Endereço vai se tiver (migr 0196) — o Asaas abre cliente sem ele,
+            // e travar a cobrança por causa de CEP não ajuda ninguém.
+            postalCode: billing.billingPostalCode ?? undefined,
+            address: billing.billingAddress ?? undefined,
+            addressNumber: billing.billingAddressNumber ?? undefined,
+            complement: billing.billingComplement ?? undefined,
+            province: billing.billingProvince ?? undefined,
+          })
+          console.log(`[admin/subscription] cliente ${customerId} aberto no Asaas para ${orgId}`)
+        } catch (err) {
+          const msg =
+            err instanceof AsaasError
+              ? `Não consegui abrir o cliente no Asaas: ${err.message}`
+              : 'Não consegui abrir o cliente no Asaas.'
+          console.error('[admin/subscription] criar customer falhou:', err)
+          return NextResponse.json({ error: msg }, { status: 502 })
+        }
+      }
+
       if (!customerId) {
         return NextResponse.json(
           {
             error:
-              'Não achei esse CPF/CNPJ no Asaas. Cadastre o cliente lá primeiro — daqui a gente não cria cadastro no escuro.',
+              'Não achei esse CPF/CNPJ no Asaas e não tenho e-mail para abrir o cadastro lá. Preencha o e-mail de cobrança e salve — daqui a gente não abre cliente sem e-mail, porque é para ele que o boleto vai.',
           },
           { status: 404 },
         )

@@ -573,7 +573,9 @@ export function EditBillingDialog({
             <p className="text-xs text-muted-foreground">
               Fica salvo no cadastro ao clicar em <strong>Salvar</strong>. Sem
               ele não dá para criar a cobrança no Asaas — a conta lá só abre
-              com documento.
+              com documento. Com documento <em>e</em> e-mail de cobrança
+              preenchidos, o cliente é aberto no Asaas na hora de cobrar; não
+              precisa cadastrar lá na mão.
             </p>
           </div>
 
