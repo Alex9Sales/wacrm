@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm'
 
-import { db, aiConfigs, conversations, deals, calendarEvents, contacts, messages } from '@/db'
+import { db, aiConfigs, conversations, deals, calendarEvents, contacts, messages, tasks } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { CAPABILITIES, type ProviderId } from '@/lib/channels/provider'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
@@ -171,6 +171,15 @@ export interface FollowUpConfig {
    * reengajamento. Padrão: desligado.
    */
   skipWhenDealExists: boolean
+  /**
+   * Registra cada follow-up enviado como TAREFA CONCLUÍDA no card (Zelo,
+   * 28/09). O gestor olha o funil e não vê nada acontecendo — a automação roda
+   * no bastidor e o histórico dela não aparece onde ele trabalha. A tarefa não
+   * pede ação: existe para o card mostrar o que a IA já fez.
+   * Opt-in por agente, e por um bom motivo: em conta de venda rápida saem
+   * dezenas de follow-ups por dia, e isso viraria ruído na lista de tarefas.
+   */
+  logTasks: boolean
 }
 
 const VALID_UNITS = new Set<FollowUpDelayUnit>(['minutes', 'hours', 'days'])
@@ -440,6 +449,7 @@ export function readFollowUpConfig(raw: unknown): FollowUpConfig {
     stageTriggers,
     meetingReminders,
     skipWhenDealExists: bag.skipWhenDealExists === true,
+    logTasks: bag.logTasks === true,
   }
 }
 
@@ -486,6 +496,15 @@ function readMeetingReminder(raw: unknown): MeetingReminder | null {
     templateParams,
     onlyIfStage,
   }
+}
+
+/** "Lembrete 1h antes da reunião" / "Follow-up 4h depois da reunião". */
+function reminderLabel(r: MeetingReminder): string {
+  const unidade =
+    r.offsetUnit === 'minutes' ? 'min' : r.offsetUnit === 'hours' ? 'h' : 'd'
+  return r.when === 'before'
+    ? `Lembrete ${r.offsetValue}${unidade} antes da reunião`
+    : `Follow-up ${r.offsetValue}${unidade} depois da reunião`
 }
 
 /** Offset do lembrete em minutos com sinal (antes = negativo). */
@@ -853,6 +872,7 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
             templateParams: params,
           })
           sent += 1
+          await logFollowUpTask(cfg, agent.account_id, c.id, `Follow-up enviado — ${step.templateName}`)
           console.log('[followup] template:', step.templateName)
         } catch (err) {
           console.error('[followup] template falhou:', err)
@@ -1021,6 +1041,7 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
           : false
         if (emailTarget && emailOk) {
           sent += 1
+          await logFollowUpTask(cfg, agent.account_id, c.id, 'Follow-up enviado por e-mail')
         } else {
           // Fallback WhatsApp — mas respeita a janela oficial (Meta fora da 24h
           // sem template não entrega): não manda free-text nem conta o toque.
@@ -1038,6 +1059,7 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
               text,
             })
             sent += 1
+            await logFollowUpTask(cfg, agent.account_id, c.id, 'Follow-up enviado pela IA')
           }
         }
       } catch (err) {
@@ -1292,6 +1314,7 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
             templateParams: params,
           })
           sent += 1
+          await logFollowUpTask(cfg, agent.account_id, d.conversation_id, `Follow-up da etapa "${trig.stage}" — ${trig.templateName}`)
           console.log('[stage-followup] template:', trig.templateName)
         } catch (err) {
           console.error('[stage-followup] template falhou:', err)
@@ -1348,6 +1371,7 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
           text,
         })
         sent += 1
+        await logFollowUpTask(cfg, agent.account_id, d.conversation_id, `Follow-up da etapa "${trig.stage}"`)
       } catch (err) {
         console.error('[stage-followup] envio falhou:', err)
       }
@@ -1490,7 +1514,59 @@ async function currentStageName(
   }
 }
 
+/**
+ * Registra no card que a IA já falou com a pessoa — tarefa nascida CONCLUÍDA.
+ *
+ * Zelo, 28/09: o gestor abre o funil, não vê movimento nenhum e conclui que os
+ * follow-ups não estão saindo. Eles estavam: 836 mensagens em 12 dias, todas no
+ * bastidor. A tarefa não pede ação, e diz isso no próprio texto, para ninguém
+ * "executar" de novo o que já foi feito.
+ *
+ * Best-effort: registro nunca derruba envio.
+ */
+async function logFollowUpTask(
+  cfg: FollowUpConfig,
+  accountId: string,
+  conversationId: string,
+  titulo: string,
+): Promise<void> {
+  if (!cfg.logTasks) return
+  try {
+    const row = firstOrNull(
+      await db
+        .select({ id: deals.id, contactId: deals.contactId, userId: deals.userId })
+        .from(deals)
+        .where(
+          and(
+            eq(deals.accountId, accountId),
+            eq(deals.conversationId, conversationId),
+            eq(deals.status, 'open'),
+          ),
+        )
+        .orderBy(desc(deals.createdAt))
+        .limit(1),
+    )
+    if (!row) return // sem card aberto não há onde registrar
+    await db.insert(tasks).values({
+      accountId,
+      title: titulo.slice(0, 200),
+      description:
+        'Registro automático da IA: a mensagem já foi enviada. Não precisa executar nada — esta tarefa existe só para o histórico do negócio.',
+      status: 'done',
+      type: 'follow_up',
+      dealId: row.id,
+      contactId: row.contactId,
+      assignedTo: row.userId,
+      createdBy: row.userId,
+      dueAt: new Date().toISOString(),
+    })
+  } catch (err) {
+    console.error('[followup] registro da tarefa falhou:', err)
+  }
+}
+
 /** Atualiza o "próximo follow-up" visível no card (planejado, ainda não saiu). */
+
 async function setNextFollowUp(dealId: string, iso: string): Promise<void> {
   try {
     await db
@@ -1736,6 +1812,7 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
               templateParams: params,
             })
             sent += 1
+            await logFollowUpTask(cfg, agent.account_id, e.conversation_id, `${reminderLabel(r)} — ${r.templateName}`)
             console.log('[meeting-reminder] template:', r.templateName)
           } catch (err) {
             console.error('[meeting-reminder] template falhou:', err)
@@ -1792,6 +1869,7 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
           text,
         })
         sent += 1
+        await logFollowUpTask(cfg, agent.account_id, e.conversation_id, reminderLabel(r))
       } catch (err) {
         console.error('[meeting-reminder] envio falhou:', err)
       }

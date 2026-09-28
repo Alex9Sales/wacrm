@@ -183,6 +183,7 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
   const [stageTriggers, setStageTriggers] = useState<StageTrig[]>([]);
   const [meetingRems, setMeetingRems] = useState<MeetingRem[]>([]);
   const [skipWhenDealExists, setSkipWhenDealExists] = useState(false);
+  const [logTasks, setLogTasks] = useState(false);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -229,6 +230,7 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
         );
         setGiveUpEnabled(!!data.followUp.giveUpEnabled);
         setSkipWhenDealExists(data.followUp.skipWhenDealExists === true);
+        setLogTasks(data.followUp.logTasks === true);
         setGiveUpStage(
           typeof data.followUp.giveUpStage === 'string' ? data.followUp.giveUpStage : '',
         );
@@ -386,6 +388,7 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
           })),
           giveUpEnabled,
           skipWhenDealExists,
+          logTasks,
           giveUpStage: giveUpStage.trim(),
           stageTriggers: stageTriggers
             .filter((t) => t.stage.trim())
@@ -666,6 +669,25 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
               nasce quando o pedido fecha — aí cutucar depois vira cobrança.{' '}
               <strong>Deixe desligado em venda longa</strong>, onde o negócio nasce no
               começo e o toque é o que empurra a negociação.
+            </p>
+          </div>
+
+          {/* O gestor olha o funil e não vê a automação trabalhando (Zelo). */}
+          <div className="rounded-lg border border-dashed border-border p-3">
+            <label className="flex items-center gap-2.5 text-sm font-medium text-foreground">
+              <Switch
+                checked={logTasks}
+                onCheckedChange={setLogTasks}
+                disabled={!canEdit}
+              />
+              Registrar cada follow-up como tarefa concluída
+            </label>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Cada mensagem que a IA enviar vira uma <strong>tarefa já concluída</strong> no
+              negócio, dizendo o que saiu. Serve para quem acompanha pelo funil{' '}
+              <strong>enxergar o trabalho da automação</strong> — a tarefa não pede ação.{' '}
+              <strong>Evite em venda rápida</strong>: com dezenas de toques por dia, a lista
+              de tarefas vira ruído.
             </p>
           </div>
 

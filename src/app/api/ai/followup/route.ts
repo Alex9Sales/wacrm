@@ -75,6 +75,7 @@ export async function PATCH(request: Request) {
         ? body.meetingReminders
         : undefined,
       skipWhenDealExists: body?.skipWhenDealExists === true,
+      logTasks: body?.logTasks === true,
     })
 
     await db
