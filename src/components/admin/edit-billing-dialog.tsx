@@ -79,6 +79,7 @@ export function EditBillingDialog({
   const [dueAt, setDueAt] = useState("");
   const [plan, setPlan] = useState("");
   const [billingPhone, setBillingPhone] = useState("");
+  const [billingEmail, setBillingEmail] = useState("");
   const [notes, setNotes] = useState("");
   // 🔗 Vínculo com o Asaas (24/09). O documento é a chave pra achar o cliente
   // lá; o valor é o que ele paga de VERDADE (implantação parcelada, preço
@@ -110,6 +111,7 @@ export function EditBillingDialog({
     setDueAt(toDateInput(client.dueAt));
     setPlan(client.plan ?? "");
     setBillingPhone(client.billingPhone ?? "");
+    setBillingEmail(client.billingEmail ?? "");
     setNotes(client.notes ?? "");
     setResponsibleAdminId(client.responsible?.id ?? "");
     setCpfCnpj(client.cpfCnpj ?? "");
@@ -139,6 +141,7 @@ export function EditBillingDialog({
           due_at: dueAt ? dueAt : null,
           plan: plan.trim() || null,
           billing_phone: billingPhone.trim() || null,
+          billing_email: billingEmail.trim() || null,
           notes: notes.trim() || null,
           responsible_admin_id: responsibleAdminId || null,
           cpf_cnpj: cpfCnpj.trim() || null,
@@ -380,6 +383,21 @@ export function EditBillingDialog({
             <p className="text-xs text-muted-foreground">
               Formato E.164 (só dígitos, com DDI 55). Necessário para
               enviar lembretes.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-muted-foreground">E-mail de cobrança</Label>
+            <Input
+              type="email"
+              placeholder="ex.: financeiro@empresa.com.br"
+              value={billingEmail}
+              onChange={(e) => setBillingEmail(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Para onde o boleto vai. Costuma ser o financeiro do cliente, e
+              não quem usa o sistema — por isso é separado do e-mail de login.
+              O Asaas exige este e-mail para abrir o cadastro do cliente.
             </p>
           </div>
 

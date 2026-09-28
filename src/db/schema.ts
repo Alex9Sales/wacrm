@@ -156,6 +156,10 @@ export const organizationBilling = pgTable("organization_billing", {
 	dueAt: timestamp("due_at", { withTimezone: true, mode: 'string' }),
 	plan: text(),
 	billingPhone: text("billing_phone"),
+	// Para onde a cobrança vai (migr 0195). Separado do e-mail de LOGIN: quem
+	// recebe a fatura costuma ser o financeiro, não quem usa o sistema. O Asaas
+	// exige e-mail para abrir cliente, e é dele que o boleto sai.
+	billingEmail: text("billing_email"),
 	notes: text(),
 	lastReminderAt: timestamp("last_reminder_at", { withTimezone: true, mode: 'string' }),
 	// Assinatura no Asaas (gateway de pagamento). Setados no checkout; o webhook

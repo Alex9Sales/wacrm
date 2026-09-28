@@ -45,6 +45,8 @@ export interface ClientListRow {
   dueAt: string | null;
   plan: string | null;
   billingPhone: string | null;
+  /** Para onde a cobrança vai — não é o e-mail de login (migr 0195). */
+  billingEmail: string | null;
   notes: string | null;
   lastReminderAt: string | null;
   /** Owner member's user (first owner by membership order), if any. */
@@ -107,6 +109,7 @@ export async function listClients(): Promise<ClientListRow[]> {
       dueAt: organizationBilling.dueAt,
       plan: organizationBilling.plan,
       billingPhone: organizationBilling.billingPhone,
+      billingEmail: organizationBilling.billingEmail,
       notes: organizationBilling.notes,
       lastReminderAt: organizationBilling.lastReminderAt,
       cpfCnpj: organizationBilling.cpfCnpj,
@@ -144,6 +147,7 @@ export async function listClients(): Promise<ClientListRow[]> {
     dueAt: r.dueAt,
     plan: r.plan,
     billingPhone: r.billingPhone,
+    billingEmail: r.billingEmail,
     notes: r.notes,
     lastReminderAt: r.lastReminderAt,
     owner: r.ownerEmail ? { email: r.ownerEmail, name: r.ownerName ?? "" } : null,

@@ -28,6 +28,8 @@ interface PatchBody {
   due_at?: unknown;
   plan?: unknown;
   billing_phone?: unknown;
+  /** Para onde a cobrança vai (migr 0195) — não é o e-mail de login. */
+  billing_email?: unknown;
   notes?: unknown;
   responsible_admin_id?: unknown;
   // Vínculo com o Asaas (24/09): documento do cliente, valor realmente
@@ -120,6 +122,23 @@ export async function PATCH(
 
     const plan = optionalText(body.plan);
     const billingPhone = optionalText(body.billing_phone);
+    // E-mail de cobrança: normaliza (minúsculas, sem espaço) e recusa o que
+    // não é endereço. Guardar um e-mail torto aqui só se descobre no dia em
+    // que a fatura não chega — e aí o cliente já está sem boleto.
+    const billingEmailRaw = optionalText(body.billing_email);
+    const billingEmail =
+      billingEmailRaw === undefined || billingEmailRaw === null
+        ? billingEmailRaw
+        : billingEmailRaw.trim().toLowerCase() || null;
+    if (
+      typeof billingEmail === "string" &&
+      !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(billingEmail)
+    ) {
+      return NextResponse.json(
+        { error: "E-mail de cobrança inválido." },
+        { status: 400 },
+      );
+    }
     const notes = optionalText(body.notes);
     // Documento sempre em dígitos: é assim que o Asaas procura.
     const cpfCnpjRaw = optionalText(body.cpf_cnpj);
@@ -211,6 +230,7 @@ export async function PATCH(
     if (responsibleAdminId !== undefined)
       updates.responsibleAdminId = responsibleAdminId;
     if (cpfCnpj !== undefined) updates.cpfCnpj = cpfCnpj;
+    if (billingEmail !== undefined) updates.billingEmail = billingEmail;
     if (monthlyValue !== undefined) updates.monthlyValue = monthlyValue;
     if (billingCycle !== undefined) updates.billingCycle = billingCycle;
     if (asaasCustomerId !== undefined) updates.asaasCustomerId = asaasCustomerId;
@@ -280,6 +300,7 @@ export async function PATCH(
           notes: notes ?? null,
           responsibleAdminId: responsibleAdminId ?? null,
           cpfCnpj: cpfCnpj ?? null,
+          billingEmail: billingEmail ?? null,
           monthlyValue: monthlyValue ?? null,
           billingCycle: billingCycle ?? null,
           asaasCustomerId: asaasCustomerId ?? null,

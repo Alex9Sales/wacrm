@@ -21,6 +21,8 @@ export interface ClientListRow {
   dueAt: string | null;
   plan: string | null;
   billingPhone: string | null;
+  /** Para onde a cobrança vai — não é o e-mail de login (migr 0195). */
+  billingEmail: string | null;
   notes: string | null;
   lastReminderAt: string | null;
   owner: { email: string; name: string } | null;
