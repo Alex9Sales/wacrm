@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import {
   BILLING_CYCLES,
   CYCLES,
+  chargeForCycle,
   type BillingCycle,
 } from "@/lib/billing/cycle";
 import { PLAN_LIST } from "@/lib/billing/plans";
@@ -80,6 +81,17 @@ export function EditBillingDialog({
   const [plan, setPlan] = useState("");
   const [billingPhone, setBillingPhone] = useState("");
   const [billingEmail, setBillingEmail] = useState("");
+  // Endereço de cobrança (migr 0196) — para a nota fiscal, mais à frente.
+  // `billingProvince` é BAIRRO: é o nome do campo no Asaas, e traduzir no meio
+  // do caminho é onde endereço vira endereço errado.
+  const [billingPostalCode, setBillingPostalCode] = useState("");
+  const [billingAddress, setBillingAddress] = useState("");
+  const [billingAddressNumber, setBillingAddressNumber] = useState("");
+  const [billingComplement, setBillingComplement] = useState("");
+  const [billingProvince, setBillingProvince] = useState("");
+  const [billingCity, setBillingCity] = useState("");
+  const [billingState, setBillingState] = useState("");
+
   const [notes, setNotes] = useState("");
   // 🔗 Vínculo com o Asaas (24/09). O documento é a chave pra achar o cliente
   // lá; o valor é o que ele paga de VERDADE (implantação parcelada, preço
@@ -89,6 +101,8 @@ export function EditBillingDialog({
   const [billingCycle, setBillingCycle] = useState("");
   const [asaasCustomerId, setAsaasCustomerId] = useState("");
   const [asaasSubscriptionId, setAsaasSubscriptionId] = useState("");
+  // Cobrança única (semestral/anual) — objeto diferente de assinatura no Asaas.
+  const [asaasPaymentId, setAsaasPaymentId] = useState("");
   const [asaasBusy, setAsaasBusy] = useState(false);
   const [asaasFound, setAsaasFound] = useState<AsaasFound[] | null>(null);
   const [asaasBilling, setAsaasBilling] = useState<AsaasBilling | null>(null);
@@ -104,6 +118,24 @@ export function EditBillingDialog({
   // different row refreshes the fields.
   const [hydratedId, setHydratedId] = useState<string | null>(null);
 
+  // 💰 O que a cobrança vai emitir DE VERDADE (28/09).
+  //
+  // Num contrato semestral o valor digitado e o valor cobrado são números
+  // diferentes — R$ 130/mês viram UMA cobrança de R$ 780 — e a tela antes dizia
+  // só "Valor". Quem digitasse 780 pensando no total cobraria R$ 4.680 do
+  // cliente, sem desfazer. Então o total é calculado aqui e mostrado antes do
+  // clique, no botão e na confirmação.
+  const cobranca = (() => {
+    const mensal = Number(novoValor.replace(/\./g, "").replace(",", ".")) || 0;
+    const ciclo = (
+      billingCycle && CYCLES[billingCycle as BillingCycle] ? billingCycle : "monthly"
+    ) as BillingCycle;
+    // Mesma função que a rota usa para emitir — ver chargeForCycle. Se o número
+    // mostrado aqui e o cobrado lá vierem de contas diferentes, um dia divergem.
+    const c = chargeForCycle(mensal, ciclo);
+    return { mensal: c.monthly, meses: c.months, total: c.total, unica: c.oneOff };
+  })();
+
   // Hydrate the form when the dialog opens for a client.
   if (open && client && hydratedId !== client.id) {
     setStatus(client.status);
@@ -112,6 +144,14 @@ export function EditBillingDialog({
     setPlan(client.plan ?? "");
     setBillingPhone(client.billingPhone ?? "");
     setBillingEmail(client.billingEmail ?? "");
+    setBillingPostalCode(client.billingPostalCode ?? "");
+    setBillingAddress(client.billingAddress ?? "");
+    setBillingAddressNumber(client.billingAddressNumber ?? "");
+    setBillingComplement(client.billingComplement ?? "");
+    setBillingProvince(client.billingProvince ?? "");
+    setBillingCity(client.billingCity ?? "");
+    setBillingState(client.billingState ?? "");
+
     setNotes(client.notes ?? "");
     setResponsibleAdminId(client.responsible?.id ?? "");
     setCpfCnpj(client.cpfCnpj ?? "");
@@ -119,6 +159,7 @@ export function EditBillingDialog({
     setBillingCycle(client.billingCycle ?? "");
     setAsaasCustomerId(client.asaasCustomerId ?? "");
     setAsaasSubscriptionId(client.asaasSubscriptionId ?? "");
+    setAsaasPaymentId(client.asaasPaymentId ?? "");
     setAsaasFound(null);
     setAsaasBilling(null);
     setNovoValor("");
@@ -142,6 +183,14 @@ export function EditBillingDialog({
           plan: plan.trim() || null,
           billing_phone: billingPhone.trim() || null,
           billing_email: billingEmail.trim() || null,
+          billing_postal_code: billingPostalCode.trim() || null,
+          billing_address: billingAddress.trim() || null,
+          billing_address_number: billingAddressNumber.trim() || null,
+          billing_complement: billingComplement.trim() || null,
+          billing_province: billingProvince.trim() || null,
+          billing_city: billingCity.trim() || null,
+          billing_state: billingState.trim() || null,
+
           notes: notes.trim() || null,
           responsible_admin_id: responsibleAdminId || null,
           cpf_cnpj: cpfCnpj.trim() || null,
@@ -149,6 +198,7 @@ export function EditBillingDialog({
           billing_cycle: billingCycle || null,
           asaas_customer_id: asaasCustomerId.trim() || null,
           asaas_subscription_id: asaasSubscriptionId.trim() || null,
+          asaas_payment_id: asaasPaymentId.trim() || null,
         }),
       });
       if (!res.ok) {
@@ -232,10 +282,21 @@ export function EditBillingDialog({
       toast.error("Preencha o valor e o primeiro vencimento.");
       return;
     }
+    // ⚠️ A confirmação mostra o TOTAL que vai ser cobrado, não o valor digitado.
+    // Num semestral os dois números são diferentes (R$ 130/mês → R$ 780 de uma
+    // vez), e quem clica precisa ver o número que vai chegar no cliente antes de
+    // clicar — cobrança emitida não tem desfazer.
     const ok = window.confirm(
-      `Criar assinatura de R$ ${novoValor} para ${client.name}, primeiro vencimento em ` +
-        `${novoVenc.split("-").reverse().join("/")}?\n\n` +
-        "O Asaas vai gerar o boleto e avisar o cliente. Isso não tem desfazer.",
+      cobranca.unica
+        ? `Emitir UMA cobrança de ${brl(cobranca.total)} para ${client.name} ` +
+            `(${cobranca.meses} meses × ${brl(cobranca.mensal)}), vencimento em ` +
+            `${novoVenc.split("-").reverse().join("/")}?\n\n` +
+            "É o contrato inteiro de uma vez. O cliente escolhe Pix, boleto ou cartão " +
+            "na fatura, e parcela no cartão dele se quiser.\n\n" +
+            "O Asaas avisa o cliente. Isso não tem desfazer."
+        : `Criar assinatura de R$ ${novoValor} para ${client.name}, primeiro vencimento em ` +
+            `${novoVenc.split("-").reverse().join("/")}?\n\n` +
+            "O Asaas vai gerar o boleto e avisa o cliente. Isso não tem desfazer.",
     );
     if (!ok) return;
     setCriando(true);
@@ -246,17 +307,27 @@ export function EditBillingDialog({
         body: JSON.stringify({
           value: novoValor,
           first_due_date: novoVenc,
+          cycle: billingCycle || null,
           future_value: futuroValor.trim() || null,
           future_from: futuroDe.trim() || null,
         }),
       });
-      const data = (await res.json().catch(() => ({}))) as { error?: string; subscriptionId?: string };
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        subscriptionId?: string | null;
+        paymentId?: string | null;
+      };
       if (!res.ok) {
-        toast.error(data.error || "Não foi possível criar a assinatura.");
+        toast.error(data.error || "Não foi possível criar a cobrança.");
         return;
       }
-      toast.success("Assinatura criada e vinculada.");
+      toast.success(
+        data.paymentId
+          ? `Cobrança de ${brl(cobranca.total)} emitida e vinculada.`
+          : "Assinatura criada e vinculada.",
+      );
       setAsaasSubscriptionId(data.subscriptionId ?? "");
+      setAsaasPaymentId(data.paymentId ?? "");
       setMonthlyValue(novoValor);
       onSaved();
       onOpenChange(false);
@@ -400,6 +471,91 @@ export function EditBillingDialog({
               O Asaas exige este e-mail para abrir o cadastro do cliente.
             </p>
           </div>
+
+          {/* Endereço de cobrança (28/09). Fica recolhido: hoje NADA depende
+              dele — existe para que, quando a nota fiscal entrar, os dados já
+              estejam aqui em vez de espalhados em conversa de WhatsApp. Aberto
+              por padrão empurraria para baixo o que se usa todo dia; e um
+              <details> mostra sozinho quando já há algo preenchido. */}
+          <details className="rounded-lg border border-border" open={!!billingPostalCode}>
+            <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-foreground">
+              Endereço de cobrança
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                {billingCity
+                  ? `${billingCity}${billingState ? `/${billingState}` : ""}`
+                  : "opcional — para a nota fiscal"}
+              </span>
+            </summary>
+            <div className="space-y-2 border-t border-border p-3">
+              <div className="grid grid-cols-3 gap-2">
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">CEP</Label>
+                  <Input
+                    placeholder="só números"
+                    value={billingPostalCode}
+                    onChange={(e) => setBillingPostalCode(e.target.value)}
+                  />
+                </div>
+                <div className="col-span-2 space-y-1">
+                  <Label className="text-xs text-muted-foreground">Cidade</Label>
+                  <Input
+                    placeholder="ex.: Belo Horizonte"
+                    value={billingCity}
+                    onChange={(e) => setBillingCity(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                <div className="col-span-3 space-y-1">
+                  <Label className="text-xs text-muted-foreground">Logradouro</Label>
+                  <Input
+                    placeholder="rua, avenida…"
+                    value={billingAddress}
+                    onChange={(e) => setBillingAddress(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Número</Label>
+                  <Input
+                    placeholder="123"
+                    value={billingAddressNumber}
+                    onChange={(e) => setBillingAddressNumber(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                <div className="col-span-2 space-y-1">
+                  <Label className="text-xs text-muted-foreground">Bairro</Label>
+                  <Input
+                    value={billingProvince}
+                    onChange={(e) => setBillingProvince(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Compl.</Label>
+                  <Input
+                    placeholder="sala 2"
+                    value={billingComplement}
+                    onChange={(e) => setBillingComplement(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">UF</Label>
+                  <Input
+                    placeholder="MG"
+                    maxLength={2}
+                    value={billingState}
+                    onChange={(e) => setBillingState(e.target.value.toUpperCase())}
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Salva com o resto ao clicar em <strong>Salvar</strong>. Nenhuma
+                cobrança depende destes campos — quem tiver, preenche; quando a
+                nota fiscal entrar, já está tudo cadastrado.
+              </p>
+            </div>
+          </details>
 
           {/* ⚠️ 26/09: este campo VIVIA DENTRO do quadro "Cobrança no Asaas",
               colado no botão Buscar e sem rótulo — parecia ferramenta de
@@ -569,10 +725,11 @@ export function EditBillingDialog({
               )}
             </div>
 
-            {(asaasCustomerId || asaasSubscriptionId) && (
+            {(asaasCustomerId || asaasSubscriptionId || asaasPaymentId) && (
               <p className="text-xs text-muted-foreground">
                 Vinculado: {asaasCustomerId || "—"}
                 {asaasSubscriptionId ? ` · assinatura ${asaasSubscriptionId}` : ""}
+                {asaasPaymentId ? ` · cobrança ${asaasPaymentId}` : ""}
               </p>
             )}
 
@@ -580,7 +737,7 @@ export function EditBillingDialog({
                 formulário de criar aparecia do mesmo jeito, convidando a
                 cobrar duas vezes o mesmo cliente. Com parcelamento à vista,
                 avisa em vez de oferecer o botão. */}
-            {!asaasSubscriptionId && (asaasBilling?.installments.length ?? 0) > 0 && (
+            {!asaasSubscriptionId && !asaasPaymentId && (asaasBilling?.installments.length ?? 0) > 0 && (
               <p className="border-t border-border pt-3 text-xs text-amber-600 dark:text-amber-400">
                 Atenção: este cliente já tem parcelamento no Asaas. Se o
                 parcelamento JÁ É o pagamento do CRM, use o valor da parcela
@@ -597,14 +754,18 @@ export function EditBillingDialog({
                 parcelamento = pagamento do CRM, que é só um dos casos. Agora
                 o bloco aparece sempre; quem decide é quem conhece o cliente,
                 com o aviso acima e a confirmação do próprio botão. */}
-            {!asaasSubscriptionId && (
+            {!asaasSubscriptionId && !asaasPaymentId && (
               <div className="space-y-2 border-t border-border pt-3">
                 <Label className="text-xs text-muted-foreground">
-                  Criar assinatura mensal no Asaas
+                  {cobranca.unica
+                    ? `Emitir a cobrança ${CYCLES[billingCycle as BillingCycle].label.toLowerCase()} no Asaas`
+                    : "Criar assinatura mensal no Asaas"}
                 </Label>
                 <div className="flex gap-2">
                   <Input
-                    placeholder="Valor (ex.: 497)"
+                    placeholder={
+                      cobranca.unica ? "Valor POR MÊS (ex.: 130)" : "Valor (ex.: 497)"
+                    }
                     value={novoValor}
                     onChange={(e) => setNovoValor(e.target.value)}
                   />
@@ -631,6 +792,30 @@ export function EditBillingDialog({
                   de valor, então ele fica anotado nas notas do cliente para
                   alguém subir na data.
                 </p>
+
+                {/* O que vai sair, em reais, antes do clique. Num semestral o
+                    número digitado NÃO é o número cobrado, e é o cobrado que
+                    chega no cliente. */}
+                {cobranca.unica && cobranca.mensal > 0 && (
+                  <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+                    <p className="text-sm font-semibold text-foreground">
+                      Vai emitir UMA cobrança de {brl(cobranca.total)}
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {cobranca.meses} meses × {brl(cobranca.mensal)}/mês — o
+                      contrato inteiro de uma vez, que é como o{" "}
+                      {CYCLES[billingCycle as BillingCycle].label.toLowerCase()}{" "}
+                      funciona. O cliente escolhe Pix, boleto ou cartão na fatura
+                      e parcela no cartão dele se quiser; aqui entra integral.
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      No painel o cliente continua valendo{" "}
+                      {brl(cobranca.mensal)} de MRR — receita recorrente é
+                      mensal, e o semestre não multiplica isso.
+                    </p>
+                  </div>
+                )}
+
                 <Button
                   type="button"
                   variant="outline"
@@ -641,7 +826,9 @@ export function EditBillingDialog({
                   {criando ? (
                     <Loader2 className="mr-2 size-4 animate-spin" />
                   ) : null}
-                  Criar assinatura e cobrar
+                  {cobranca.unica && cobranca.mensal > 0
+                    ? `Emitir cobrança de ${brl(cobranca.total)}`
+                    : "Criar assinatura e cobrar"}
                 </Button>
                 <p className="text-xs text-amber-600 dark:text-amber-400">
                   Gera o boleto no Asaas e avisa o cliente. Não tem desfazer.

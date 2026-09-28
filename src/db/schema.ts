@@ -160,12 +160,28 @@ export const organizationBilling = pgTable("organization_billing", {
 	// recebe a fatura costuma ser o financeiro, não quem usa o sistema. O Asaas
 	// exige e-mail para abrir cliente, e é dele que o boleto sai.
 	billingEmail: text("billing_email"),
+	// Endereço de cobrança (migr 0196). Nada depende dele hoje: existe para que,
+	// quando a nota fiscal entrar, os dados já estejam aqui. Os nomes espelham
+	// os campos do Asaas — inclusive `province`, que LÁ significa bairro.
+	billingPostalCode: text("billing_postal_code"),
+	billingAddress: text("billing_address"),
+	billingAddressNumber: text("billing_address_number"),
+	billingComplement: text("billing_complement"),
+	/** BAIRRO (nome do campo no Asaas, não "província"). */
+	billingProvince: text("billing_province"),
+	billingCity: text("billing_city"),
+	/** UF, 2 letras. */
+	billingState: text("billing_state"),
 	notes: text(),
 	lastReminderAt: timestamp("last_reminder_at", { withTimezone: true, mode: 'string' }),
 	// Assinatura no Asaas (gateway de pagamento). Setados no checkout; o webhook
 	// /api/webhooks/asaas vira o status pra 'active' quando o pagamento confirma.
 	asaasCustomerId: text("asaas_customer_id"),
 	asaasSubscriptionId: text("asaas_subscription_id"),
+	// Cobrança ÚNICA (migr 0197) — contrato semestral/anual, que é pago de uma
+	// vez. Coluna própria porque cancelar bate em /payments, não /subscriptions:
+	// um id trocado faria o cancelamento dar 404 e a cobrança seguir de pé.
+	asaasPaymentId: text("asaas_payment_id"),
 	// Documento do cliente (migr 0191): o formulário do site já pedia e
 	// validava, mas mandava direto pro Asaas sem guardar — sem ele não dava
 	// pra achar o cliente lá a partir do CRM.

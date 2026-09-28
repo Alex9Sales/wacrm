@@ -64,6 +64,38 @@ export function contractTotal(fullMonthly: number, cycle: BillingCycle): number 
 }
 
 /**
+ * O que vai ser COBRADO de uma vez, a partir do valor negociado por mês.
+ *
+ * 28/09. Diferente de `contractTotal` num ponto que custa dinheiro: aqui NÃO
+ * entra o desconto de tabela. O valor que chega já é o negociado — a Appia
+ * fechou R$ 130/mês sem o −20% do semestral, porque a venda saiu por uma
+ * revendedora — e aplicar o desconto de novo cobraria menos do que o combinado.
+ * `contractTotal` serve para simular a tabela; esta serve para emitir.
+ *
+ * A regra do contrato longo, do Alex: "assinatura semestral é sempre o valor
+ * total dos 6 meses; ele parcela no cartão dele, mas nós recebemos o valor
+ * integral. Mesma coisa seria se fosse anual." Mensal cobra um mês e repete;
+ * semestral e anual cobram o contrato inteiro uma vez só.
+ *
+ * ⚠️ Existe para ser a ÚNICA fonte desse número. A tela do /admin mostra o total
+ * antes do clique e a rota manda ao Asaas; com a conta escrita em dois lugares,
+ * um dia a tela mostra R$ 780 e a cobrança sai R$ 4.680, e não tem desfazer.
+ */
+export function chargeForCycle(
+  negotiatedMonthly: number,
+  cycle: BillingCycle,
+): { months: number; monthly: number; total: number; oneOff: boolean } {
+  const months = CYCLES[cycle].months
+  const monthly = Number.isFinite(negotiatedMonthly) && negotiatedMonthly > 0
+    ? negotiatedMonthly
+    : 0
+  // Arredonda ao centavo: 130,50 × 6 em ponto flutuante dá 782,9999999999999,
+  // e centavo a mais ou a menos numa cobrança é divergência com o cliente.
+  const total = Math.round(monthly * months * 100) / 100
+  return { months, monthly, total, oneOff: months > 1 }
+}
+
+/**
  * Quando vence a próxima cobrança do ciclo, a partir de uma data.
  *
  * Usa o mesmo dia do mês; quando o dia não existe no mês de destino (31 de

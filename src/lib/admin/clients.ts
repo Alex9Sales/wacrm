@@ -46,7 +46,15 @@ export interface ClientListRow {
   plan: string | null;
   billingPhone: string | null;
   /** Para onde a cobrança vai — não é o e-mail de login (migr 0195). */
-  billingEmail: string | null;
+  // Endereço de cobrança (migr 0196). Nada depende dele hoje: existe para a nota
+  // fiscal, mais à frente. `billingProvince` é BAIRRO — nome do campo no Asaas.
+  billingPostalCode: string | null;
+  billingAddress: string | null;
+  billingAddressNumber: string | null;
+  billingComplement: string | null;
+  billingProvince: string | null;
+  billingCity: string | null;
+  billingState: string | null;
   notes: string | null;
   lastReminderAt: string | null;
   /** Owner member's user (first owner by membership order), if any. */
@@ -63,6 +71,8 @@ export interface ClientListRow {
   billingCycle: string | null;
   asaasCustomerId: string | null;
   asaasSubscriptionId: string | null;
+  /** Cobrança única, semestral/anual (migr 0197). */
+  asaasPaymentId: string | null;
 }
 
 /**
@@ -110,6 +120,13 @@ export async function listClients(): Promise<ClientListRow[]> {
       plan: organizationBilling.plan,
       billingPhone: organizationBilling.billingPhone,
       billingEmail: organizationBilling.billingEmail,
+      billingPostalCode: organizationBilling.billingPostalCode,
+      billingAddress: organizationBilling.billingAddress,
+      billingAddressNumber: organizationBilling.billingAddressNumber,
+      billingComplement: organizationBilling.billingComplement,
+      billingProvince: organizationBilling.billingProvince,
+      billingCity: organizationBilling.billingCity,
+      billingState: organizationBilling.billingState,
       notes: organizationBilling.notes,
       lastReminderAt: organizationBilling.lastReminderAt,
       cpfCnpj: organizationBilling.cpfCnpj,
@@ -117,6 +134,7 @@ export async function listClients(): Promise<ClientListRow[]> {
       billingCycle: organizationBilling.billingCycle,
       asaasCustomerId: organizationBilling.asaasCustomerId,
       asaasSubscriptionId: organizationBilling.asaasSubscriptionId,
+      asaasPaymentId: organizationBilling.asaasPaymentId,
       ownerEmail: user.email,
       ownerName: user.name,
       responsibleId: respUser.id,
@@ -148,6 +166,13 @@ export async function listClients(): Promise<ClientListRow[]> {
     plan: r.plan,
     billingPhone: r.billingPhone,
     billingEmail: r.billingEmail,
+    billingPostalCode: r.billingPostalCode ?? null,
+    billingAddress: r.billingAddress ?? null,
+    billingAddressNumber: r.billingAddressNumber ?? null,
+    billingComplement: r.billingComplement ?? null,
+    billingProvince: r.billingProvince ?? null,
+    billingCity: r.billingCity ?? null,
+    billingState: r.billingState ?? null,
     notes: r.notes,
     lastReminderAt: r.lastReminderAt,
     owner: r.ownerEmail ? { email: r.ownerEmail, name: r.ownerName ?? "" } : null,
@@ -166,6 +191,7 @@ export async function listClients(): Promise<ClientListRow[]> {
     billingCycle: r.billingCycle ?? null,
     asaasCustomerId: r.asaasCustomerId ?? null,
     asaasSubscriptionId: r.asaasSubscriptionId ?? null,
+    asaasPaymentId: r.asaasPaymentId ?? null,
   }));
 }
 

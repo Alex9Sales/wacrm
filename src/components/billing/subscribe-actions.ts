@@ -30,12 +30,44 @@ export interface SubscribeResult {
 }
 
 /**
+ * Dados de cobrança coletados no próprio checkout (28/09).
+ *
+ * Pedido do Alex: "os clientes que for assinando através de anúncio, ou alguém
+ * que recebeu o link e assinou lá depois do teste, também preenche esses campos
+ * na hora da assinatura." Antes, quem assinava sozinho entrava no CRM com
+ * documento e mais nada — e o endereço teria de ser caçado um a um quando a
+ * nota fiscal entrasse.
+ *
+ * TUDO opcional, e de propósito: isto é a tela onde o cliente paga. Exigir CEP
+ * para deixar assinar troca uma nota fiscal mais fácil por uma venda perdida.
+ * O que é obrigatório continua sendo só o documento, que o Asaas exige.
+ */
+export interface SubscribeDetails {
+  billingEmail?: string
+  postalCode?: string
+  address?: string
+  addressNumber?: string
+  complement?: string
+  /** BAIRRO — nome do campo no Asaas. */
+  province?: string
+  city?: string
+  state?: string
+}
+
+/** Texto limpo ou undefined — string vazia no Asaas é pior que campo ausente. */
+function limpo(v: string | undefined, max = 120): string | undefined {
+  const t = (v ?? '').trim()
+  return t ? t.slice(0, max) : undefined
+}
+
+/**
  * Inicia a assinatura de um plano. Retorna a URL de pagamento do Asaas pra o
  * cliente redirecionar. Lança Error com mensagem amigável (validar no cliente).
  */
 export async function subscribeToPlan(
   planKey: string,
   cpfCnpjRaw: string,
+  details: SubscribeDetails = {},
 ): Promise<SubscribeResult> {
   const ctx = await getBillingContext()
   if (!hasMinRole(ctx.role, 'admin')) {
@@ -64,12 +96,30 @@ export async function subscribeToPlan(
     throw new Error('Não encontrei seu e-mail. Recarregue a página e tente de novo.')
   }
 
+  // Endereço: normaliza o que vai virar registro (CEP só dígitos, UF em 2
+  // maiúsculas) e deixa o resto como o cliente escreveu.
+  const postalCode = limpo(details.postalCode)?.replace(/\D/g, '').slice(0, 8) || undefined
+  const state =
+    limpo(details.state)
+      ?.toUpperCase()
+      .replace(/[^A-Z]/g, '')
+      .slice(0, 2) || undefined
+  const billingEmail = limpo(details.billingEmail)?.toLowerCase()
+  const endereco = {
+    postalCode,
+    address: limpo(details.address),
+    addressNumber: limpo(details.addressNumber, 20),
+    complement: limpo(details.complement, 60),
+    province: limpo(details.province, 60),
+  }
+
   try {
     const customer = await findOrCreateCustomer({
       name,
       email,
       cpfCnpj,
       externalReference: ctx.accountId,
+      ...endereco,
     })
 
     const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
@@ -90,6 +140,19 @@ export async function subscribeToPlan(
         plan: plan.name,
         asaasCustomerId: customer,
         asaasSubscriptionId: sub.id,
+        // Documento e valor também: quem assinava sozinho entrava sem eles, e o
+        // painel de MRR ficava com um cliente pagante e valor em branco.
+        cpfCnpj,
+        monthlyValue: plan.price.toFixed(2),
+        billingCycle: 'monthly',
+        billingEmail,
+        billingPostalCode: postalCode,
+        billingAddress: endereco.address,
+        billingAddressNumber: endereco.addressNumber,
+        billingComplement: endereco.complement,
+        billingProvince: endereco.province,
+        billingCity: limpo(details.city, 60),
+        billingState: state,
       })
       .onConflictDoUpdate({
         target: organizationBilling.organizationId,
@@ -97,6 +160,20 @@ export async function subscribeToPlan(
           plan: plan.name,
           asaasCustomerId: customer,
           asaasSubscriptionId: sub.id,
+          cpfCnpj,
+          monthlyValue: plan.price.toFixed(2),
+          billingCycle: 'monthly',
+          // ⚠️ Campo vazio no checkout NÃO apaga o que já está no cadastro: o
+          // cliente pode estar reassinando, e o Alex já ter preenchido o
+          // endereço à mão no /admin. `undefined` no Drizzle não entra no SET.
+          billingEmail: billingEmail ?? undefined,
+          billingPostalCode: postalCode ?? undefined,
+          billingAddress: endereco.address ?? undefined,
+          billingAddressNumber: endereco.addressNumber ?? undefined,
+          billingComplement: endereco.complement ?? undefined,
+          billingProvince: endereco.province ?? undefined,
+          billingCity: limpo(details.city, 60) ?? undefined,
+          billingState: state ?? undefined,
           updatedAt: new Date().toISOString(),
         },
       })

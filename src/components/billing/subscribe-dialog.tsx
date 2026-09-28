@@ -38,6 +38,17 @@ export function SubscribeDialog({
   const [plan, setPlan] = useState<PlanKey>(defaultPlan)
   const [cpfCnpj, setCpfCnpj] = useState('')
   const [loading, setLoading] = useState(false)
+  // Dados para a nota fiscal (28/09). Opcionais: esta é a tela onde o cliente
+  // paga, e exigir CEP para deixar assinar troca uma nota mais fácil por uma
+  // venda perdida. Ficam recolhidos para não dar cara de formulário longo.
+  const [billingEmail, setBillingEmail] = useState('')
+  const [cep, setCep] = useState('')
+  const [rua, setRua] = useState('')
+  const [numero, setNumero] = useState('')
+  const [complemento, setComplemento] = useState('')
+  const [bairro, setBairro] = useState('')
+  const [cidade, setCidade] = useState('')
+  const [uf, setUf] = useState('')
 
   const onSubmit = async () => {
     const digits = cpfCnpj.replace(/\D/g, '')
@@ -47,7 +58,16 @@ export function SubscribeDialog({
     }
     setLoading(true)
     try {
-      const { url } = await subscribeToPlan(plan, cpfCnpj)
+      const { url } = await subscribeToPlan(plan, cpfCnpj, {
+        billingEmail,
+        postalCode: cep,
+        address: rua,
+        addressNumber: numero,
+        complement: complemento,
+        province: bairro,
+        city: cidade,
+        state: uf,
+      })
       // Redireciona pra tela de pagamento do Asaas (Pix/boleto/cartão).
       window.location.href = url
     } catch (err) {
@@ -120,6 +140,76 @@ export function SubscribeDialog({
               são tratados no ambiente seguro do Asaas.
             </p>
           </div>
+
+          <details className="rounded-lg border border-border">
+            <summary className="cursor-pointer px-3 py-2 text-sm text-foreground">
+              Dados para nota fiscal
+              <span className="ml-1.5 text-xs text-muted-foreground">(opcional)</span>
+            </summary>
+            <div className="space-y-2 border-t border-border p-3">
+              <p className="text-[11px] text-muted-foreground">
+                Se preencher agora, sua nota sai sem a gente precisar pedir
+                depois. Não é obrigatório para assinar.
+              </p>
+              <Input
+                type="email"
+                value={billingEmail}
+                onChange={(e) => setBillingEmail(e.target.value)}
+                placeholder="E-mail do financeiro (para o boleto)"
+                autoComplete="email"
+              />
+              <div className="grid grid-cols-3 gap-2">
+                <Input
+                  value={cep}
+                  onChange={(e) => setCep(e.target.value)}
+                  placeholder="CEP"
+                  inputMode="numeric"
+                  autoComplete="postal-code"
+                />
+                <Input
+                  className="col-span-2"
+                  value={cidade}
+                  onChange={(e) => setCidade(e.target.value)}
+                  placeholder="Cidade"
+                  autoComplete="address-level2"
+                />
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                <Input
+                  className="col-span-3"
+                  value={rua}
+                  onChange={(e) => setRua(e.target.value)}
+                  placeholder="Rua / avenida"
+                  autoComplete="address-line1"
+                />
+                <Input
+                  value={numero}
+                  onChange={(e) => setNumero(e.target.value)}
+                  placeholder="Nº"
+                />
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                <Input
+                  className="col-span-2"
+                  value={bairro}
+                  onChange={(e) => setBairro(e.target.value)}
+                  placeholder="Bairro"
+                />
+                <Input
+                  value={complemento}
+                  onChange={(e) => setComplemento(e.target.value)}
+                  placeholder="Compl."
+                />
+                <Input
+                  value={uf}
+                  onChange={(e) => setUf(e.target.value.toUpperCase())}
+                  placeholder="UF"
+                  maxLength={2}
+                  autoComplete="address-level1"
+                />
+              </div>
+            </div>
+          </details>
         </div>
 
         <DialogFooter>

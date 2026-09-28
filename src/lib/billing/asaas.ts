@@ -112,6 +112,15 @@ export interface CreateCustomerInput {
   mobilePhone?: string
   /** id da organização — pra amarrar o pagamento à conta no webhook. */
   externalReference?: string
+  // Endereço (migr 0196). Todos opcionais: o Asaas abre cliente sem eles, e
+  // exigir endereço para poder cobrar travaria a cobrança por causa de um dado
+  // que só vai importar quando a nota fiscal entrar.
+  postalCode?: string
+  address?: string
+  addressNumber?: string
+  complement?: string
+  /** BAIRRO — é isto que `province` quer dizer no Asaas. */
+  province?: string
 }
 
 export async function createCustomer(input: CreateCustomerInput): Promise<string> {
@@ -159,6 +168,42 @@ export async function createSubscription(
   })
 }
 
+export interface CreatePaymentInput {
+  customer: string
+  value: number
+  /** 'YYYY-MM-DD' */
+  dueDate: string
+  description: string
+  externalReference?: string
+}
+
+export interface AsaasPayment {
+  id: string
+  status?: string
+  invoiceUrl?: string
+}
+
+/**
+ * Cobrança ÚNICA (28/09) — é o que um contrato semestral ou anual é de verdade.
+ *
+ * A regra, do Alex: "assinatura semestral é sempre o valor total dos 6 meses.
+ * Ele parcela no cartão dele, mas nós recebemos o valor integral. Mesma coisa
+ * seria se fosse anual." Ou seja: o compromisso longo NÃO é uma mensalidade que
+ * se repete seis vezes — é um pagamento só, à vista para nós, e o parcelamento
+ * (se houver) acontece entre o cliente e o cartão dele, não aqui.
+ *
+ * Por isso semestral/anual usa /payments e não /subscriptions: assinatura no
+ * Asaas é cobrança recorrente, e criar uma com o total do semestre geraria
+ * R$ 780 a cada mês. `billingType: UNDEFINED` deixa o cliente escolher Pix,
+ * boleto ou cartão na fatura — foi o pedido do Rafael para a Appia.
+ */
+export async function createPayment(input: CreatePaymentInput): Promise<AsaasPayment> {
+  return asaasFetch<AsaasPayment>('/payments', {
+    method: 'POST',
+    body: { billingType: 'UNDEFINED', ...input },
+  })
+}
+
 /** invoiceUrl da 1ª cobrança da assinatura (tela de pagamento do Asaas). */
 export async function firstInvoiceUrl(subscriptionId: string): Promise<string | null> {
   const r = await asaasFetch<{ data?: { invoiceUrl?: string }[] }>(
@@ -178,6 +223,21 @@ export async function cancelSubscription(subscriptionId: string): Promise<void> 
     })
   } catch (err) {
     if (err instanceof AsaasError && err.status === 404) return // já não existe
+    throw err
+  }
+}
+
+/**
+ * Cancela uma cobrança ÚNICA (contrato semestral/anual).
+ *
+ * Endpoint diferente do de assinatura de propósito — ver migr 0197. Como lá,
+ * 404 é sucesso: se a cobrança não existe mais, o objetivo já está cumprido.
+ */
+export async function cancelPayment(paymentId: string): Promise<void> {
+  try {
+    await asaasFetch(`/payments/${encodeURIComponent(paymentId)}`, { method: 'DELETE' })
+  } catch (err) {
+    if (err instanceof AsaasError && err.status === 404) return
     throw err
   }
 }

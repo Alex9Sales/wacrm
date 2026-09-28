@@ -12,7 +12,7 @@ import { eq } from "drizzle-orm";
 
 import { db, organizationBilling } from "@/db";
 import { firstOrNull } from "@/db/helpers";
-import { cancelSubscription } from "@/lib/billing/asaas";
+import { cancelPayment, cancelSubscription } from "@/lib/billing/asaas";
 import { logBillingEvent } from "@/lib/admin/billing-events";
 
 export interface AdminActor {
@@ -43,6 +43,7 @@ interface BillingSnap {
   cancelAt: string | null;
   deletedAt: string | null;
   asaasSubscriptionId: string | null;
+  asaasPaymentId: string | null;
 }
 
 async function loadBilling(orgId: string): Promise<BillingSnap | null> {
@@ -54,6 +55,7 @@ async function loadBilling(orgId: string): Promise<BillingSnap | null> {
         cancelAt: organizationBilling.cancelAt,
         deletedAt: organizationBilling.deletedAt,
         asaasSubscriptionId: organizationBilling.asaasSubscriptionId,
+        asaasPaymentId: organizationBilling.asaasPaymentId,
       })
       .from(organizationBilling)
       .where(eq(organizationBilling.organizationId, orgId))
@@ -89,15 +91,35 @@ async function applyBilling(
 }
 
 /** Cancela no Asaas (best-effort). Retorna uma msg de aviso ou null (ok). */
-async function tryCancelAsaas(subId: string | null): Promise<string | null> {
-  if (!subId) return null;
-  try {
-    await cancelSubscription(subId);
-    return null;
-  } catch (err) {
-    console.error("[lifecycle] falha ao cancelar assinatura no Asaas", err);
-    return "Acesso tratado, mas não consegui cancelar a assinatura no Asaas — confira no painel do Asaas.";
+/**
+ * Para de cobrar no Asaas — nos DOIS regimes.
+ *
+ * Mensal é assinatura (repete); semestral/anual é cobrança única (migr 0197), e
+ * cada um sai por um endpoint diferente. Cancelar só a assinatura deixaria a
+ * cobrança do semestral de pé: conta encerrada e cliente recebendo boleto.
+ *
+ * Ausência de id não é falha: conta sem nada no Asaas não tem o que cancelar.
+ */
+async function tryCancelAsaas(b: BillingSnap | null): Promise<string | null> {
+  const falhas: string[] = [];
+  if (b?.asaasSubscriptionId) {
+    try {
+      await cancelSubscription(b.asaasSubscriptionId);
+    } catch (err) {
+      console.error("[lifecycle] falha ao cancelar assinatura no Asaas", err);
+      falhas.push("a assinatura");
+    }
   }
+  if (b?.asaasPaymentId) {
+    try {
+      await cancelPayment(b.asaasPaymentId);
+    } catch (err) {
+      console.error("[lifecycle] falha ao cancelar cobrança no Asaas", err);
+      falhas.push("a cobrança");
+    }
+  }
+  if (!falhas.length) return null;
+  return `Acesso tratado, mas não consegui cancelar ${falhas.join(" nem ")} no Asaas — confira no painel do Asaas.`;
 }
 
 /**
@@ -115,7 +137,7 @@ export async function cancelClient(
     throw new LifecycleError("Esta assinatura já está cancelada.");
 
   const now = Date.now();
-  const asaasWarning = await tryCancelAsaas(b?.asaasSubscriptionId ?? null);
+  const asaasWarning = await tryCancelAsaas(b);
 
   const dueMs = b?.dueAt ? new Date(b.dueAt).getTime() : null;
   // fim do período pago; sem due válido no futuro (ou immediate) → agora.
@@ -142,7 +164,7 @@ export async function cancelClient(
     metadata: {
       immediate: !!opts.immediate,
       effective_at: cancelAtIso,
-      asaas_canceled: !asaasWarning && !!b?.asaasSubscriptionId,
+      asaas_canceled: !asaasWarning && !!(b?.asaasSubscriptionId || b?.asaasPaymentId),
     },
   });
 
@@ -162,7 +184,7 @@ export async function deleteClient(
   const b = await loadBilling(orgId);
   if (b?.deletedAt) throw new LifecycleError("Esta conta já foi excluída.");
 
-  const asaasWarning = await tryCancelAsaas(b?.asaasSubscriptionId ?? null);
+  const asaasWarning = await tryCancelAsaas(b);
   const nowIso = new Date().toISOString();
 
   await applyBilling(orgId, {
@@ -180,7 +202,7 @@ export async function deleteClient(
     actorId: actor.userId,
     actorLabel: actor.email,
     reason: opts.reason ?? null,
-    metadata: { asaas_canceled: !asaasWarning && !!b?.asaasSubscriptionId },
+    metadata: { asaas_canceled: !asaasWarning && !!(b?.asaasSubscriptionId || b?.asaasPaymentId) },
   });
 
   return { ok: true, asaasWarning: asaasWarning ?? undefined };

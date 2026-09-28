@@ -30,6 +30,14 @@ interface PatchBody {
   billing_phone?: unknown;
   /** Para onde a cobrança vai (migr 0195) — não é o e-mail de login. */
   billing_email?: unknown;
+  billing_postal_code?: unknown;
+  billing_address?: unknown;
+  billing_address_number?: unknown;
+  billing_complement?: unknown;
+  billing_province?: unknown;
+  billing_city?: unknown;
+  billing_state?: unknown;
+  asaas_payment_id?: unknown;
   notes?: unknown;
   responsible_admin_id?: unknown;
   // Vínculo com o Asaas (24/09): documento do cliente, valor realmente
@@ -230,7 +238,33 @@ export async function PATCH(
     if (responsibleAdminId !== undefined)
       updates.responsibleAdminId = responsibleAdminId;
     if (cpfCnpj !== undefined) updates.cpfCnpj = cpfCnpj;
+    // Endereço de cobrança (migr 0196). Normaliza o que o banco vai guardar: CEP
+    // só dígitos e UF em maiúsculas, para que uma busca não dependa de máscara.
+    // O resto vai como veio — abreviar logradouro na mão é como endereço erra.
+    const billingPostalCode = ((v) =>
+      typeof v === "string" ? v.replace(/\D/g, "").slice(0, 8) || null : v)(
+      optionalText(body.billing_postal_code),
+    );
+    const billingState = ((v) =>
+      typeof v === "string" ? v.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2) || null : v)(
+      optionalText(body.billing_state),
+    );
+    const billingAddress = optionalText(body.billing_address);
+    const billingAddressNumber = optionalText(body.billing_address_number);
+    const billingComplement = optionalText(body.billing_complement);
+    const billingProvince = optionalText(body.billing_province);
+    const billingCity = optionalText(body.billing_city);
+    const asaasPaymentId = optionalText(body.asaas_payment_id);
+
     if (billingEmail !== undefined) updates.billingEmail = billingEmail;
+    if (billingPostalCode !== undefined) updates.billingPostalCode = billingPostalCode;
+    if (billingAddress !== undefined) updates.billingAddress = billingAddress;
+    if (billingAddressNumber !== undefined) updates.billingAddressNumber = billingAddressNumber;
+    if (billingComplement !== undefined) updates.billingComplement = billingComplement;
+    if (billingProvince !== undefined) updates.billingProvince = billingProvince;
+    if (billingCity !== undefined) updates.billingCity = billingCity;
+    if (billingState !== undefined) updates.billingState = billingState;
+    if (asaasPaymentId !== undefined) updates.asaasPaymentId = asaasPaymentId;
     if (monthlyValue !== undefined) updates.monthlyValue = monthlyValue;
     if (billingCycle !== undefined) updates.billingCycle = billingCycle;
     if (asaasCustomerId !== undefined) updates.asaasCustomerId = asaasCustomerId;
@@ -305,6 +339,14 @@ export async function PATCH(
           billingCycle: billingCycle ?? null,
           asaasCustomerId: asaasCustomerId ?? null,
           asaasSubscriptionId: asaasSubscriptionId ?? null,
+          asaasPaymentId: asaasPaymentId ?? null,
+          billingPostalCode: billingPostalCode ?? null,
+          billingAddress: billingAddress ?? null,
+          billingAddressNumber: billingAddressNumber ?? null,
+          billingComplement: billingComplement ?? null,
+          billingProvince: billingProvince ?? null,
+          billingCity: billingCity ?? null,
+          billingState: billingState ?? null,
         })
         .returning();
     }

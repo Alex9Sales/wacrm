@@ -23,6 +23,15 @@ export interface ClientListRow {
   billingPhone: string | null;
   /** Para onde a cobrança vai — não é o e-mail de login (migr 0195). */
   billingEmail: string | null;
+  // Endereço de cobrança (migr 0196). Nada depende dele hoje: existe para a nota
+  // fiscal, mais à frente. `billingProvince` é BAIRRO — nome do campo no Asaas.
+  billingPostalCode: string | null;
+  billingAddress: string | null;
+  billingAddressNumber: string | null;
+  billingComplement: string | null;
+  billingProvince: string | null;
+  billingCity: string | null;
+  billingState: string | null;
   notes: string | null;
   lastReminderAt: string | null;
   owner: { email: string; name: string } | null;
@@ -37,6 +46,8 @@ export interface ClientListRow {
   billingCycle: string | null;
   asaasCustomerId: string | null;
   asaasSubscriptionId: string | null;
+  /** Cobrança única, semestral/anual (migr 0197). */
+  asaasPaymentId: string | null;
 }
 
 /** A platform admin (Alex/Rafael) that can own clients — for the picker. */
