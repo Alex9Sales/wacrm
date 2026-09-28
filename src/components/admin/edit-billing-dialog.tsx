@@ -17,6 +17,7 @@ import {
   type BillingCycle,
 } from "@/lib/billing/cycle";
 import { PLAN_LIST } from "@/lib/billing/plans";
+import { toBrNationalOrNull } from "@/lib/whatsapp/phone-utils";
 import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -134,6 +135,24 @@ export function EditBillingDialog({
     // mostrado aqui e o cobrado lá vierem de contas diferentes, um dia divergem.
     const c = chargeForCycle(mensal, ciclo);
     return { mensal: c.monthly, meses: c.months, total: c.total, unica: c.oneOff };
+  })();
+
+  // 📞 Telefone que não parece completo (28/09). A Appia foi cadastrada com
+  // 551996390004 — 8 dígitos depois do DDD, faltando o 9º. O campo aceitava
+  // calado, e dois sistemas ficavam quietos com um número que não existe: o
+  // lembrete de mensalidade nunca chegaria, e o Asaas recusou o cadastro.
+  // É AVISO, não trava: número estrangeiro e fixo antigo existem, e bloquear o
+  // salvamento por um palpite é pior do que deixar alguém conferir.
+  const avisoTelefone = (() => {
+    const d = billingPhone.replace(/\D/g, "");
+    if (!d) return null;
+    if (!d.startsWith("55")) return "Parece faltar o 55 na frente (DDI do Brasil).";
+    const nac = toBrNationalOrNull(d);
+    if (!nac) return "Esse número não parece um telefone brasileiro completo — confira.";
+    if (nac.length === 10) {
+      return "Parece faltar o 9º dígito: celular tem 9 dígitos depois do DDD. Se for fixo, pode ignorar.";
+    }
+    return null;
   })();
 
   // Hydrate the form when the dialog opens for a client.
@@ -473,8 +492,14 @@ export function EditBillingDialog({
               value={billingPhone}
               onChange={(e) => setBillingPhone(e.target.value)}
             />
+            {avisoTelefone && (
+              <p className="rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-1.5 text-xs text-amber-700 dark:text-amber-400">
+                {avisoTelefone}
+              </p>
+            )}
             <p className="text-xs text-muted-foreground">
-              Formato E.164 (só dígitos, com DDI 55). Necessário para
+              Formato E.164 (só dígitos, com DDI 55) — o 55 sai sozinho ao
+              cadastrar no Asaas, que quer o número sem o país. Necessário para
               enviar lembretes.
             </p>
           </div>
