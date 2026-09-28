@@ -28,6 +28,7 @@ import {
   Pause,
   BellOff,
   Bell,
+  X,
 } from 'lucide-react';
 
 import { toast } from 'sonner';
@@ -1216,7 +1217,12 @@ export function IncomingCallModal() {
 
   // Minimized: a small floating pill so the whole CRM stays usable during a
   // call (reply to other clients while talking, WhatsApp-style).
-  if (minimized && front.phase === 'active') {
+  //
+  // Vale também pra chamada TOCANDO (Rafael, 28/09): dispensar o modal não é
+  // recusar. O cliente continua chamando, a pílula fica no canto e dá pra
+  // atender até o fim do toque — só o som sai do caminho.
+  if (minimized && (front.phase === 'active' || front.phase === 'ringing')) {
+    const ringing = front.phase === 'ringing';
     return (
       <div className="fixed bottom-4 right-4 z-[60] flex flex-col items-end">
         {legStack}
@@ -1230,20 +1236,34 @@ export function IncomingCallModal() {
               {who(front)}
             </span>
             <span className="text-xs tabular-nums text-muted-foreground">
-              {frontHeld ? 'em espera' : formatCallDuration(front.seconds)}
+              {ringing
+                ? 'chamando…'
+                : frontHeld
+                  ? 'em espera'
+                  : formatCallDuration(front.seconds)}
             </span>
           </div>
-          <button
-            onClick={() => toggleMute(front.key)}
-            title={front.muted ? 'Ativar microfone' : 'Silenciar'}
-            className={`flex size-8 items-center justify-center rounded-full transition ${
-              front.muted
-                ? 'bg-red-500 text-white'
-                : 'bg-muted text-muted-foreground hover:bg-muted/70'
-            }`}
-          >
-            {front.muted ? <MicOff className="size-4" /> : <Mic className="size-4" />}
-          </button>
+          {ringing ? (
+            <button
+              onClick={() => answer(front.key)}
+              title="Atender"
+              className="flex size-8 items-center justify-center rounded-full bg-emerald-500 text-white transition hover:bg-emerald-600"
+            >
+              <Phone className="size-4" />
+            </button>
+          ) : (
+            <button
+              onClick={() => toggleMute(front.key)}
+              title={front.muted ? 'Ativar microfone' : 'Silenciar'}
+              className={`flex size-8 items-center justify-center rounded-full transition ${
+                front.muted
+                  ? 'bg-red-500 text-white'
+                  : 'bg-muted text-muted-foreground hover:bg-muted/70'
+              }`}
+            >
+              {front.muted ? <MicOff className="size-4" /> : <Mic className="size-4" />}
+            </button>
+          )}
           <button
             onClick={() => setMinimized(false)}
             title="Expandir"
@@ -1252,8 +1272,8 @@ export function IncomingCallModal() {
             <Maximize2 className="size-4" />
           </button>
           <button
-            onClick={() => hangup(front.key)}
-            title="Desligar"
+            onClick={() => (ringing ? reject(front.key) : hangup(front.key))}
+            title={ringing ? 'Recusar' : 'Desligar'}
             className="flex size-8 items-center justify-center rounded-full bg-red-500 text-white transition hover:bg-red-600"
           >
             <PhoneOff className="size-4" />
@@ -1275,6 +1295,21 @@ export function IncomingCallModal() {
               className="absolute right-3 top-3 flex size-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted"
             >
               <Minimize2 className="size-4" />
+            </button>
+          )}
+          {/* Tocando: sair da frente SEM recusar (Rafael, 28/09). Silencia o
+              toque e manda pra pílula do canto — o cliente continua chamando e
+              dá pra atender de lá. Recusar tem botão próprio, vermelho. */}
+          {front.phase === 'ringing' && (
+            <button
+              onClick={() => {
+                if (!front.ringMuted) toggleRingMute(front.key);
+                setMinimized(true);
+              }}
+              title="Ignorar: fecha a janela e silencia — a chamada continua no canto"
+              className="absolute right-3 top-3 flex size-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted"
+            >
+              <X className="size-4" />
             </button>
           )}
           <div

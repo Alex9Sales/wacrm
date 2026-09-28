@@ -14,10 +14,11 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { AlertTriangle, Loader2, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import {
+  dismissFailedSchedules,
   listBrokenChannelSchedules,
   reassignScheduledChannel,
   type BrokenChannelSchedules,
@@ -76,6 +77,35 @@ export function BrokenChannelAlert({ onFixed }: { onFixed: () => void }) {
       onFixed()
     } catch {
       toast.error('Falha ao trocar o número.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // "x" do aviso: a mensagem que falhou vira cancelada e o aviso some. Sem
+  // isso, quem tinha falha velha ficava com o alerta para sempre — reenviar
+  // não era opção (Rafael, 28/09: "umas nem vai mais fazer sentido enviar").
+  async function dismiss(row: BrokenChannelSchedules) {
+    if (
+      !window.confirm(
+        `Descartar ${row.failed} mensagem${row.failed > 1 ? 's' : ''} que falhou no número "${row.channel_name ?? 'sem nome'}"?\n\nElas não serão enviadas e o aviso some. Ficam registradas como canceladas.`,
+      )
+    )
+      return
+    setBusy(row.channel_id)
+    try {
+      const res = await dismissFailedSchedules({ channelId: row.channel_id })
+      if (!res.ok) {
+        toast.error(res.error)
+        return
+      }
+      toast.success(
+        `${res.dismissed} mensagem(ns) descartada(s) — não serão enviadas.`,
+      )
+      load()
+      onFixed()
+    } catch {
+      toast.error('Falha ao descartar as mensagens.')
     } finally {
       setBusy(null)
     }
@@ -162,6 +192,19 @@ export function BrokenChannelAlert({ onFixed }: { onFixed: () => void }) {
                         </option>
                       ))}
                     </select>
+                  )}
+
+                  {row.failed > 0 && (
+                    <Button
+                      variant="ghost"
+                      onClick={() => void dismiss(row)}
+                      disabled={busy === row.channel_id}
+                      title={`Descartar as ${row.failed} que falharam — não serão enviadas`}
+                      className="order-last text-muted-foreground hover:text-destructive"
+                    >
+                      <X className="mr-1.5 size-4" />
+                      Descartar {row.failed}
+                    </Button>
                   )}
 
                   <Button

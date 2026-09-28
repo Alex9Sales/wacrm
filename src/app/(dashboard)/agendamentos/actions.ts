@@ -626,3 +626,63 @@ export async function reassignScheduledChannel(input: {
     return { ok: false, error: 'Falha ao trocar o número das agendadas.' }
   }
 }
+
+/**
+ * Descarta as agendadas que FALHARAM num número — o "x" do aviso.
+ *
+ * Rafael, 28/09: *"das mensagens que deu erro, coloca um x para apagar ou
+ * limpar, porque umas nem vai mais fazer sentido enviar"*. O aviso nasce dos
+ * dados, então esconder na tela não adianta: ele volta no próximo load. Quem
+ * some de verdade é a mensagem — vira `cancelled`, que é registro, não apagar.
+ *
+ * Mexe SÓ nas que falharam: pendente num número fora do ar ainda pode sair
+ * trocando o número, e cancelar isso junto seria decidir pelo operador.
+ */
+export async function dismissFailedSchedules(input: {
+  channelId: string
+}): Promise<{ ok: true; dismissed: number } | { ok: false; error: string }> {
+  try {
+    const ctx = await requireRole('supervisor')
+    const channelId = input.channelId?.trim()
+    if (!channelId) return { ok: false, error: 'Número não informado.' }
+
+    const rows = await db
+      .select({ id: scheduledMessages.id })
+      .from(scheduledMessages)
+      .innerJoin(
+        conversations,
+        eq(scheduledMessages.conversationId, conversations.id),
+      )
+      .where(
+        and(
+          eq(scheduledMessages.accountId, ctx.accountId),
+          eq(conversations.channelId, channelId),
+          eq(scheduledMessages.status, 'failed'),
+        ),
+      )
+    if (rows.length === 0) return { ok: true, dismissed: 0 }
+
+    await db
+      .update(scheduledMessages)
+      .set({
+        status: 'cancelled',
+        lastError: 'descartada pelo operador (não fazia mais sentido enviar)',
+      })
+      .where(
+        and(
+          eq(scheduledMessages.accountId, ctx.accountId),
+          inArray(
+            scheduledMessages.id,
+            rows.map((r) => r.id),
+          ),
+          eq(scheduledMessages.status, 'failed'),
+        ),
+      )
+
+    revalidatePath('/agendamentos')
+    return { ok: true, dismissed: rows.length }
+  } catch (err) {
+    console.error('[agendamentos] dismissFailedSchedules falhou:', err)
+    return { ok: false, error: 'Falha ao descartar as mensagens.' }
+  }
+}
