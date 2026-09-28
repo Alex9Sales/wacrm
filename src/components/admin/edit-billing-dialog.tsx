@@ -169,9 +169,16 @@ export function EditBillingDialog({
     setHydratedId(client.id);
   }
 
-  async function handleSave() {
-    if (!client) return;
-    setSubmitting(true);
+  /**
+   * Grava o cadastro. Devolve true se salvou.
+   *
+   * Separado do botão Salvar porque EMITIR COBRANÇA precisa disto antes: a rota
+   * de cobrança lê endereço, e-mail e documento do BANCO, não da tela. Sem
+   * salvar primeiro, o endereço recém-digitado simplesmente não ia junto para o
+   * Asaas — e ninguém ficaria sabendo, que é o pior tipo de falha.
+   */
+  async function salvarCadastro(): Promise<boolean> {
+    if (!client) return false;
     try {
       const res = await fetch(`/api/admin/clients/${client.id}`, {
         method: "PATCH",
@@ -204,7 +211,7 @@ export function EditBillingDialog({
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
         toast.error(payload.error || "Não foi possível salvar.");
-        return;
+        return false;
       }
       // ⚠️ 25/09: salvou, MAS este telefone já é o de cobrança de outro
       // cliente — foi assim que 5 clientes ficaram com o número do
@@ -214,14 +221,24 @@ export function EditBillingDialog({
       };
       if (saved.phoneWarning) {
         toast.warning(saved.phoneWarning, { duration: 15_000 });
-      } else {
-        toast.success("Cobrança atualizada.");
       }
-      onSaved();
-      onOpenChange(false);
+      return true;
     } catch (err) {
       console.error("[EditBillingDialog] save error:", err);
       toast.error("Não foi possível conectar ao servidor.");
+      return false;
+    }
+  }
+
+  async function handleSave() {
+    if (!client) return;
+    setSubmitting(true);
+    try {
+      if (await salvarCadastro()) {
+        toast.success("Cobrança atualizada.");
+        onSaved();
+        onOpenChange(false);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -301,6 +318,11 @@ export function EditBillingDialog({
     if (!ok) return;
     setCriando(true);
     try {
+      // Grava o cadastro ANTES de cobrar: a rota lê endereço, e-mail e documento
+      // do banco. Sem isto, o endereço digitado agora não iria para o Asaas e o
+      // cliente seria aberto lá sem ele — calado.
+      if (!(await salvarCadastro())) return;
+
       const res = await fetch(`/api/admin/clients/${client.id}/subscription`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
