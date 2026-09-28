@@ -15,6 +15,7 @@ import { firstOrNull } from '@/db/helpers'
 import { requireApiKey } from '@/lib/auth/api-context'
 import { ok, fail, toApiErrorResponse, badRequest } from '@/lib/api/v1/respond'
 import { resolveAuditUserId } from '@/lib/api/v1/contacts'
+import { enqueueScheduledMessage } from '@/lib/queue/queues'
 
 export async function GET(request: Request) {
   try {
@@ -141,6 +142,25 @@ export async function POST(request: Request) {
         .returning({ id: scheduledMessages.id }),
     )
     if (!created) return fail('internal', 'Failed to schedule', 500)
+
+    // Gravar a linha NÃO manda nada: quem envia é o job da fila, e o worker de
+    // agendadas só trabalha por job (não varre pendentes). Esta rota criava a
+    // linha e parava aí, então tudo que era agendado pela API ficava `pending`
+    // para sempre — o cliente via na Central de Agendamentos e a mensagem nunca
+    // saía (Rafael Odonto, 28/09: 13 presas, 8 já vencidas). A tela sempre
+    // enfileirou; a API não. Rollback igual ao da tela: sem job, sem linha.
+    try {
+      await enqueueScheduledMessage(created.id, {
+        delayMs: when.getTime() - Date.now(),
+      })
+    } catch (err) {
+      await db
+        .delete(scheduledMessages)
+        .where(eq(scheduledMessages.id, created.id))
+      console.error('[api/v1/scheduled-messages] enqueue falhou:', err)
+      return fail('internal', 'Could not schedule (queue unavailable)', 503)
+    }
+
     return ok(
       {
         id: created.id,
