@@ -28,6 +28,7 @@
 // ============================================================
 
 import { and, desc, eq } from 'drizzle-orm';
+import { stripInstructionMarkers } from './instruction-markers';
 
 import {
   db,
@@ -228,7 +229,6 @@ export async function sendMessageToConversation(
   const {
     conversationId,
     messageType,
-    contentText,
     mediaUrl,
     filename,
     mimetype,
@@ -240,6 +240,8 @@ export async function sendMessageToConversation(
     subject,
     emailTo,
   } = params;
+  // let: a rede de segurança abaixo pode reescrever o texto.
+  let { contentText } = params;
 
   if (!conversationId) {
     throw new SendMessageError(
@@ -250,6 +252,28 @@ export async function sendMessageToConversation(
   }
 
   validateSendMessageParams({ messageType, contentText, mediaUrl, templateName });
+
+  // 🛡️ Marcador de instrução NUNCA chega ao cliente (29/09).
+  //
+  // A Aline, lead da Zelo, recebeu "…analisar tudo com calma.
+  // [[ENVIAR: Circular de Oferta de Franquia]]" — o marcador cru, e sem o
+  // arquivo. O motor da IA já tinha uma rede que limpa isso, mas ela mora
+  // dentro dele: qualquer outro caminho de envio (rascunho da IA aceito por um
+  // humano, integração, automação futura) passa direto. Rede de segurança só
+  // vale se estiver no lugar por onde TODO MUNDO passa, e este é esse lugar.
+  //
+  // Aqui só se REMOVE — enviar o material exige o catálogo do agente, que este
+  // módulo não conhece. Mandar um texto sem o anexo é ruim; mandar o texto com
+  // "[[ENVIAR:…]]" à mostra é pior, porque expõe o encanamento ao cliente.
+  // Quem limpa avisa no log, para que o material que não foi tenha rastro.
+  const limpo = stripInstructionMarkers(contentText ?? null);
+  if (limpo.removed.length) {
+    console.warn(
+      `[send-message] marcador removido antes de enviar (conversa ${conversationId}):`,
+      limpo.removed.join(' · '),
+    );
+    contentText = limpo.text;
+  }
 
   const isMediaKind = (MEDIA_KINDS as readonly string[]).includes(messageType);
 
