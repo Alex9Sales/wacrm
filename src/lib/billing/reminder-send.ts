@@ -9,7 +9,7 @@
 
 import { and, desc, eq } from 'drizzle-orm'
 
-import { db, member, messages as messagesTable } from '@/db'
+import { db, member, messageTemplates, messages as messagesTable } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import type { ChannelCtx } from '@/lib/channels/provider'
 import { getProvider } from '@/lib/channels/registry'
@@ -49,10 +49,63 @@ const TEMPLATE_POR_DEGRAU: Record<number, string> = {
   3: 'fluxia_mensalidade_em_aberto',
 }
 
+/**
+ * A versão COM o botão "Pagar agora" (29/09). Mesmo corpo, mais um botão de URL
+ * dinâmica: `https://www.asaas.com/i/{{1}}`, onde {{1}} é o id da cobrança sem
+ * o prefixo `pay_` — que é exatamente como o Asaas monta o invoiceUrl:
+ *
+ *   cobrança  pay_govlijjcptmio2y8
+ *   link      https://www.asaas.com/i/govlijjcptmio2y8
+ *
+ * Preferido sempre que existir APROVADO e o cliente tiver cobrança em aberto.
+ * Enquanto a Meta não aprovar, ou quando não há cobrança aberta para apontar,
+ * cai no template sem botão — que continua saindo. Assim isto entra no ar antes
+ * da aprovação sem depender dela.
+ */
+const TEMPLATE_COM_LINK: Record<number, string> = {
+  [-5]: 'fluxia_mensalidade_5_dias_link',
+  0: 'fluxia_mensalidade_vence_hoje_link',
+  3: 'fluxia_mensalidade_em_aberto_link',
+}
+
+/** O sufixo que o botão dinâmico recebe: o id da fatura, sem a URL. */
+export function idDaFatura(invoiceUrl: string | null | undefined): string | null {
+  const u = (invoiceUrl ?? '').trim()
+  if (!u) return null
+  const caminho = u.split(/[?#]/)[0].replace(/\/+$/, '') // sem query, âncora, barra final
+  const fim = caminho.split('/').pop() ?? ''
+  // O id do Asaas é alfanumérico e longo. Sem ponto de propósito: "asaas.com"
+  // também é o último pedaço de "https://www.asaas.com/" e não é id nenhum.
+  return /^[A-Za-z0-9_-]{8,}$/.test(fim) ? fim : null
+}
+
+/** O template com botão existe e está aprovado nesta conta? */
+async function templateComLinkAprovado(
+  accountId: string,
+  nome: string,
+): Promise<boolean> {
+  const row = firstOrNull(
+    await db
+      .select({ id: messageTemplates.id })
+      .from(messageTemplates)
+      .where(
+        and(
+          eq(messageTemplates.accountId, accountId),
+          eq(messageTemplates.name, nome),
+          eq(messageTemplates.status, 'APPROVED'),
+        ),
+      )
+      .limit(1),
+  )
+  return !!row
+}
+
 export interface TemplateDoLembrete {
   step: number
   /** {{1}} {{2}} {{3}} — nome, valor, dia. */
   params: [string, string, string]
+  /** invoiceUrl da cobrança em aberto — vira o botão "Pagar agora". */
+  invoiceUrl?: string | null
 }
 
 export async function enviarRegistrando(
@@ -108,6 +161,21 @@ export async function enviarRegistrando(
     })
 
     if (modo === 'template' && templateName && tpl) {
+      // Prefere a versão com "Pagar agora" quando ela existe aprovada E há uma
+      // cobrança para apontar. Botão que leva a lugar nenhum é pior que ausência
+      // de botão: o cliente clica, não acontece nada, e a mensagem perde a fé.
+      const fatura = idDaFatura(tpl.invoiceUrl)
+      const comLink = TEMPLATE_COM_LINK[tpl.step]
+      if (fatura && comLink && (await templateComLinkAprovado(channel.accountId, comLink))) {
+        await sendMessageToConversation(channel.accountId, {
+          conversationId: conv.conversation.id,
+          messageType: 'template',
+          templateName: comLink,
+          templateLanguage: 'pt_BR',
+          templateMessageParams: { body: tpl.params, buttonParams: { 0: fatura } },
+        })
+        return `por template com link (${comLink})`
+      }
       await sendMessageToConversation(channel.accountId, {
         conversationId: conv.conversation.id,
         messageType: 'template',

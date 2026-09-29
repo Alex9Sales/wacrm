@@ -74,6 +74,7 @@ export async function POST(
           plan: organizationBilling.plan,
           dueAt: organizationBilling.dueAt,
           monthlyValue: organizationBilling.monthlyValue,
+          asaasCustomerId: organizationBilling.asaasCustomerId,
         })
         .from(organization)
         .leftJoin(
@@ -145,6 +146,16 @@ export async function POST(
     const dias = client.dueAt ? daysUntil(client.dueAt, new Date()) : NaN;
     const step = dias > 0 ? -5 : dias === 0 ? 0 : 3;
     const valor = Number(client.monthlyValue);
+    // Cobrança em aberto → botão "Pagar agora". Sem ela o lembrete sai igual.
+    let invoiceUrl: string | null = null;
+    if (client.asaasCustomerId) {
+      try {
+        const { nextOpenCharge } = await import("@/lib/billing/asaas");
+        invoiceUrl = (await nextOpenCharge(client.asaasCustomerId))?.invoiceUrl ?? null;
+      } catch (err) {
+        console.warn("[admin/reminder] link da cobrança não veio:", err);
+      }
+    }
     const via = await enviarRegistrando(
       channel,
       provider,
@@ -152,6 +163,7 @@ export async function POST(
       message,
       client.name,
       {
+        invoiceUrl,
         step,
         params: [
           firstNameForGreeting(client.name) || client.name,

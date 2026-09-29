@@ -59,6 +59,7 @@ export async function runBillingReminders(now = new Date()): Promise<ReminderRun
     orgId: string
     name: string
     billingPhone: string | null
+    asaasCustomerId: string | null
     plan: string | null
     monthlyValue: string | null
     dueAt: string | null
@@ -71,6 +72,7 @@ export async function runBillingReminders(now = new Date()): Promise<ReminderRun
         orgId: organization.id,
         name: organization.name,
         billingPhone: organizationBilling.billingPhone,
+        asaasCustomerId: organizationBilling.asaasCustomerId,
         plan: organizationBilling.plan,
         monthlyValue: organizationBilling.monthlyValue,
         dueAt: organizationBilling.dueAt,
@@ -110,7 +112,20 @@ export async function runBillingReminders(now = new Date()): Promise<ReminderRun
       const fone = candidate.billingPhone!.replace(/\D/g, '')
       // Os params do template aprovado: {{1}} nome, {{2}} valor, {{3}} dia.
       // Mesmos dados do texto livre — o corpo do template repete a frase dele.
+      // A cobrança em aberto vira o botão "Pagar agora" (quando o template com
+      // link estiver aprovado). Falhar aqui não pode custar o lembrete: sem o
+      // link ele sai igual, só sem botão.
+      let invoiceUrl: string | null = null
+      if (row.asaasCustomerId) {
+        try {
+          const { nextOpenCharge } = await import('./asaas')
+          invoiceUrl = (await nextOpenCharge(row.asaasCustomerId))?.invoiceUrl ?? null
+        } catch (err) {
+          console.warn(`[billing-reminders] link da cobrança de "${row.name}" não veio:`, err)
+        }
+      }
       const via = await enviarRegistrando(channel, provider, fone, texto, row.name, {
+        invoiceUrl,
         step,
         params: [
           firstNameForGreeting(row.name) || row.name,
