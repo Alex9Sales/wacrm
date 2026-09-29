@@ -647,12 +647,43 @@ export async function applyRdWebhook(integ: RdIntegration, payload: unknown): Pr
   const rdStatus = rdStatusOf({ status: doc.status })
   const ourStatus = localStatusOf(deal.status)
   const changes: string[] = []
+  /** false = outro webhook simultâneo já aplicou a etapa (ver a trava abaixo). */
+  let movedStage = true
 
   if (local && local.stageId !== deal.stageId) {
-    await db
+    // ⚠️ 29/09: o UPDATE exige que a etapa AINDA seja a que acabamos de ler.
+    //
+    // O RD dispara mais de uma notificação para a mesma mudança, com
+    // `transaction_uuid` diferente — então o dedupe do webhook não pega. As três
+    // chegaram em 0,3 s no card da Aline, leram a etapa antiga antes de qualquer
+    // uma escrever, e as três acharam que precisavam mover: 3 eventos
+    // `stage_changed` idênticos no histórico e `autoCreateStageTasks` rodando
+    // três vezes. Ler-comparar-escrever sem trava sempre acaba assim quando o
+    // mesmo fato chega duas vezes junto.
+    //
+    // Com a etapa lida no WHERE, quem chega depois não atualiza nada, não grava
+    // evento e não cria tarefa — o banco arbitra, que é o único árbitro que
+    // enxerga as três ao mesmo tempo.
+    const moved = await db
       .update(deals)
       .set({ pipelineId: local.pipelineId, stageId: local.stageId, stageChangedAt: sql`now()` })
-      .where(and(eq(deals.id, deal.id), eq(deals.accountId, integ.accountId)))
+      .where(
+        and(
+          eq(deals.id, deal.id),
+          eq(deals.accountId, integ.accountId),
+          deal.stageId ? eq(deals.stageId, deal.stageId) : isNull(deals.stageId),
+        ),
+      )
+      .returning({ id: deals.id })
+    // Perdeu a corrida: outro webhook já moveu. Não grava evento nem cria
+    // tarefa — mas SEGUE, porque a mesma carga pode trazer um status novo que
+    // ninguém aplicou ainda. Sair aqui perderia um "ganho" chegando junto.
+    if (!moved.length) {
+      movedStage = false
+      console.log(
+        `[rd-crm] etapa já aplicada por outra notificação simultânea (card ${deal.id}) — sem evento duplicado`,
+      )
+    } else {
     await db.insert(dealEvents).values({
       accountId: integ.accountId,
       dealId: deal.id,
@@ -675,13 +706,24 @@ export async function applyRdWebhook(integ: RdIntegration, payload: unknown): Pr
       }
     }
     changes.push(`etapa → ${local.pipelineName} › ${local.stageName}`)
+    }
   }
   if (rdStatus !== ourStatus) {
     const reason = rdStatus === 'lost' ? (doc.deal_lost_reason?.name ?? null) : null
-    await db
+    // Mesma trava do bloco de etapa: ganho/perda repetido gravaria dois eventos
+    // e dispararia duas vezes o que escuta "negócio ganho" (pós-venda, comissão).
+    const changed = await db
       .update(deals)
       .set({ status: rdStatus, lostReason: reason })
-      .where(and(eq(deals.id, deal.id), eq(deals.accountId, integ.accountId)))
+      .where(
+        and(
+          eq(deals.id, deal.id),
+          eq(deals.accountId, integ.accountId),
+          eq(deals.status, deal.status),
+        ),
+      )
+      .returning({ id: deals.id })
+    if (changed.length) {
     await db.insert(dealEvents).values({
       accountId: integ.accountId,
       dealId: deal.id,
@@ -696,9 +738,11 @@ export async function applyRdWebhook(integ: RdIntegration, payload: unknown): Pr
       },
     })
     changes.push(`status → ${rdStatus}`)
+    }
   }
   await saveLink(integ.accountId, deal.id, doc.id, { stageId: doc.deal_stage?.id ?? null, status: rdStatus })
-  return changes.length ? changes.join('; ') : 'já estava igual'
+  if (changes.length) return changes.join('; ')
+  return movedStage ? 'já estava igual' : 'aplicado por outra notificação'
 }
 
 /** Liga a integração numa conta (script de instalação): grava o token cifrado. */
