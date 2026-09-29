@@ -9,6 +9,7 @@ import { and, eq, isNull } from 'drizzle-orm'
 import { db, organization, organizationBilling } from '@/db'
 import { loadChannel } from '@/lib/channels/channels'
 import { enviarRegistrando } from './reminder-send'
+import { firstNameForGreeting } from '@/lib/cdl/names'
 import { getProvider } from '@/lib/channels/registry'
 
 import {
@@ -17,7 +18,8 @@ import {
   reminderText,
   type ReminderCandidate,
   type ReminderStep,
-} from './reminders'
+  brlSimples,
+  diaBr,} from './reminders'
 
 export interface ReminderRunResult {
   checked: number
@@ -106,7 +108,16 @@ export async function runBillingReminders(now = new Date()): Promise<ReminderRun
     try {
       const texto = reminderText(candidate, step)
       const fone = candidate.billingPhone!.replace(/\D/g, '')
-      const via = await enviarRegistrando(channel, provider, fone, texto, row.name)
+      // Os params do template aprovado: {{1}} nome, {{2}} valor, {{3}} dia.
+      // Mesmos dados do texto livre — o corpo do template repete a frase dele.
+      const via = await enviarRegistrando(channel, provider, fone, texto, row.name, {
+        step,
+        params: [
+          firstNameForGreeting(row.name) || row.name,
+          candidate.monthlyValue ? brlSimples(candidate.monthlyValue) : 'a mensalidade',
+          candidate.dueAt ? diaBr(candidate.dueAt) : '',
+        ],
+      })
       await markSent(row.orgId, row.remindersSent, key, step, now)
       result.sent++
       console.log(

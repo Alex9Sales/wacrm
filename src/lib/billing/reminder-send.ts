@@ -7,9 +7,9 @@
 // Sem 'server-only' — o worker alcança este arquivo.
 // ============================================================
 
-import { eq } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
 
-import { db, member } from '@/db'
+import { db, member, messages as messagesTable } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import type { ChannelCtx } from '@/lib/channels/provider'
 import { getProvider } from '@/lib/channels/registry'
@@ -34,12 +34,34 @@ import { getProvider } from '@/lib/channels/registry'
  * causa de um contato que não pôde ser criado. Mas ele AVISA no log qual
  * caminho foi usado, para que "não achei a mensagem" tenha resposta.
  */
+/**
+ * O template aprovado de cada degrau (29/09).
+ *
+ * Os três existem na conta da Fluxia, APROVADOS pela Meta, desde antes deste
+ * código — e nunca foram usados: o lembrete sempre mandou texto livre. Fora da
+ * janela de 24 h a Meta recusa texto livre, e foi assim que o lembrete da Appia
+ * falhou no próprio dia do vencimento. O corpo de cada um repete palavra por
+ * palavra o texto livre do degrau, com {{1}} nome, {{2}} valor, {{3}} dia.
+ */
+const TEMPLATE_POR_DEGRAU: Record<number, string> = {
+  [-5]: 'fluxia_mensalidade_5_dias',
+  0: 'fluxia_mensalidade_vence_hoje',
+  3: 'fluxia_mensalidade_em_aberto',
+}
+
+export interface TemplateDoLembrete {
+  step: number
+  /** {{1}} {{2}} {{3}} — nome, valor, dia. */
+  params: [string, string, string]
+}
+
 export async function enviarRegistrando(
   channel: ChannelCtx,
   provider: ReturnType<typeof getProvider>,
   fone: string,
   texto: string,
   nomeCliente: string,
+  tpl?: TemplateDoLembrete,
 ): Promise<string> {
   try {
     const { findOrCreateContact } = await import('@/lib/api/v1/contacts')
@@ -60,6 +82,41 @@ export async function enviarRegistrando(
       channel.id,
     )
     if (!conv) throw new Error('conversa não resolvida')
+
+    // Janela de 24 h: dentro dela vai texto livre (lê melhor e aceita link);
+    // fora dela a Meta SÓ aceita template aprovado. A regra é a mesma das
+    // cadências — uma função, um critério.
+    const { cadenceSendMode } = await import('@/lib/cadences/schedule-rules')
+    const templateName = tpl ? TEMPLATE_POR_DEGRAU[tpl.step] : undefined
+    const ultimaEntrada = firstOrNull(
+      await db
+        .select({ at: messagesTable.createdAt })
+        .from(messagesTable)
+        .where(
+          and(
+            eq(messagesTable.conversationId, conv.conversation.id),
+            eq(messagesTable.senderType, 'customer'),
+          ),
+        )
+        .orderBy(desc(messagesTable.createdAt))
+        .limit(1),
+    )
+    const modo = cadenceSendMode({
+      channelTakesTemplates: channel.provider === 'meta',
+      templateName,
+      lastInboundAt: ultimaEntrada?.at ?? null,
+    })
+
+    if (modo === 'template' && templateName && tpl) {
+      await sendMessageToConversation(channel.accountId, {
+        conversationId: conv.conversation.id,
+        messageType: 'template',
+        templateName,
+        templateLanguage: 'pt_BR',
+        templateParams: tpl.params,
+      })
+      return `por template (${templateName})`
+    }
 
     await sendMessageToConversation(channel.accountId, {
       conversationId: conv.conversation.id,

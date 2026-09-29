@@ -24,6 +24,8 @@ import { requirePlatformAdmin } from "@/lib/auth/platform";
 import { loadChannel } from "@/lib/channels/channels";
 import { getProvider } from "@/lib/channels/registry";
 import { enviarRegistrando } from "@/lib/billing/reminder-send";
+import { brlSimples, daysUntil, diaBr } from "@/lib/billing/reminders";
+import { firstNameForGreeting } from "@/lib/cdl/names";
 
 /**
  * Compose the pt-BR billing reminder. Keeps it simple + friendly and
@@ -71,6 +73,7 @@ export async function POST(
           billingPhone: organizationBilling.billingPhone,
           plan: organizationBilling.plan,
           dueAt: organizationBilling.dueAt,
+          monthlyValue: organizationBilling.monthlyValue,
         })
         .from(organization)
         .leftJoin(
@@ -135,12 +138,27 @@ export async function POST(
     // direto se o contato não puder ser criado, e diz no log qual caminho
     // usou. Lança em falha de verdade → 500 via toErrorResponse.
     const provider = getProvider(channel.provider);
+    // 29/09: leva o template aprovado do degrau certo. Sem ele, fora da janela
+    // de 24 h a Meta recusa — foi o que aconteceu no vencimento da Appia, que
+    // nunca tinha conversado com o nosso número e por isso não tinha janela.
+    // O degrau é escolhido pelo vencimento, como no automático.
+    const dias = client.dueAt ? daysUntil(client.dueAt, new Date()) : NaN;
+    const step = dias > 0 ? -5 : dias === 0 ? 0 : 3;
+    const valor = Number(client.monthlyValue);
     const via = await enviarRegistrando(
       channel,
       provider,
       billingPhone,
       message,
       client.name,
+      {
+        step,
+        params: [
+          firstNameForGreeting(client.name) || client.name,
+          Number.isFinite(valor) && valor > 0 ? brlSimples(valor) : 'a mensalidade',
+          client.dueAt ? diaBr(client.dueAt) : '',
+        ],
+      },
     );
     console.log(`[admin/reminder] lembrete de "${client.name}" enviado · ${via}`);
 

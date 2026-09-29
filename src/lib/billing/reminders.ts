@@ -105,6 +105,10 @@ export function canSendNow(now: Date): boolean {
  * até alguém tentar procurar o valor no texto — ou o app quebrar a linha em
  * lugar estranho. Troca por espaço comum.
  */
+/** Valor em reais para o parâmetro do template (a Meta recusa quebra de linha). */
+export const brlSimples = (v: number) =>
+  v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/\u00A0/g, ' ')
+
 const brl = (v: number) =>
   v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/\u00A0/g, ' ')
 
