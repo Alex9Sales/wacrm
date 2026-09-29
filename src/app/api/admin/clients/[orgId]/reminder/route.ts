@@ -23,6 +23,7 @@ import { toErrorResponse } from "@/lib/auth/account";
 import { requirePlatformAdmin } from "@/lib/auth/platform";
 import { loadChannel } from "@/lib/channels/channels";
 import { getProvider } from "@/lib/channels/registry";
+import { enviarRegistrando } from "@/lib/billing/reminder-send";
 
 /**
  * Compose the pt-BR billing reminder. Keeps it simple + friendly and
@@ -127,10 +128,21 @@ export async function POST(
       dueAt: client.dueAt,
     });
 
-    // Send via the channel's provider. sendText throws on upstream
-    // failure → collapses to 500 via toErrorResponse.
+    // 29/09: vai pela CONVERSA, igual ao lembrete automático. Antes era
+    // provider.sendText direto — a Meta aceitava, devolvia um id, e o id
+    // morria ali: a mensagem não entrava no histórico do cliente e não havia
+    // como responder "foi entregue?". enviarRegistrando cai para o envio
+    // direto se o contato não puder ser criado, e diz no log qual caminho
+    // usou. Lança em falha de verdade → 500 via toErrorResponse.
     const provider = getProvider(channel.provider);
-    await provider.sendText(channel, billingPhone, message);
+    const via = await enviarRegistrando(
+      channel,
+      provider,
+      billingPhone,
+      message,
+      client.name,
+    );
+    console.log(`[admin/reminder] lembrete de "${client.name}" enviado · ${via}`);
 
     // Record the reminder timestamp (upsert-safe: the row exists because
     // billing_phone came from it).
