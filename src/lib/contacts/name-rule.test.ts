@@ -141,3 +141,80 @@ describe('regra do nome do contato (09/09)', () => {
     expect(nameSourceLabel(null)).toBeNull();
   });
 });
+
+/**
+ * O modo "trocar também os nomes que eu digitei aqui" (29/09, GoLink) afrouxa a
+ * regra mais protegida do arquivo — a de 09/09, "nome digitado no CRM nunca é
+ * trocado por nada automático". O que precisa de teste é o CONTORNO dele: que
+ * só a agenda passe, que só passe quando alguém escolheu, e que o automático de
+ * 6 em 6 h siga sem poder encostar.
+ */
+describe('modo "trocar também o que eu digitei" (override-crm)', () => {
+  const crmAtual = {
+    name: 'Abner',
+    phone: '5512999998888',
+    source: 'crm' as const,
+  }
+
+  it('o caso do João: a agenda passa a valer quando ELE escolhe', () => {
+    const d = decideContactName({
+      current: crmAtual,
+      incoming: { name: 'Abner - Kero Shake & Açaí', source: 'phonebook' },
+      mode: 'override-crm',
+    })
+    expect(d).toEqual({ apply: true, reason: 'override-crm' })
+  })
+
+  it('sem escolher o modo, o nome do CRM continua intocável', () => {
+    for (const mode of ['fill', 'override', undefined] as const) {
+      const d = decideContactName({
+        current: crmAtual,
+        incoming: { name: 'Abner - Kero Shake & Açaí', source: 'phonebook' },
+        mode,
+      })
+      expect(d).toEqual({ apply: false, reason: 'crm-wins' })
+    }
+  })
+
+  it('só a AGENDA derruba o nome do CRM — perfil e formulário, nunca', () => {
+    // É o que a regra de 09/09 existia para barrar, e continua barrado mesmo
+    // com o modo ligado: o nome de perfil do WhatsApp muda sozinho, o do
+    // formulário vem de quem preencheu sem saber o que já havia.
+    expect(
+      decideContactName({
+        current: crmAtual,
+        incoming: { name: 'Abner 🔥', source: 'whatsapp' },
+        mode: 'override-crm',
+      }),
+    ).toEqual({ apply: false, reason: 'crm-wins' })
+    expect(
+      decideContactName({
+        current: crmAtual,
+        incoming: { name: 'ABNER SILVA', source: null },
+        mode: 'override-crm',
+      }),
+    ).toEqual({ apply: false, reason: 'crm-wins' })
+  })
+
+  it('não inventa mudança quando o nome já é o mesmo', () => {
+    expect(
+      decideContactName({
+        current: crmAtual,
+        incoming: { name: 'Abner', source: 'phonebook' },
+        mode: 'override-crm',
+      }),
+    ).toEqual({ apply: false, reason: 'same' })
+  })
+
+  it('agenda vazia ou só com o número não apaga o nome do CRM', () => {
+    for (const nome of ['', '  ', '5512999998888']) {
+      expect(
+        decideContactName({
+          current: crmAtual,
+          incoming: { name: nome, source: 'phonebook' },
+          mode: 'override-crm',
+        }).apply,
+      ).toBe(false)
+    }
+  })
+})

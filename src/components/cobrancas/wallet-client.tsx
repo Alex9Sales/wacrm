@@ -123,6 +123,7 @@ import {
   COLLECTION_TEMPLATE_KIND_LABELS,
   TEMPLATE_VARS,
   WEEKDAY_SHORT,
+  countsAsOverdue,
   describeWeekdays,
   type CollectionsSettings,
   type CollectionTemplateKind,
@@ -270,9 +271,12 @@ export function WalletClient() {
         .filter((d): d is WalletDebtor => d !== null);
     }
     if (onlyPromises) all = all.filter((d) => hasPromise(d));
-    // `charges` já são só as VENCIDAS (as a vencer têm painel próprio), então
-    // duas ou mais aqui é literalmente "deve mais de uma parcela".
-    if (onlyMulti) all = all.filter((d) => d.charges.length >= 2);
+    // ⚠️ Conta só o que ESTÁ vencido, não o que a carteira carrega.
+    // Normalmente dá no mesmo, porque a régua só puxa OVERDUE — mas a conta
+    // pode marcar "A vencer" em Ajustar → "O que a régua considera cobrável",
+    // e aí uma parcela futura entraria como se fosse atraso. O cartão diria
+    // "deve 2" para quem deve 1 e tem outra a vencer semana que vem.
+    if (onlyMulti) all = all.filter((d) => vencidasDe(d) >= 2);
     return onlyPending ? all.filter((d) => !d.contactId) : all;
   }, [wallet, onlyPending, onlyPromises, onlyMulti, connFilter]);
 
@@ -286,10 +290,7 @@ export function WalletClient() {
    */
   const multiCount = useMemo(() => {
     const base = wallet?.debtors ?? [];
-    return base.filter((d) => {
-      const cobrancas = connFilter ? d.charges.filter((c) => c.connectionId === connFilter) : d.charges;
-      return cobrancas.length >= 2;
-    }).length;
+    return base.filter((d) => vencidasDe(d, connFilter) >= 2).length;
   }, [wallet, connFilter]);
 
   const upcomingUnmatchedCount = useMemo(
@@ -2950,6 +2951,18 @@ function reguaStatusBase(d: WalletDebtor): string {
  * "acordo em andamento" e "esqueceram de religar" têm a mesma cara sem ele.
  */
 /** Régua dorme até a data em que o cliente prometeu pagar (10/09, pedido do Alex/João). */
+/**
+ * Quantas parcelas dele estão VENCIDAS de verdade (opcionalmente só de uma
+ * conta do Asaas). `countsAsOverdue` é a mesma régua que a cobrança usa para
+ * decidir o que é atraso — sem ela, uma conta que marcou "A vencer" como
+ * cobrável veria parcela futura contada como vencida.
+ */
+function vencidasDe(d: WalletDebtor, connFilter?: string | null): number {
+  return d.charges.filter(
+    (c) => (!connFilter || c.connectionId === connFilter) && countsAsOverdue(c.daysLate),
+  ).length;
+}
+
 function hasPromise(d: { snoozeUntil: string | null }): boolean {
   return !!d.snoozeUntil && new Date(d.snoozeUntil).getTime() > Date.now();
 }

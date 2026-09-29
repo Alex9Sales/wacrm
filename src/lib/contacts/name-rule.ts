@@ -29,10 +29,24 @@ export type NameSource = 'crm' | 'phonebook' | 'whatsapp';
  *  - 'override' ("agenda do celular manda"): além do acima, troca também o
  *    nome legado. Nome digitado no CRM continua intocável.
  */
-export type NameMode = 'fill' | 'override';
+/**
+ * `fill` — só preenche vazio e troca nome de perfil do WhatsApp.
+ * `override` — troca também o nome ANTIGO (origem desconhecida).
+ * `override-crm` — troca até o que foi digitado no CRM (29/09, GoLink).
+ *
+ * ⚠️ O terceiro existe porque a regra de 09/09 ("nome digitado no CRM nunca é
+ * trocado por nada automático") virou uma parede: o João salvou
+ * "Abner - Kero Shake & Açaí" na agenda e o CRM seguia mostrando "Abner", sem
+ * nenhum jeito no produto de dizer "esse aqui volta a seguir a agenda".
+ *
+ * A regra continua valendo onde importa: nada AUTOMÁTICO troca nome do CRM — o
+ * worker de 6 em 6 h roda em `fill`. Este modo só existe quando uma pessoa
+ * escolhe, vê a prévia do que muda e clica.
+ */
+export type NameMode = 'fill' | 'override' | 'override-crm';
 
 export type NameDecision =
-  | { apply: true; reason: 'fill' | 'upgrade' | 'mirror' | 'override' }
+  | { apply: true; reason: 'fill' | 'upgrade' | 'mirror' | 'override' | 'override-crm' }
   | {
       apply: false;
       reason:
@@ -82,7 +96,14 @@ export function decideContactName(input: {
   if (incoming === current) return { apply: false, reason: 'same' };
 
   const currentSource = asNameSource(input.current.source);
-  if (currentSource === 'crm') return { apply: false, reason: 'crm-wins' };
+  if (currentSource === 'crm') {
+    // Só a agenda derruba o nome do CRM, e só no modo escolhido a dedo. Nome de
+    // perfil do WhatsApp e formulário continuam sem chance — eles é que a regra
+    // de 09/09 queria barrar.
+    const podeTrocar = input.mode === 'override-crm' && input.incoming.source === 'phonebook';
+    if (!podeTrocar) return { apply: false, reason: 'crm-wins' };
+    return { apply: true, reason: 'override-crm' };
+  }
 
   switch (input.incoming.source) {
     case 'whatsapp':

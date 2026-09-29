@@ -76,7 +76,13 @@ export function ChannelPhonebookDialog({
     };
   }, [channel.id]);
 
-  const sim = preview?.ok ? (mode === 'override' ? preview.override : preview.fill) : null;
+  const sim = preview?.ok
+    ? mode === 'override-crm'
+      ? preview.overrideCrm
+      : mode === 'override'
+        ? preview.override
+        : preview.fill
+    : null;
   const willChange = sim ? sim.filled + sim.upgraded + sim.mirrored + sim.overridden : 0;
   const willCreate = sim && createMissing ? sim.notInCrm : 0;
   const nothingToDo = !!sim && willChange === 0 && willCreate === 0;
@@ -210,6 +216,36 @@ export function ChannelPhonebookDialog({
                       </span>
                     </span>
                   </label>
+                  {/* 29/09 (João, GoLink): ele salvou "Abner - Kero Shake &
+                      Açaí" na agenda e o CRM seguia mostrando "Abner". A regra
+                      de 09/09 protege o nome digitado aqui de QUALQUER troca
+                      automática — e virou parede, porque não havia como dizer
+                      "esse volta a seguir a agenda". Esta opção é a saída, e
+                      é explícita de propósito: aparece só quando há nomes assim,
+                      diz quantos são, e nada disso acontece sozinho (a
+                      sincronização de 6 em 6 h continua no modo de cima). */}
+                  {preview.overrideCrm.overriddenCrm > 0 && (
+                    <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-2.5 hover:bg-amber-500/10">
+                      <input
+                        type="radio"
+                        name="phonebook-mode"
+                        className="mt-0.5"
+                        checked={mode === 'override-crm'}
+                        onChange={() => setMode('override-crm')}
+                      />
+                      <span>
+                        <span className="font-medium text-foreground">
+                          Trocar também os nomes que eu digitei aqui
+                        </span>
+                        <span className="block text-xs text-muted-foreground">
+                          Inclui os {preview.overrideCrm.overriddenCrm} contatos cujo nome foi
+                          editado no CRM — eles passam a mostrar o nome da agenda. Use quando a
+                          agenda do celular é a fonte mais atual. Só nesta importação: a
+                          sincronização automática continua sem mexer neles.
+                        </span>
+                      </span>
+                    </label>
+                  )}
                 </fieldset>
 
                 {preview.fill.notInCrm > 0 && (
@@ -234,7 +270,20 @@ export function ChannelPhonebookDialog({
                       {sim.upgraded > 0 && <li>{n(sim.upgraded, 'nome de perfil do WhatsApp vira', 'nomes de perfil do WhatsApp viram')} o da agenda.</li>}
                       {sim.mirrored > 0 && <li>{n(sim.mirrored, 'nome acompanha', 'nomes acompanham')} a agenda.</li>}
                       {sim.overridden > 0 && <li>{n(sim.overridden, 'nome antigo é trocado', 'nomes antigos são trocados')}.</li>}
-                      {sim.keptCrm > 0 && <li>{n(sim.keptCrm, 'nome editado no CRM fica', 'nomes editados no CRM ficam')} como está.</li>}
+                      {sim.overriddenCrm > 0 && (
+                        <li className="text-amber-700 dark:text-amber-400">
+                          {n(sim.overriddenCrm, 'nome digitado no CRM é trocado', 'nomes digitados no CRM são trocados')} pelo da agenda.
+                        </li>
+                      )}
+                      {sim.keptCrm > 0 && (
+                        <li>
+                          {n(sim.keptCrm, 'nome editado no CRM fica', 'nomes editados no CRM ficam')} como está
+                          {preview.overrideCrm.overriddenCrm > 0 && mode !== 'override-crm'
+                            ? ' (marque a opção de baixo para trocar também)'
+                            : ''}
+                          .
+                        </li>
+                      )}
                       {mode === 'fill' && sim.keptLegacy > 0 && (
                         <li>{n(sim.keptLegacy, 'nome antigo fica', 'nomes antigos ficam')} como está (escolha “Agenda do celular manda” para trocar).</li>
                       )}

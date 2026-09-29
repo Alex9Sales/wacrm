@@ -60,6 +60,8 @@ export interface PhonebookApplySummary {
   mirrored: number;
   /** Nome legado (origem desconhecida) trocado — só no modo 'override'. */
   overridden: number;
+  /** Trocou um nome que tinha sido DIGITADO no CRM (só no modo escolhido). */
+  overriddenCrm: number;
   /** Editado no CRM → intocável. */
   keptCrm: number;
   /** Legado mantido (modo 'fill'). */
@@ -98,6 +100,7 @@ function emptySummary(o: ApplyPhonebookOptions): PhonebookApplySummary {
     upgraded: 0,
     mirrored: 0,
     overridden: 0,
+    overriddenCrm: 0,
     keptCrm: 0,
     keptLegacy: 0,
     unchanged: 0,
@@ -171,6 +174,7 @@ export function planPhonebook(
         if (d.reason === 'fill') summary.filled += 1;
         else if (d.reason === 'upgrade') summary.upgraded += 1;
         else if (d.reason === 'mirror') summary.mirrored += 1;
+        else if (d.reason === 'override-crm') summary.overriddenCrm += 1;
         else summary.overridden += 1;
         if (d.reason !== 'fill' && summary.examples.length < 5) {
           summary.examples.push({ from: (c.name ?? '').trim(), to: e.name });

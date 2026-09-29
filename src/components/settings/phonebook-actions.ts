@@ -31,6 +31,8 @@ export type PhonebookPreview =
       syncedAt: string | null
       fill: PhonebookApplySummary
       override: PhonebookApplySummary
+      /** Inclui os nomes digitados no CRM (29/09) — só quando escolhido. */
+      overrideCrm: PhonebookApplySummary
     }
   | { ok: false; error: string }
 
@@ -59,11 +61,12 @@ export async function previewPhonebookImport(channelId: string): Promise<Phonebo
     }
     const st = await phonebookStatus(ch.id)
     const base = { accountId: ctx.accountId, channelId: ch.id, createMissing: true, dryRun: true } as const
-    const [fill, override] = await Promise.all([
+    const [fill, override, overrideCrm] = await Promise.all([
       applyPhonebook({ ...base, mode: 'fill' }),
       applyPhonebook({ ...base, mode: 'override' }),
+      applyPhonebook({ ...base, mode: 'override-crm' }),
     ])
-    return { ok: true, kind, entries: st.entries, syncedAt: st.syncedAt, fill, override }
+    return { ok: true, kind, entries: st.entries, syncedAt: st.syncedAt, fill, override, overrideCrm }
   } catch (err) {
     console.error('[phonebook] preview failed:', err)
     return {
@@ -81,7 +84,10 @@ export async function applyPhonebookImport(
     const ctx = await requireRole('admin')
     const ch = await loadChannelByAccount(ctx.accountId, channelId)
     if (!ch) return { ok: false, error: 'Canal não encontrado.' }
-    const mode: NameMode = opts.mode === 'override' ? 'override' : 'fill'
+    // Lista fechada: o que vier de fora que não for um destes vira 'fill', o
+    // modo que não derruba nada.
+    const mode: NameMode =
+      opts.mode === 'override-crm' ? 'override-crm' : opts.mode === 'override' ? 'override' : 'fill'
     const summary = await applyPhonebook({
       accountId: ctx.accountId,
       channelId: ch.id,
