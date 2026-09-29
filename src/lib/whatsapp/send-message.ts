@@ -737,10 +737,26 @@ export async function sendMessageToConversation(
   // Template sem texto do chamador (envio do sistema: abertura de lead, teste):
   // grava o que o cliente LEU — o corpo aprovado com as variáveis preenchidas.
   // Antes a bolha saía vazia e a lista mostrava só "📋 Modelo" (Zelo 18/09).
+  // ⚠️ 29/09: o corpo do template pode chegar por DOIS caminhos — `templateParams`
+  // (lista simples) ou `templateMessageParams.body` (a forma estruturada, usada
+  // por quem também manda parâmetro de botão: a régua de cobrança e o lembrete
+  // da mensalidade). Só o primeiro era considerado aqui, então a mensagem
+  // entrava no histórico com "Olá, {{1}}! A sua mensalidade de {{2}}…" — as
+  // chaves à mostra. O CLIENTE sempre leu o texto certo (a Meta substitui com o
+  // que vai no payload); quem lia errado era quem abria a conversa no CRM, e
+  // isso faz parecer que saiu torto para o cliente.
+  const corpoEstruturado = (() => {
+    const mp = templateMessageParams as { body?: unknown } | null | undefined;
+    const body = mp && typeof mp === 'object' ? mp.body : undefined;
+    return Array.isArray(body) ? body.filter((v): v is string => typeof v === 'string') : null;
+  })();
   const storedText =
     contentText ||
     (messageType === 'template'
-      ? renderTemplateText(templateRow?.body_text, templateParams) || null
+      ? renderTemplateText(
+          templateRow?.body_text,
+          templateParams?.length ? templateParams : corpoEstruturado,
+        ) || null
       : null);
 
   // Persist the sent message.
