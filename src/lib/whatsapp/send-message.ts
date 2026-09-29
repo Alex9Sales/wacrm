@@ -27,7 +27,7 @@
 // other providers resolve their own chatId (WAHA) or don't need it.
 // ============================================================
 
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, isNull, or, sql } from 'drizzle-orm';
 import { stripInstructionMarkers } from './instruction-markers';
 
 import {
@@ -512,9 +512,28 @@ export async function sendMessageToConversation(
           and(
             eq(messageTemplates.accountId, accountId),
             eq(messageTemplates.name, templateName),
-            eq(messageTemplates.language, templateLanguage || 'en_US')
+            eq(messageTemplates.language, templateLanguage || 'en_US'),
+            // ⚠️ 29/09: o template tem que ser DESTE canal.
+            //
+            // A conta da Fluxia tem dois números Meta, cada um com sua WABA. Os
+            // três templates de mensalidade vivem na WABA de um; o lembrete sai
+            // pelo outro. Sem este filtro a busca achava a linha local, montava
+            // a mensagem e a Meta devolvia "(#132001) Template name does not
+            // exist in the translation" — erro que fala de idioma para um
+            // problema que é de número.
+            //
+            // Aceita o template sem canal: linha antiga, de antes de a coluna
+            // existir, que na prática pertence ao único canal da conta.
+            conversation.channelId
+              ? or(
+                  eq(messageTemplates.channelId, conversation.channelId),
+                  isNull(messageTemplates.channelId),
+                )
+              : undefined,
           )
         )
+        // O do canal certo primeiro; o sem canal só se não houver outro.
+        .orderBy(sql`${messageTemplates.channelId} IS NULL`)
         .limit(1)
     );
     if (data && !isMessageTemplate(data)) {
