@@ -27,7 +27,15 @@ function toMinutes(hhmm: string | null): number | null {
 }
 
 /** The weekday index (0=Sun) and minutes-since-midnight of `date` in `tz`. */
-function localParts(date: Date, tz: string): { day: number; minutes: number } {
+/**
+ * Dia da semana e minutos do dia NO FUSO pedido.
+ *
+ * Exportado em 29/09 para o lembrete de mensalidade: ele contava a hora com
+ * `now.getHours()`, e o worker roda em UTC — a janela "9h às 18h" virava 6h às
+ * 15h em Brasília. A Appia foi avisada às 6h da manhã, e ninguém recebia
+ * lembrete depois das 15h. Hora sem fuso é hora errada em algum lugar.
+ */
+export function localParts(date: Date, tz: string): { day: number; minutes: number } {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
     weekday: 'short',

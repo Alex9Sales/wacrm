@@ -2043,6 +2043,70 @@ export async function linkUpcomingCustomer(
  * é da última leitura (pode ser de horas atrás): um duplicado criado depois
  * deixaria o cartão "sem contato", então o casamento é conferido de novo aqui.
  */
+/**
+ * "Criar contato" direto da lista A VENCER (29/09).
+ *
+ * Por que não dava para reusar `createContactForUpcoming`: aquele lê de
+ * `collections_upcoming_unmatched`, que o worker só popula quando a régua tem
+ * lembrete ANTES do vencimento (`reminderDaysBefore > 0`). Na conta da Fluxia
+ * isso é 0 — então a lista dizia "sem contato no CRM — não recebe aviso" e a
+ * ferramenta de resolver ficava escondida junto com o painel dela. Avisar do
+ * problema e esconder a solução é pior do que não avisar.
+ *
+ * Aqui a fonte é `collections_upcoming`, que existe sempre que há parcela a
+ * vencer. O resto é o mesmo caminho: nunca chuta em cima de ambiguidade, e o
+ * vínculo é registrado para poder desfazer.
+ */
+export async function createContactForUpcomingCharge(
+  connectionId: string,
+  customerId: string,
+): Promise<ActionResult<{ contactName: string; created: boolean }>> {
+  const { accountId, userId } = await requireRole('agent')
+  try {
+    const row = firstOrNull(
+      await db
+        .select({
+          name: collectionsUpcoming.customerName,
+          phone: collectionsUpcoming.phone,
+          email: collectionsUpcoming.email,
+        })
+        .from(collectionsUpcoming)
+        .where(
+          and(
+            eq(collectionsUpcoming.accountId, accountId),
+            eq(collectionsUpcoming.connectionId, connectionId),
+            eq(collectionsUpcoming.asaasCustomerId, customerId),
+          ),
+        )
+        .limit(1),
+    )
+    if (!row) return { ok: false, error: UPCOMING_GONE }
+    if (!canCreateFromAsaas(row.phone, row.email)) return { ok: false, error: UPCOMING_NO_DATA }
+
+    const made = await createOrFindContactFromAsaas(accountId, userId, row)
+    if (!made.ok || !made.data) {
+      return { ok: false, error: made.error ?? 'Não foi possível criar o contato.' }
+    }
+
+    const r = await linkCustomerTo(
+      accountId,
+      userId,
+      { connectionId, customerId, customerName: row.name },
+      made.data.id,
+    )
+    if (!r.ok) return { ok: false, error: r.error }
+
+    revalidatePath('/cobrancas')
+    return {
+      ok: true,
+      data: { contactName: row.name ?? 'contato', created: made.data.created },
+    }
+  } catch (err) {
+    console.error('[cobranca] criar contato a partir da lista a vencer falhou:', err)
+    return { ok: false, error: 'Não foi possível criar o contato. Tente de novo.' }
+  }
+}
+
 export async function createContactForUpcoming(
   connectionId: string,
   customerId: string,

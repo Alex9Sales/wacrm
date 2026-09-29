@@ -17,7 +17,13 @@ import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ChevronDown, ChevronRight, ExternalLink, MessageSquare, RefreshCw, TriangleAlert, UserX } from 'lucide-react'
 
-import { getUpcomingCharges, type UpcomingChargesView, type UpcomingCustomerCard } from '@/app/(dashboard)/cobrancas/actions'
+import {
+  createContactForUpcomingCharge,
+  getUpcomingCharges,
+  type UpcomingChargesView,
+  type UpcomingCustomerCard,
+} from '@/app/(dashboard)/cobrancas/actions'
+import { toast } from 'sonner'
 
 const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 
@@ -65,6 +71,32 @@ export function UpcomingPanel({ timezone = 'America/Sao_Paulo', reloadKey = 0 }:
   const [filtro, setFiltro] = useState<Filtro>('todos')
   const [busca, setBusca] = useState('')
   const [carregando, setCarregando] = useState(false)
+  /** Chave do cliente em que o "criar contato" está rodando. */
+  const [criando, setCriando] = useState<string | null>(null)
+
+  async function criarContato(c: UpcomingCustomerCard) {
+    const chave = `${c.connectionId}:${c.customerId}`
+    setCriando(chave)
+    try {
+      const r = await createContactForUpcomingCharge(c.connectionId, c.customerId)
+      if (!r.ok) {
+        // O erro do servidor é texto pronto para a tela (ambiguidade, sem
+        // telefone nem e-mail) — mostrar ele, não um "algo deu errado".
+        toast.error(r.error ?? 'Não foi possível criar o contato.')
+        return
+      }
+      toast.success(
+        r.data?.created
+          ? `Contato criado: ${r.data.contactName}. Agora ele recebe os avisos.`
+          : `Ligado ao contato ${r.data?.contactName ?? ''} que já existia.`,
+      )
+      await carregar()
+    } catch {
+      toast.error('Não foi possível conectar ao servidor.')
+    } finally {
+      setCriando(null)
+    }
+  }
 
   const carregar = useCallback(async () => {
     setCarregando(true)
@@ -257,7 +289,28 @@ export function UpcomingPanel({ timezone = 'America/Sao_Paulo', reloadKey = 0 }:
                       <span>{c.connectionLabel}</span>
                       {c.phone && <span className="tabular-nums">{fmtPhone(c.phone)}</span>}
                       {c.email && <span className="truncate">{c.email}</span>}
-                      {!c.contactId && <span className="text-amber-600 dark:text-amber-500">sem contato no CRM — não recebe aviso</span>}
+                      {!c.contactId && (
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className="text-amber-600 dark:text-amber-500">
+                            sem contato no CRM — não recebe aviso
+                          </span>
+                          {/* A ação fica AQUI, colada no aviso (29/09). Ela já
+                              existia, mas só no painel "A vencer sem contato",
+                              que o CRM esconde quando a régua não tem lembrete
+                              antecipado — então quem lia o problema não tinha
+                              como resolvê-lo. */}
+                          <button
+                            type="button"
+                            className="font-medium text-primary underline-offset-2 hover:underline disabled:opacity-50"
+                            disabled={criando === `${c.connectionId}:${c.customerId}`}
+                            onClick={() => void criarContato(c)}
+                          >
+                            {criando === `${c.connectionId}:${c.customerId}`
+                              ? 'criando…'
+                              : 'criar contato'}
+                          </button>
+                        </span>
+                      )}
                       {c.onHold && <span className="text-amber-600 dark:text-amber-500">cobrança parada neste cliente</span>}
                     </div>
                     {c.lines.length > 0 && (

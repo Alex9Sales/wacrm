@@ -83,20 +83,44 @@ describe('quem fica de fora, e em silêncio', () => {
 })
 
 describe('horário: cobrança às 23h queima a marca', () => {
+  // ⚠️ Todo horário aqui é escrito em UTC (com Z) de propósito. Antes era
+  // "2026-09-29T09:00:00" sem fuso, que o Node lê na hora da MÁQUINA: no Mac
+  // do Alex (UTC-4) o teste media uma coisa e no CI (UTC) mediria outra. Um
+  // teste de fuso que depende do fuso de quem roda não testa nada.
+  // São Paulo é UTC-3 o ano todo (o Brasil não tem mais horário de verão).
+  const sp = (h: number, dia = 29) =>
+    new Date(`2026-09-${dia}T${String(h + 3).padStart(2, '0')}:00:00Z`)
+
   it('manda em dia útil, no comercial', () => {
-    expect(canSendNow(new Date('2026-09-29T09:00:00'))).toBe(true) // terça 9h
-    expect(canSendNow(new Date('2026-09-29T17:59:00'))).toBe(true)
+    expect(canSendNow(sp(9))).toBe(true) // terça, 9h em SP
+    expect(canSendNow(new Date('2026-09-29T20:59:00Z'))).toBe(true) // 17:59 SP
   })
 
   it('não manda de madrugada nem fora do expediente', () => {
-    expect(canSendNow(new Date('2026-09-29T08:59:00'))).toBe(false)
-    expect(canSendNow(new Date('2026-09-29T18:00:00'))).toBe(false)
-    expect(canSendNow(new Date('2026-09-29T23:00:00'))).toBe(false)
+    expect(canSendNow(new Date('2026-09-29T11:59:00Z'))).toBe(false) // 8:59 SP
+    expect(canSendNow(sp(18))).toBe(false)
+    expect(canSendNow(new Date('2026-09-30T02:00:00Z'))).toBe(false) // 23h SP
+  })
+
+  it('o bug real: 9h UTC é 6h da manhã em Brasília', () => {
+    // Foi o que aconteceu com a Appia em 29/09 — o worker roda em UTC e a
+    // janela "9h às 18h" virava 6h às 15h de Brasília. Cliente acordado às
+    // 6h por causa de boleto não esquece.
+    expect(canSendNow(new Date('2026-09-29T09:00:00Z'))).toBe(false)
+    // E o outro lado do mesmo bug: às 16h de SP ninguém recebia nada.
+    expect(canSendNow(new Date('2026-09-29T19:00:00Z'))).toBe(true)
   })
 
   it('não manda no fim de semana', () => {
-    expect(canSendNow(new Date('2026-09-26T10:00:00'))).toBe(false) // sábado
-    expect(canSendNow(new Date('2026-09-27T10:00:00'))).toBe(false) // domingo
+    expect(canSendNow(sp(10, 26))).toBe(false) // sábado
+    expect(canSendNow(sp(10, 27))).toBe(false) // domingo
+  })
+
+  it('o fim de semana é o daqui, não o de Londres', () => {
+    // Sábado 21h em SP já é domingo 00h em UTC; e sexta 22h em SP é sábado em
+    // UTC — pela regra antiga isso bloqueava sexta e liberava sábado.
+    expect(canSendNow(new Date('2026-09-26T00:30:00Z'))).toBe(false) // sex 21:30 SP
+    expect(canSendNow(new Date('2026-09-28T13:00:00Z'))).toBe(true) // seg 10h SP
   })
 })
 

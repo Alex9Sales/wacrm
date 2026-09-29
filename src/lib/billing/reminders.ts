@@ -17,6 +17,8 @@
 // isso o texto livre é o plano B, não o principal.
 // ============================================================
 
+import { localParts } from '@/lib/settings/business-hours'
+
 /** Os degraus, em dias relativos ao vencimento (negativo = antes). */
 export const REMINDER_STEPS = [-5, 0, 3] as const
 export type ReminderStep = (typeof REMINDER_STEPS)[number]
@@ -66,11 +68,32 @@ export function dueStep(c: ReminderCandidate, now: Date): ReminderStep | null {
   return c.sentSteps.includes(step) ? null : step
 }
 
-/** Dá pra enviar agora? Horário comercial, segunda a sexta. */
+/** Fuso em que a janela de envio é lida. A operação é brasileira. */
+export const SEND_TIMEZONE = 'America/Sao_Paulo'
+
+/**
+ * Dá pra enviar agora? Horário comercial, segunda a sexta — NO FUSO DA
+ * OPERAÇÃO.
+ *
+ * ⚠️ 29/09: isto usava `now.getHours()`, que devolve a hora do processo. O
+ * worker roda em UTC (TZ vazio no container), então "9h às 18h" era 9h–18h UTC
+ * = **6h às 15h em Brasília**: a Appia foi avisada às 6h da manhã, e quem
+ * vencia à tarde não recebia nada. O mesmo valia para o fim de semana — 21h de
+ * sábado em SP já é domingo em UTC.
+ *
+ * O comentário do topo deste arquivo diz "cobrança às 23h queima a marca". A
+ * intenção estava certa; faltava o fuso.
+ */
 export function canSendNow(now: Date): boolean {
-  const dow = now.getDay()
-  if (dow === 0 || dow === 6) return false
-  const h = now.getHours()
+  let day: number
+  let minutes: number
+  try {
+    ;({ day, minutes } = localParts(now, SEND_TIMEZONE))
+  } catch {
+    return false // fuso inválido: não envia, em vez de enviar na hora errada
+  }
+  if (day === 0 || day === 6) return false
+  const h = Math.floor(minutes / 60)
   return h >= SEND_FROM_HOUR && h < SEND_TO_HOUR
 }
 
