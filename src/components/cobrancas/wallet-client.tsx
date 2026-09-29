@@ -164,6 +164,8 @@ export function WalletClient() {
   const [onlyPending, setOnlyPending] = useState(false);
   // Filtro "Promessas": quem prometeu pagar (a régua dorme até a data).
   const [onlyPromises, setOnlyPromises] = useState(false);
+  /** Só quem tem 2+ parcelas vencidas (pedido do João, GoLink). */
+  const [onlyMulti, setOnlyMulti] = useState(false);
   const [promiseFor, setPromiseFor] = useState<WalletDebtor | null>(null);
   // 💬 "Cobrar pelo WhatsApp" (22/09): devedor com o diálogo de cobrança à mão aberto.
   const [collectFor, setCollectFor] = useState<WalletDebtor | null>(null);
@@ -268,10 +270,27 @@ export function WalletClient() {
         .filter((d): d is WalletDebtor => d !== null);
     }
     if (onlyPromises) all = all.filter((d) => hasPromise(d));
+    // `charges` já são só as VENCIDAS (as a vencer têm painel próprio), então
+    // duas ou mais aqui é literalmente "deve mais de uma parcela".
+    if (onlyMulti) all = all.filter((d) => d.charges.length >= 2);
     return onlyPending ? all.filter((d) => !d.contactId) : all;
-  }, [wallet, onlyPending, onlyPromises, connFilter]);
+  }, [wallet, onlyPending, onlyPromises, onlyMulti, connFilter]);
 
   const promisesCount = useMemo(() => (wallet?.debtors ?? []).filter((d) => hasPromise(d)).length, [wallet]);
+
+  /**
+   * Quantos devem 2+ parcelas — acompanha o filtro de conta, como os outros
+   * números do topo. ⚠️ É a contagem de CLIENTES, não de parcelas: o João
+   * chegou a "23" subtraindo 59 − 36 (parcelas a mais), e são 13 clientes.
+   * O rótulo diz "clientes" por isso.
+   */
+  const multiCount = useMemo(() => {
+    const base = wallet?.debtors ?? [];
+    return base.filter((d) => {
+      const cobrancas = connFilter ? d.charges.filter((c) => c.connectionId === connFilter) : d.charges;
+      return cobrancas.length >= 2;
+    }).length;
+  }, [wallet, connFilter]);
 
   const upcomingUnmatchedCount = useMemo(
     () => (upcomingView?.enabled ? upcomingView.cards.filter((c) => !connFilter || c.connectionId === connFilter).length : 0),
@@ -426,12 +445,32 @@ export function WalletClient() {
               <span className="text-xs text-muted-foreground">(clique no nome de outra conta para trocar; nenhuma selecionada = todas)</span>
             </div>
           )}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8">
             <Stat label="Clientes em atraso" value={String(totals.debtors)} hint="um por pessoa, com todas as parcelas dele" />
             <Stat
               label="Parcelas vencidas"
               value={String(totals.charges)}
               hint={upcomingUnmatchedCount ? 'a vencer não entra aqui — veja “A vencer sem contato” abaixo' : 'a vencer não entra aqui — só o lembrete'}
+            />
+            {/* 29/09 (João, GoLink): "tem clientes com mais de uma cobrança
+                vencida… se tivesse como visualizar ali, pra não ficar entrando
+                no Asaas". É onde ele procurou — nos números do topo. */}
+            <Stat
+              label="Devem 2+ parcelas"
+              value={String(multiCount)}
+              hint={multiCount ? 'clientes com mais de uma vencida — clique para ver quem' : 'ninguém com mais de uma vencida'}
+              tone={multiCount ? 'warn' : undefined}
+              onClick={multiCount ? () => setOnlyMulti((v) => !v) : undefined}
+              active={onlyMulti}
+            />
+            {/* O contador de promessas já existia, mas só no rodapé da tela e
+                só quando havia alguma — o João não achou. Sobe para o topo. */}
+            <Stat
+              label="Prometeram pagar"
+              value={String(promisesCount)}
+              hint={promisesCount ? 'a régua dorme até a data — clique para ver quem e quando' : 'ninguém prometeu data ainda'}
+              onClick={promisesCount ? () => setOnlyPromises((v) => !v) : undefined}
+              active={onlyPromises}
             />
             <Stat label={connFilterLabel ? `Em aberto · ${connFilterLabel}` : 'Total em aberto'} value={brl(totals.value)} wide />
             <Stat
@@ -540,6 +579,20 @@ export function WalletClient() {
                 <CalendarClock className="h-3.5 w-3.5" /> Promessas de pagamento ({promisesCount}){onlyPromises ? ' ×' : ''}
               </button>
               {onlyPromises && <span className="text-xs text-muted-foreground">Mostrando só quem prometeu. Em cada um dá para mudar a data ou cobrar agora.</span>}
+            </div>
+          )}
+          {onlyMulti && (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <button
+                type="button"
+                onClick={() => setOnlyMulti(false)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-0.5 font-medium text-primary"
+              >
+                <TriangleAlert className="h-3.5 w-3.5" /> Devem 2+ parcelas ({multiCount}) ×
+              </button>
+              <span className="text-xs text-muted-foreground">
+                Quem acumulou mais de uma vencida — em cada cartão estão todas as parcelas dele.
+              </span>
             </div>
           )}
           <div className="flex flex-col gap-2.5">
@@ -671,7 +724,60 @@ function HeldDebtorsPanel({ held, onChanged }: { held: HeldDebtor[]; onChanged: 
   );
 }
 
-function Stat({ label, value, tone, wide, hint }: { label: string; value: string; tone?: 'warn' | 'good'; wide?: boolean; hint?: string }) {
+/**
+ * Cartão do topo. Com `onClick` ele vira filtro da lista — pedido do João
+ * (GoLink): "clica ali no quadradinho que mostra 10, aí aparece os nomes".
+ * Número que não leva a lugar nenhum obriga a pessoa a ir procurar no Asaas,
+ * que é justamente o que esta tela existe para evitar.
+ */
+function Stat({
+  label,
+  value,
+  tone,
+  wide,
+  hint,
+  onClick,
+  active,
+}: {
+  label: string;
+  value: string;
+  tone?: 'warn' | 'good';
+  wide?: boolean;
+  hint?: string;
+  onClick?: () => void;
+  active?: boolean;
+}) {
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={active}
+        title={active ? 'Clique para ver todos de novo' : 'Clique para ver só estes na lista'}
+        className={cn(
+          'rounded-md border px-3.5 py-3 text-left transition hover:border-primary/50 hover:bg-accent/40',
+          active ? 'border-primary bg-primary/5 ring-1 ring-primary/30' : 'bg-card',
+          tone === 'good' && !active && 'border-emerald-600/40',
+        )}
+      >
+        <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          {label}
+          {active ? ' ×' : ''}
+        </p>
+        <p
+          className={cn(
+            'mt-0.5 font-semibold tabular-nums',
+            wide ? 'text-lg' : 'text-xl',
+            tone === 'warn' && 'text-amber-600 dark:text-amber-500',
+            tone === 'good' && 'text-emerald-700 dark:text-emerald-400',
+          )}
+        >
+          {value}
+        </p>
+        {hint ? <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{hint}</p> : null}
+      </button>
+    );
+  }
   return (
     <div className={cn('rounded-md border bg-card px-3.5 py-3', tone === 'good' && 'border-emerald-600/40')}>
       <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</p>
