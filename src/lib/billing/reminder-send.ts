@@ -68,6 +68,14 @@ const TEMPLATE_COM_LINK: Record<number, string> = {
   3: 'fluxia_mensalidade_em_aberto_link',
 }
 
+/** Quantas variáveis o corpo de cada degrau realmente tem. */
+const VARIAVEIS_POR_DEGRAU: Record<number, number> = { [-5]: 3, 0: 2, 3: 3 }
+
+/** Os params na medida do template — nem a mais (a Meta recusa), nem a menos. */
+export function paramsDoDegrau(step: number, params: string[]): string[] {
+  return params.slice(0, VARIAVEIS_POR_DEGRAU[step] ?? params.length)
+}
+
 /** O sufixo que o botão dinâmico recebe: o id da fatura, sem a URL. */
 export function idDaFatura(invoiceUrl: string | null | undefined): string | null {
   const u = (invoiceUrl ?? '').trim()
@@ -102,7 +110,14 @@ async function templateComLinkAprovado(
 
 export interface TemplateDoLembrete {
   step: number
-  /** {{1}} {{2}} {{3}} — nome, valor, dia. */
+  /**
+   * {{1}} nome, {{2}} valor, {{3}} dia.
+   *
+   * ⚠️ O degrau 0 ("vence hoje") tem SÓ DUAS: o corpo dele diz "vence hoje" e
+   * não repete a data. Mandar três faz a Meta recusar com "Invalid parameter"
+   * — foi assim que a submissão do template falhou, e seria assim que o envio
+   * falharia depois. `paramsDoDegrau` corta pelo tamanho certo.
+   */
   params: [string, string, string]
   /** invoiceUrl da cobrança em aberto — vira o botão "Pagar agora". */
   invoiceUrl?: string | null
@@ -172,7 +187,10 @@ export async function enviarRegistrando(
           messageType: 'template',
           templateName: comLink,
           templateLanguage: 'pt_BR',
-          templateMessageParams: { body: tpl.params, buttonParams: { 0: fatura } },
+          templateMessageParams: {
+            body: paramsDoDegrau(tpl.step, tpl.params),
+            buttonParams: { 0: fatura },
+          },
         })
         return `por template com link (${comLink})`
       }
@@ -181,7 +199,7 @@ export async function enviarRegistrando(
         messageType: 'template',
         templateName,
         templateLanguage: 'pt_BR',
-        templateParams: tpl.params,
+        templateParams: paramsDoDegrau(tpl.step, tpl.params),
       })
       return `por template (${templateName})`
     }
