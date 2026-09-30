@@ -412,9 +412,32 @@ export async function syncGoogleNow(): Promise<{ imported: number; error: string
 }
 
 /** Desconecta o Google (apaga a conexão; as agendas Google saem em cascata). */
+/**
+ * Desconecta o Google — e SÓ isso.
+ *
+ * ⚠️ 30/09/2026, clínica da Dra. Joyce: alguém clicou aqui (provavelmente
+ * tentando fazer as subagendas aparecerem) e a conta perdeu **160 compromissos**
+ * de uma vez. O banco tem `calendars.connection_id ON DELETE CASCADE` e
+ * `calendar_events.calendar_id ON DELETE CASCADE`: apagar a conexão derrubava a
+ * agenda, e a agenda derrubava todas as consultas — as 130 futuras inclusive.
+ * A clínica ficou sem nenhum lembrete de consulta e ninguém foi avisado de nada.
+ *
+ * Desconectar é dizer "pare de sincronizar", nunca "apague minha agenda". Agora
+ * as agendas são soltas da conexão ANTES (connection_id = null), então a cascata
+ * não alcança nada: os compromissos ficam, visíveis e com os pacientes ligados.
+ *
+ * Reconectar depois não duplica: `descobrirAgendas` reata pelo `google_calendar_id`,
+ * que continua gravado.
+ */
 export async function disconnectGoogle(): Promise<{ error: string | null }> {
   try {
     const ctx = await getCurrentAccount()
+    // 1º solta as agendas da conexão — senão o CASCADE leva os eventos junto.
+    await db
+      .update(calendars)
+      .set({ connectionId: null, updatedAt: sql`now()` })
+      .where(eq(calendars.accountId, ctx.accountId))
+    // 2º remove a conexão (é só o par de tokens).
     await db
       .delete(calendarConnections)
       .where(

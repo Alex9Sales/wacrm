@@ -206,6 +206,19 @@ export function AgendaClient() {
   }
 
   const onDisconnectGoogle = async () => {
+    // Um clique sem pergunta nenhuma parava a sincronização da clínica inteira —
+    // e, até 30/09, ainda levava os compromissos junto. Quem clica aqui costuma
+    // estar tentando CONSERTAR alguma coisa, não desligar a agenda.
+    if (
+      !window.confirm(
+        'Desconectar o Google?\n\n' +
+          'Os compromissos que já estão aqui continuam na agenda, mas o CRM para ' +
+          'de receber o que for marcado no Google — e para de mandar o lembrete ' +
+          'das consultas novas.\n\n' +
+          'Para só atualizar agora, use "Sincronizar" em vez de desconectar.',
+      )
+    )
+      return
     const r = await disconnectGoogle()
     if (r.error) toast.error(r.error)
     else {
