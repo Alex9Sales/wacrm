@@ -27,6 +27,36 @@ export type ReminderStep = (typeof REMINDER_STEPS)[number]
 export const SEND_FROM_HOUR = 9
 export const SEND_TO_HOUR = 18
 
+/**
+ * O que o cliente realmente deve neste vencimento (29/09).
+ *
+ * ⚠️ NÃO é o `monthly_value`. A Appia recebeu "a sua mensalidade de R$ 130,00
+ * vence hoje" com um boleto de R$ 780 na mão — o valor mensal é a unidade de
+ * MRR, não o que está sendo cobrado. Num contrato semestral os dois diferem por
+ * seis vezes, e o cliente lê o menor.
+ *
+ * Quando há cobrança em aberto no Asaas, o valor dela manda: é literalmente o
+ * número que está no boleto. O mensal fica como plano B para quem ainda não tem
+ * cobrança emitida.
+ */
+export function valorDoLembrete(input: {
+  chargeValue?: number | null
+  monthlyValue?: number | null
+  cycleMonths?: number | null
+}): string {
+  const cobranca = Number(input.chargeValue)
+  if (Number.isFinite(cobranca) && cobranca > 0) {
+    const meses = Number(input.cycleMonths)
+    // Num contrato longo, dizer só "R$ 780,00" depois da palavra "mensalidade"
+    // confunde — o período explica o número sem precisar de outro template.
+    return Number.isFinite(meses) && meses > 1
+      ? `${brlSimples(cobranca)} (${meses} meses)`
+      : brlSimples(cobranca)
+  }
+  const mensal = Number(input.monthlyValue)
+  return Number.isFinite(mensal) && mensal > 0 ? brlSimples(mensal) : 'a mensalidade'
+}
+
 export interface ReminderCandidate {
   orgId: string
   name: string

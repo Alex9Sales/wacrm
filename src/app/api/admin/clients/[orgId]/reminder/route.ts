@@ -24,7 +24,8 @@ import { requirePlatformAdmin } from "@/lib/auth/platform";
 import { loadChannel } from "@/lib/channels/channels";
 import { getProvider } from "@/lib/channels/registry";
 import { enviarRegistrando } from "@/lib/billing/reminder-send";
-import { brlSimples, daysUntil, diaBr } from "@/lib/billing/reminders";
+import { daysUntil, diaBr, valorDoLembrete } from "@/lib/billing/reminders";
+import { CYCLES, type BillingCycle } from "@/lib/billing/cycle";
 import { firstNameForGreeting } from "@/lib/cdl/names";
 
 /**
@@ -74,6 +75,7 @@ export async function POST(
           plan: organizationBilling.plan,
           dueAt: organizationBilling.dueAt,
           monthlyValue: organizationBilling.monthlyValue,
+          billingCycle: organizationBilling.billingCycle,
           asaasCustomerId: organizationBilling.asaasCustomerId,
         })
         .from(organization)
@@ -148,14 +150,25 @@ export async function POST(
     const valor = Number(client.monthlyValue);
     // Cobrança em aberto → botão "Pagar agora". Sem ela o lembrete sai igual.
     let invoiceUrl: string | null = null;
+    let chargeValue: number | null = null;
     if (client.asaasCustomerId) {
       try {
         const { nextOpenCharge } = await import("@/lib/billing/asaas");
-        invoiceUrl = (await nextOpenCharge(client.asaasCustomerId))?.invoiceUrl ?? null;
+        const cobranca = await nextOpenCharge(client.asaasCustomerId);
+        invoiceUrl = cobranca?.invoiceUrl ?? null;
+        chargeValue = cobranca ? Number(cobranca.value) : null;
       } catch (err) {
-        console.warn("[admin/reminder] link da cobrança não veio:", err);
+        console.warn("[admin/reminder] cobrança não veio:", err);
       }
     }
+    // O valor do BOLETO, não o mensal: num semestral eles diferem por seis.
+    const valorTexto = valorDoLembrete({
+      chargeValue,
+      monthlyValue: valor,
+      cycleMonths: client.billingCycle
+        ? (CYCLES[client.billingCycle as BillingCycle]?.months ?? 1)
+        : 1,
+    });
     const via = await enviarRegistrando(
       channel,
       provider,
@@ -167,7 +180,7 @@ export async function POST(
         step,
         params: [
           firstNameForGreeting(client.name) || client.name,
-          Number.isFinite(valor) && valor > 0 ? brlSimples(valor) : 'a mensalidade',
+          valorTexto,
           client.dueAt ? diaBr(client.dueAt) : '',
         ],
       },

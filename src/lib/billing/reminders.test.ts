@@ -6,7 +6,7 @@ import {
   dueStep,
   reminderText,
   type ReminderCandidate,
-} from './reminders'
+  valorDoLembrete,} from './reminders'
 
 // 25/09: o lembrete da mensalidade existia só no botão do /admin — alguém
 // tinha que lembrar de clicar, cliente por cliente. Estas são as decisões que
@@ -155,5 +155,42 @@ describe('daysUntil', () => {
     expect(daysUntil('2026-10-04T12:00:00Z', em('2026-10-04T23:00:00Z'))).toBe(0)
     expect(daysUntil('2026-10-04T12:00:00Z', em('2026-09-29T01:00:00Z'))).toBe(5)
     expect(daysUntil('2026-10-04T12:00:00Z', em('2026-10-07T22:00:00Z'))).toBe(-3)
+  })
+})
+
+/**
+ * A Appia recebeu "a sua mensalidade de R$ 130,00 vence hoje" com um boleto de
+ * R$ 780 na mão. O valor mensal é a unidade de MRR — não é o que está sendo
+ * cobrado, e num semestral os dois diferem por seis vezes. O cliente lê o menor
+ * e acha que o boleto está errado.
+ */
+describe('o valor que vai no lembrete', () => {
+  it('o caso da Appia: manda o do BOLETO, com o período', () => {
+    expect(valorDoLembrete({ chargeValue: 780, monthlyValue: 130, cycleMonths: 6 })).toBe(
+      'R$ 780,00 (6 meses)',
+    )
+  })
+
+  it('mensal não ganha "(1 meses)" pendurado', () => {
+    expect(valorDoLembrete({ chargeValue: 497, monthlyValue: 497, cycleMonths: 1 })).toBe(
+      'R$ 497,00',
+    )
+  })
+
+  it('sem cobrança emitida, cai no valor mensal', () => {
+    expect(valorDoLembrete({ chargeValue: null, monthlyValue: 130, cycleMonths: 6 })).toBe(
+      'R$ 130,00',
+    )
+  })
+
+  it('sem valor nenhum, não inventa número', () => {
+    expect(valorDoLembrete({ chargeValue: null, monthlyValue: null })).toBe('a mensalidade')
+    expect(valorDoLembrete({ chargeValue: 0, monthlyValue: 0 })).toBe('a mensalidade')
+  })
+
+  it('valor quebrado do Asaas passa inteiro', () => {
+    expect(valorDoLembrete({ chargeValue: 1298.5, monthlyValue: 1298.5, cycleMonths: 1 })).toBe(
+      'R$ 1.298,50',
+    )
   })
 })

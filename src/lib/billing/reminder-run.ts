@@ -10,6 +10,7 @@ import { db, organization, organizationBilling } from '@/db'
 import { loadChannel } from '@/lib/channels/channels'
 import { enviarRegistrando } from './reminder-send'
 import { firstNameForGreeting } from '@/lib/cdl/names'
+import { CYCLES, type BillingCycle } from '@/lib/billing/cycle'
 import { getProvider } from '@/lib/channels/registry'
 
 import {
@@ -18,7 +19,7 @@ import {
   reminderText,
   type ReminderCandidate,
   type ReminderStep,
-  brlSimples,
+  valorDoLembrete,
   diaBr,} from './reminders'
 
 export interface ReminderRunResult {
@@ -62,6 +63,7 @@ export async function runBillingReminders(now = new Date()): Promise<ReminderRun
     asaasCustomerId: string | null
     plan: string | null
     monthlyValue: string | null
+    billingCycle: string | null
     dueAt: string | null
     status: string
     remindersSent: unknown
@@ -75,6 +77,7 @@ export async function runBillingReminders(now = new Date()): Promise<ReminderRun
         asaasCustomerId: organizationBilling.asaasCustomerId,
         plan: organizationBilling.plan,
         monthlyValue: organizationBilling.monthlyValue,
+        billingCycle: organizationBilling.billingCycle,
         dueAt: organizationBilling.dueAt,
         status: organizationBilling.status,
         remindersSent: organizationBilling.remindersSent,
@@ -116,20 +119,29 @@ export async function runBillingReminders(now = new Date()): Promise<ReminderRun
       // link estiver aprovado). Falhar aqui não pode custar o lembrete: sem o
       // link ele sai igual, só sem botão.
       let invoiceUrl: string | null = null
+      let chargeValue: number | null = null
       if (row.asaasCustomerId) {
         try {
           const { nextOpenCharge } = await import('./asaas')
-          invoiceUrl = (await nextOpenCharge(row.asaasCustomerId))?.invoiceUrl ?? null
+          const cobranca = await nextOpenCharge(row.asaasCustomerId)
+          invoiceUrl = cobranca?.invoiceUrl ?? null
+          // O valor do BOLETO, não o mensal — ver valorDoLembrete.
+          chargeValue = cobranca ? Number(cobranca.value) : null
         } catch (err) {
-          console.warn(`[billing-reminders] link da cobrança de "${row.name}" não veio:`, err)
+          console.warn(`[billing-reminders] cobrança de "${row.name}" não veio:`, err)
         }
       }
+      const valorTexto = valorDoLembrete({
+        chargeValue,
+        monthlyValue: candidate.monthlyValue,
+        cycleMonths: row.billingCycle ? (CYCLES[row.billingCycle as BillingCycle]?.months ?? 1) : 1,
+      })
       const via = await enviarRegistrando(channel, provider, fone, texto, row.name, {
         invoiceUrl,
         step,
         params: [
           firstNameForGreeting(row.name) || row.name,
-          candidate.monthlyValue ? brlSimples(candidate.monthlyValue) : 'a mensalidade',
+          valorTexto,
           candidate.dueAt ? diaBr(candidate.dueAt) : '',
         ],
       })
