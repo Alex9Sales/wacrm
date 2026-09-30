@@ -91,6 +91,25 @@ export function idDaFatura(invoiceUrl: string | null | undefined): string | null
   return /^[A-Za-z0-9_-]{8,}$/.test(fim) ? fim : null
 }
 
+/** O template existe e está APROVADO nesta conta? */
+async function templateAprovado(accountId: string, nome: string): Promise<boolean> {
+  if (!nome) return false
+  const row = firstOrNull(
+    await db
+      .select({ id: messageTemplates.id })
+      .from(messageTemplates)
+      .where(
+        and(
+          eq(messageTemplates.accountId, accountId),
+          eq(messageTemplates.name, nome),
+          eq(messageTemplates.status, 'APPROVED'),
+        ),
+      )
+      .limit(1),
+  )
+  return !!row
+}
+
 /** O template com botão existe e está aprovado nesta conta? */
 async function templateComLinkAprovado(
   accountId: string,
@@ -178,6 +197,23 @@ export async function enviarRegistrando(
       templateName,
       lastInboundAt: ultimaEntrada?.at ?? null,
     })
+
+    // ⚠️ Janela fechada + template não aprovado = não há como falar com ele.
+    // Tentar texto livre aqui só produz uma recusa da Meta e um log confuso —
+    // foi o que aconteceu no primeiro teste do agradecimento, cujo template
+    // ainda estava PENDING. Melhor dizer que não deu e por quê.
+    if (modo === 'template' && templateName) {
+      const usavel = await templateAprovado(channel.accountId, templateName)
+      const comLinkOk = tpl
+        ? await templateAprovado(channel.accountId, TEMPLATE_COM_LINK[tpl.step] ?? '')
+        : false
+      if (!usavel && !comLinkOk) {
+        console.warn(
+          `[reminder-send] janela de 24 h fechada e nenhum template aprovado (${templateName}) — nada enviado a ${nomeCliente}`,
+        )
+        return `não enviado (sem template aprovado: ${templateName})`
+      }
+    }
 
     if (modo === 'template' && templateName && tpl) {
       // Prefere a versão com "Pagar agora" quando ela existe aprovada E há uma
