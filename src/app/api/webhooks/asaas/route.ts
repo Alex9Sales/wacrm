@@ -17,7 +17,7 @@ import { firstOrNull } from '@/db/helpers'
 import {
   isActivateEvent,
   extractOrgRef,
-  addOneMonthISO,
+  nextDueForCycle,
 } from '@/lib/billing/webhook'
 
 export const runtime = 'nodejs'
@@ -78,8 +78,19 @@ async function activateFromPayment(payment: unknown): Promise<void> {
       return
     }
     const p = (payment ?? {}) as Record<string, unknown>
-    const dueAt = addOneMonthISO(
+    // O próximo vencimento depende do CICLO: quem pagou um semestral de uma vez
+    // só volta a dever em seis meses. Somar um mês aqui faria o lembrete cobrar
+    // em outubro um contrato pago até março.
+    const atual = firstOrNull(
+      await db
+        .select({ cycle: organizationBilling.billingCycle })
+        .from(organizationBilling)
+        .where(eq(organizationBilling.organizationId, orgId))
+        .limit(1),
+    )
+    const dueAt = nextDueForCycle(
       typeof p.dueDate === 'string' ? p.dueDate : undefined,
+      atual?.cycle,
     )
     const set: Partial<typeof organizationBilling.$inferInsert> = {
       status: 'active',
