@@ -1288,6 +1288,18 @@ export async function updateConversationStatus(
       status,
       // Reabrir = novo episódio → zera o limite de respostas da IA.
       ...(status === 'open' && prev?.status !== 'open' ? { aiReplyCount: 0 } : {}),
+      // ⚠️ 30/09 (Dra. Joyce): fechar SOLTA o responsável.
+      //
+      // A clínica atribui a conversa a quem responde, e a IA se cala em
+      // conversa atribuída — 324 das 750 abertas ficaram sem follow-up sem
+      // ninguém perceber. Fechar é o gesto que a atendente já faz quando
+      // terminou; se ela ainda tivesse que desatribuir à mão num segundo
+      // lugar, ia esquecer, e o CRM já sabe que acabou.
+      //
+      // Só no fechamento: reabrir NÃO devolve o responsável, porque quem
+      // volta pode ser outra pessoa — e a conversa livre é a que a fila
+      // distribui.
+      ...(status === 'closed' && prev?.status !== 'closed' ? { assignedAgentId: null } : {}),
     })
     .where(
       and(

@@ -1616,11 +1616,26 @@ interface ConvMeta {
   contactName: string | null
 }
 
-/** Meta da conversa (canal/último inbound/contato). null se não está nos canais
- *  do agente ou não está aberta. */
+/**
+ * Meta da conversa (canal/último inbound/contato).
+ *
+ * `operacional: true` ignora "atribuída a alguém" e "conversa fechada".
+ *
+ * ⚠️ 30/09 (Dra. Joyce): os pacientes do dia NÃO receberam a confirmação da
+ * consulta. A clínica atribui a conversa à atendente que responde — 324 das 750
+ * abertas — e a IA se cala em conversa atribuída, para não falar por cima de
+ * quem está atendendo. Essa proteção está certa para reengajar alguém parado.
+ * Está errada para o lembrete de uma consulta MARCADA: ele não compete com a
+ * atendente, é o aviso que a clínica quer que saia sempre, e o paciente que não
+ * recebe vira falta na agenda.
+ *
+ * A conversa fechada entra pelo mesmo motivo: o atendimento acabou ontem, a
+ * consulta é amanhã, e o lembrete tem que sair.
+ */
 async function loadConvMeta(
   agent: AgentRow,
   conversationId: string,
+  opts: { operacional?: boolean } = {},
 ): Promise<ConvMeta | null> {
   const res = await db.execute(sql`
     SELECT c.contact_id, c.channel_id, c.ai_agent_id, ch.provider, ct.name AS contact_name,
@@ -1631,9 +1646,11 @@ async function loadConvMeta(
     LEFT JOIN channels ch ON ch.id = c.channel_id
     LEFT JOIN contacts ct ON ct.id = c.contact_id
     WHERE c.id = ${conversationId} AND c.account_id = ${agent.account_id}
-      AND c.status IN ('open','pending')
+      ${opts.operacional ? sql`AND c.status <> 'spam'` : sql`AND c.status IN ('open','pending')`}
+      -- A IA desligada NAQUELA conversa continua valendo em tudo: é a única
+      -- que é decisão explícita sobre aquele contato.
       AND c.ai_autoreply_disabled = false
-      AND c.assigned_agent_id IS NULL
+      ${opts.operacional ? sql`` : sql`AND c.assigned_agent_id IS NULL`}
     LIMIT 1
   `)
   const row = res.rows[0] as
@@ -1770,7 +1787,9 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
       if (dueIdx < 0) continue // nenhum venceu ainda
       if (e.reminders_sent > dueIdx) continue // já mandou este (e anteriores)
 
-      const meta = await loadConvMeta(agent, e.conversation_id)
+      // Lembrete de consulta/reunião é OPERACIONAL: sai com a conversa
+      // atribuída ou fechada. Ver o comentário de loadConvMeta.
+      const meta = await loadConvMeta(agent, e.conversation_id, { operacional: true })
       if (!meta) {
         await stampReminder(e.event_id, dueIdx + 1)
         continue
