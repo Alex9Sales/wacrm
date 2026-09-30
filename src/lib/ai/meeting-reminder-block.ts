@@ -48,6 +48,8 @@ export type MeetingReminderBlock =
   | 'ia_falhou'
   /** O agente está sem configuração de IA utilizável — não há quem escreva. */
   | 'sem_ia'
+  /** É consulta de uma pessoa de verdade, mas ninguém está ligado a ela. */
+  | 'sem_paciente'
 
 const MOTIVOS: MeetingReminderBlock[] = [
   'sem_conversa',
@@ -58,6 +60,7 @@ const MOTIVOS: MeetingReminderBlock[] = [
   'envio_falhou',
   'ia_falhou',
   'sem_ia',
+  'sem_paciente',
 ]
 
 /** Valida o que veio do banco — coluna de texto aceita qualquer coisa. */
@@ -133,6 +136,14 @@ export function rotuloDoBloqueio(motivo: MeetingReminderBlock): {
         explicacao:
           'Não há uma configuração de IA utilizável para escrever o lembrete deste compromisso.',
         comoResolver: 'Confira se o agente está ativo e com a chave preenchida em Agentes.',
+      }
+    case 'sem_paciente':
+      return {
+        curto: 'sem cliente/paciente',
+        explicacao:
+          'A consulta está marcada no nome de alguém, mas não há ninguém do cadastro ligado a ela — em geral porque falta o telefone na agenda de origem.',
+        comoResolver:
+          'Abra o compromisso e preencha o campo "Cliente / paciente", ou cadastre o telefone no sistema de onde a agenda vem.',
       }
   }
 }

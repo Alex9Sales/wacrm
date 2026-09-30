@@ -4,6 +4,7 @@ import { db, aiConfigs, conversations, deals, calendarEvents, contacts, messages
 import { firstOrNull } from '@/db/helpers'
 import { CAPABILITIES, type ProviderId } from '@/lib/channels/provider'
 import { jaFoiEntregue } from '@/lib/channels/delivery-error'
+import { pareceConsultaDeAlguem } from '@/lib/google/event-contact'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { getProvider } from '@/lib/channels/registry'
 import { listChannels } from '@/lib/channels/channels'
@@ -1621,6 +1622,8 @@ interface MeetingCandRow {
   starts_at: string
   reminders_sent: number
   contact_id: string | null
+  /** Usada só para separar CONSULTA de bloqueio de agenda quando não há contato. */
+  description: string | null
   conversation_id: string | null
 }
 
@@ -1819,7 +1822,7 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
     const antecedenciaMax = Math.max(0, -reminderSignedMinutes(reminders[0]))
 
     const rows = await db.execute(sql`
-      SELECT e.id AS event_id, e.starts_at, e.reminders_sent, e.contact_id,
+      SELECT e.id AS event_id, e.starts_at, e.reminders_sent, e.contact_id, e.description,
              COALESCE(dl.conversation_id,
                (SELECT cv.id FROM conversations cv
                   WHERE cv.contact_id = e.contact_id AND cv.account_id = e.account_id
@@ -1865,7 +1868,23 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
       // clínica da Joyce tem 41 bloqueios), e aviso que grita à toa deixa de
       // ser lido. Quem cobra o vínculo é o campo "Cliente / paciente" no
       // formulário, no momento de marcar.
-      if (!e.contact_id) continue
+      if (!e.contact_id) {
+        // Bloqueio de agenda ("não agendar", almoço, horário reservado) não tem
+        // ninguém para avisar e não vira alerta — são 453 numa clínica de 118
+        // consultas, e alerta que grita à toa deixa de ser lido.
+        //
+        // Mas a CONSULTA órfã é outra coisa: uma pessoa de verdade com hora
+        // marcada e ninguém ligado a ela. É o caso que passa despercebido até o
+        // paciente não aparecer, e agora aparece no compromisso, na Agenda.
+        if (pareceConsultaDeAlguem(e.description)) {
+          const startMsOrfa = new Date(e.starts_at).getTime()
+          // Mesma regra dos outros: só relata depois que algum degrau venceu.
+          if (Date.now() >= startMsOrfa - antecedenciaMax * 60_000) {
+            await segurarLembrete(e.event_id, 'sem_paciente')
+          }
+        }
+        continue
+      }
 
       const startMs = new Date(e.starts_at).getTime()
       // Índice do lembrete "vencido" mais recente (pula os perdidos anteriores).

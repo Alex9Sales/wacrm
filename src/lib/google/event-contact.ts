@@ -48,6 +48,24 @@ export function phoneFromDescription(description: string | null | undefined): st
 }
 
 /**
+ * O compromisso é uma CONSULTA DE ALGUÉM, e não um bloqueio de agenda?
+ *
+ * A diferença importa na hora de avisar: numa agenda de clínica, a maioria
+ * esmagadora dos compromissos não é paciente. Na da Dra. Joyce são 453 bloqueios
+ * ("não agendar", horário reservado, almoço, sem título) para 118 consultas.
+ * Marcar todos como "ninguém será avisado" encheria a tela de alerta falso, e
+ * alerta que grita à toa deixa de ser lido.
+ *
+ * Mas a consulta órfã — uma pessoa de verdade com hora marcada e sem ninguém
+ * ligado a ela — precisa aparecer: é exatamente o caso que passa despercebido
+ * até o paciente não chegar. O Capim escreve "Paciente: <nome>" na descrição, e
+ * é isso que separa um do outro.
+ */
+export function pareceConsultaDeAlguem(description: string | null | undefined): boolean {
+  return /(^|\n)\s*paciente\s*:\s*\S/i.test(description ?? '')
+}
+
+/**
  * A chave de comparação: os 8 últimos dígitos.
  *
  * O Capim guarda "(54) 9917-1108" e o CRM guarda "5554999171108" — o mesmo

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { phoneFromDescription, phoneKey } from './event-contact'
+import { pareceConsultaDeAlguem, phoneFromDescription, phoneKey } from './event-contact'
 
 /**
  * Esta função decide a quem vai o lembrete de uma consulta. Errar aqui não é
@@ -66,5 +66,33 @@ describe('a chave de comparação (8 últimos dígitos)', () => {
     expect(phoneKey('1234567')).toBeNull()
     expect(phoneKey('')).toBeNull()
     expect(phoneKey(null)).toBeNull()
+  })
+})
+
+describe('separar CONSULTA de bloqueio de agenda', () => {
+  it('reconhece a consulta pelo "Paciente:" que o Capim escreve', () => {
+    expect(
+      pareceConsultaDeAlguem(
+        'Paciente: Ian Douglas Miranda De Azevedo\nStatus no Capim: A confirmar\nCadeira: 102',
+      ),
+    ).toBe(true)
+    expect(pareceConsultaDeAlguem('paciente: Maria')).toBe(true)
+  })
+
+  it('NÃO acusa bloqueio de agenda — são 453 para 118 consultas', () => {
+    // Marcar estes como "ninguém será avisado" encheria a tela de alerta falso,
+    // e alerta que grita à toa deixa de ser lido.
+    expect(pareceConsultaDeAlguem('nao agendar')).toBe(false)
+    expect(pareceConsultaDeAlguem('Bloqueado: nao marcar')).toBe(false)
+    expect(pareceConsultaDeAlguem(null)).toBe(false)
+    expect(pareceConsultaDeAlguem('')).toBe(false)
+    expect(pareceConsultaDeAlguem('Almoço')).toBe(false)
+  })
+
+  it('não confunde a palavra solta com o campo', () => {
+    // "paciente" no meio de uma frase não é o campo do Capim.
+    expect(pareceConsultaDeAlguem('Retorno do paciente da semana passada')).toBe(false)
+    expect(pareceConsultaDeAlguem('Paciente:')).toBe(false) // campo vazio
+    expect(pareceConsultaDeAlguem('Paciente:   ')).toBe(false)
   })
 })
