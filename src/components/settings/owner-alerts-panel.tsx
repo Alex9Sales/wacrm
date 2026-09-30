@@ -177,7 +177,13 @@ export function OwnerAlertsPanel() {
                 {
                   checked: onDemo,
                   set: setOnDemo,
-                  label: '🎯 O SDR marcar um teste/demonstração (com empresa e resumo)',
+                  // 29/09: o rótulo dizia só "teste/demonstração pelo SDR" e o
+                  // Rafael, montando a conta de uma CLÍNICA, perguntou qual
+                  // marcar para "a IA agendou uma consulta". É o mesmo aviso —
+                  // quem dispara é o marcador [[AVISARDONO:]], venha ele de um
+                  // SDR ou de uma secretária virtual. O rótulo agora diz isso.
+                  label:
+                    '🎯 A IA avisar você de algo marcado (consulta, teste, demonstração — com resumo)',
                 },
               ].map((o) => (
                 <label
@@ -242,7 +248,7 @@ export function OwnerAlertsPanel() {
                       def: DEFAULT_ALERT_TEMPLATES.order,
                     },
                     {
-                      label: '🎯 Teste/demo agendado pelo SDR',
+                      label: '🎯 A IA avisou de algo marcado',
                       vars: '{{cliente}} {{telefone}} {{empresa}} {{resumo}}',
                       value: demoTemplate,
                       set: setDemoTemplate,
