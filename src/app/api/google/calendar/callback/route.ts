@@ -4,12 +4,12 @@
 
 import { NextResponse } from 'next/server'
 import { and, eq, sql } from 'drizzle-orm'
-import { db, calendarConnections, calendars } from '@/db'
+import { db, calendarConnections } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { encrypt } from '@/lib/whatsapp/encryption'
-import { verifyState, exchangeCode, fetchUserEmail, listCalendarList } from '@/lib/google/calendar'
-import { importGoogleEvents } from '@/lib/google/sync'
+import { verifyState, exchangeCode, fetchUserEmail } from '@/lib/google/calendar'
+import { descobrirAgendas, importGoogleEvents } from '@/lib/google/sync'
 
 export async function GET(request: Request) {
   const base = (process.env.BETTER_AUTH_URL ?? 'http://localhost:3000').replace(/\/$/, '')
@@ -72,34 +72,10 @@ export async function GET(request: Request) {
       connectionId = created.id
     }
 
-    // Agendas do Google → calendars locais (source google).
-    const list = await listCalendarList(tokens.access_token)
-    for (const gcal of list) {
-      const already = firstOrNull(
-        await db
-          .select({ id: calendars.id })
-          .from(calendars)
-          .where(and(eq(calendars.accountId, ctx.accountId), eq(calendars.googleCalendarId, gcal.id)))
-          .limit(1),
-      )
-      if (already) {
-        await db
-          .update(calendars)
-          .set({ connectionId, source: 'google', updatedAt: sql`now()` })
-          .where(eq(calendars.id, already.id))
-      } else {
-        await db.insert(calendars).values({
-          accountId: ctx.accountId,
-          ownerUserId: ctx.userId,
-          createdBy: ctx.userId,
-          name: gcal.summary || 'Google',
-          color: gcal.backgroundColor || '#4285F4',
-          source: 'google',
-          googleCalendarId: gcal.id,
-          connectionId,
-        })
-      }
-    }
+    // Mesma descoberta que o sync periódico faz — uma função só, para as duas
+    // nunca divergirem. Antes isto vivia aqui e SÓ aqui, e era por isso que uma
+    // agenda criada no Google depois de conectar não aparecia nunca.
+    await descobrirAgendas(ctx.accountId, connectionId, tokens.access_token)
 
     await importGoogleEvents(ctx.accountId, connectionId)
     return back(`google=connected&email=${encodeURIComponent(email ?? '')}`)

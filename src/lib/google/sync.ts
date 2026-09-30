@@ -14,6 +14,7 @@ import { getAccountSettings } from '@/lib/settings/account-settings'
 import {
   refreshAccessToken,
   listGoogleEvents,
+  listCalendarList,
   insertGoogleEvent,
   patchGoogleEvent,
   deleteGoogleEvent,
@@ -123,6 +124,60 @@ function dateInTz(iso: string, tz: string): string {
   }).format(new Date(iso))
 }
 
+/**
+ * Espelha a lista de agendas do Google desta conexão em `calendars`.
+ *
+ * Idempotente: agenda já conhecida é reatada à conexão, agenda nova é criada.
+ * Nunca apaga — agenda que sumiu do Google fica, com os eventos que já tinha, e
+ * some sozinha do dia a dia quando não recebe mais nada.
+ *
+ * ⚠️ O Google só devolve aqui as agendas em que a conta conectada é `writer`.
+ * Subagenda compartilhada como "somente leitura" não aparece, e o jeito de
+ * resolver é do lado do Google: compartilhar com permissão de alterar eventos.
+ *
+ * Falha de rede aqui não pode derrubar a importação dos eventos: se a lista não
+ * vier, seguimos com as agendas que já temos.
+ */
+export async function descobrirAgendas(
+  accountId: string,
+  connectionId: string,
+  accessToken: string,
+): Promise<void> {
+  try {
+    const list = await listCalendarList(accessToken)
+    for (const gcal of list) {
+      const already = firstOrNull(
+        await db
+          .select({ id: calendars.id })
+          .from(calendars)
+          .where(and(eq(calendars.accountId, accountId), eq(calendars.googleCalendarId, gcal.id)))
+          .limit(1),
+      )
+      if (already) {
+        // Só reata a conexão: NÃO mexe no nome nem na cor, que o dono pode ter
+        // trocado aqui dentro para algo que faça sentido para a equipe dele.
+        await db
+          .update(calendars)
+          .set({ connectionId, source: 'google', updatedAt: sql`now()` })
+          .where(eq(calendars.id, already.id))
+      } else {
+        await db.insert(calendars).values({
+          accountId,
+          createdBy: null,
+          name: gcal.summary || 'Google',
+          color: gcal.backgroundColor || '#4285F4',
+          source: 'google',
+          googleCalendarId: gcal.id,
+          connectionId,
+        })
+        console.log(`[google sync] agenda nova: ${gcal.summary || gcal.id}`)
+      }
+    }
+  } catch (err) {
+    console.error('[google sync] não consegui listar as agendas:', err)
+  }
+}
+
 /** Importa eventos (janela -7d…+60d) de todas as agendas Google desta conexão. */
 export async function importGoogleEvents(
   accountId: string,
@@ -146,6 +201,16 @@ export async function importGoogleEvents(
     const accessToken = await getValidAccessToken(conn)
     // Fuso da conta: é o que ancora as datas dos eventos de dia inteiro.
     const tz = (await getAccountSettings(accountId)).businessTimezone || 'America/Sao_Paulo'
+
+    // Agendas NOVAS do Google entram aqui, a cada sincronização.
+    //
+    // 30/09 (clínica da Dra. Joyce): as atendentes não conseguiam escolher a
+    // subagenda do profissional — porque no CRM ela não existia. A lista de
+    // agendas do Google só era lida no momento de conectar a conta, no callback
+    // do OAuth; qualquer agenda criada ou compartilhada DEPOIS ficava invisível
+    // para sempre, e a única saída teria sido desconectar e reconectar o Google.
+    // A clínica tinha uma agenda só no CRM enquanto usava várias no Google.
+    await descobrirAgendas(accountId, connectionId, accessToken)
 
     const cals = await db
       .select({ id: calendars.id, googleCalendarId: calendars.googleCalendarId })
