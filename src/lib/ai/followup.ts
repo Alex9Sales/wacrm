@@ -3,6 +3,7 @@ import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm'
 import { db, aiConfigs, conversations, deals, calendarEvents, contacts, messages, tasks } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { CAPABILITIES, type ProviderId } from '@/lib/channels/provider'
+import { jaFoiEntregue } from '@/lib/channels/delivery-error'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { getProvider } from '@/lib/channels/registry'
 import { listChannels } from '@/lib/channels/channels'
@@ -1816,6 +1817,14 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
         AND e.reminders_sent < ${total}
         AND e.starts_at > now() - interval '2 days'
         AND e.starts_at < now() + interval '30 days'
+        -- Degrau travado espera antes de ser tentado de novo. A varredura roda
+        -- a cada minuto: sem isto, um lembrete preso depois da geração (envio
+        -- recusado, conversa vazia) mandaria a IA reescrever o texto 60 vezes
+        -- por hora, e ainda ocuparia uma das ${PER_AGENT_CAP} vagas o tempo
+        -- todo, empurrando as consultas dos próximos dias para fora da fila.
+        AND (e.reminder_block IS NULL
+             OR e.reminder_block_at IS NULL
+             OR e.reminder_block_at < now() - interval '15 minutes')
       ORDER BY e.starts_at ASC
       LIMIT ${PER_AGENT_CAP}
     `)
@@ -1885,6 +1894,17 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
       }
       const r = reminders[dueIdx]
 
+      // Um lembrete "antes" serve para CONFIRMAR o que ainda vai acontecer.
+      // Depois que a hora passou ele vira um absurdo — "sua consulta é hoje às
+      // 15h, ainda funciona?" mandado às 18h. Antes isso não acontecia por
+      // acidente (o degrau era queimado na primeira tentativa); agora que ele
+      // pode ficar segurado, virou um caminho possível e precisa ser fechado na
+      // mão. É definitivo: carimba, e um degrau "depois", se houver, assume.
+      if (r.when === 'before' && Date.now() >= startMs) {
+        await stampReminder(e.event_id, dueIdx + 1)
+        continue
+      }
+
       // Lembrete preso a uma etapa (no-show): só vale se o card AINDA estiver
       // nela. Quem o responsável já moveu pra "Reunião realizada" compareceu —
       // mandar "sentimos sua falta" pra essa pessoa é pior que não mandar nada.
@@ -1947,7 +1967,18 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
           requireActive: false,
         })
       }
-      if (!config) break
+      // Agente sem configuração de IA utilizável: ninguém escreve o lembrete.
+      // Era o caminho mais mudo de todos — um `break` seco que abandonava TODOS
+      // os compromissos daquela conta sem uma linha de log. Marca o atual (para
+      // a Agenda mostrar o motivo) e sai do agente dizendo quantos ficaram.
+      if (!config) {
+        await impedir('sem_ia')
+        console.error(
+          `[meeting-reminder] agente ${agent.id} sem configuracao de IA — ` +
+            `${cands.length} compromisso(s) da conta ${agent.account_id} sem lembrete`,
+        )
+        break
+      }
 
       let text = ''
       try {
@@ -1973,8 +2004,17 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
         const gen = await generateReply({ config, systemPrompt, messages })
         text = stripLeadingTimestamp(gen.text || '').trim()
       } catch (err) {
-        console.error('[meeting-reminder] geração falhou:', err)
-        continue // não marca — tenta no próximo tick
+        // 💳 Mesma cortesia que as duas varreduras irmãs já faziam (follow-up e
+        // gatilho de etapa) e que só o lembrete de consulta não tinha: com a
+        // chave sem saldo, avisa a plataforma dizendo DE QUEM é a conta. Numa
+        // conta de clínica, configurada só com lembretes, nenhuma das outras
+        // duas varreduras chega a rodar — sem isto, um dia sem crédito deixava
+        // o lembrete calado e ninguém ficava sabendo.
+        if (isNoCreditError(err))
+          await warnNoCredit({ accountId: agent.account_id, where: 'lembrete de consulta', err })
+        else console.error('[meeting-reminder] geração falhou:', err)
+        await impedir('ia_falhou')
+        continue
       }
 
       if (!text || text.includes(SILENT)) {
@@ -1993,11 +2033,21 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
         await logFollowUpTask(cfg, agent.account_id, e.conversation_id, reminderLabel(r))
         await stampReminder(e.event_id, dueIdx + 1)
       } catch (err) {
-        // O canal recusou (número fora do ar, sessão caída…). A mensagem existe
-        // e vale enviar quando o canal voltar: segura o degrau em vez de dar
-        // por feito um lembrete que o paciente nunca recebeu.
-        console.error('[meeting-reminder] envio falhou:', err)
-        await impedir('envio_falhou')
+        // ⚠️ 30/09, em produção: "a chamada lançou" NÃO é "a mensagem não
+        // chegou". O WhatsApp aceitou o lembrete do Rafael e só o INSERT em
+        // `messages` falhou; como o degrau ficou segurado, o tick seguinte
+        // mandou tudo de novo e ele recebeu duas vezes, com um minuto de
+        // diferença. Retentar depois de uma entrega confirmada é escrever de
+        // novo para quem já leu — pior do que não registrar.
+        if (jaFoiEntregue(err)) {
+          console.error('[meeting-reminder] entregue mas não registrado:', err)
+          await stampReminder(e.event_id, dueIdx + 1)
+        } else {
+          // Aí sim o canal recusou (número fora do ar, sessão caída…): a
+          // mensagem não chegou a ninguém e vale tentar quando o canal voltar.
+          console.error('[meeting-reminder] envio falhou:', err)
+          await impedir('envio_falhou')
+        }
       }
     }
   }

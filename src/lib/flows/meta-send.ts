@@ -3,6 +3,7 @@ import {
   type InteractiveListSection,
   type MediaKind,
 } from '@/lib/whatsapp/meta-api'
+import { DeliveredButNotRecordedError } from '@/lib/channels/delivery-error'
 import { db, contacts, conversations, messages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { and, eq } from 'drizzle-orm'
@@ -182,7 +183,7 @@ export async function engineSendText(
     })
   } catch (msgErr) {
     const msg = msgErr instanceof Error ? msgErr.message : String(msgErr)
-    throw new Error(`sent to provider but DB insert failed: ${msg}`)
+    throw new DeliveredButNotRecordedError(waMessageId ?? null, msg)
   }
 
   await db
@@ -297,7 +298,7 @@ export async function engineSendMedia(
     })
   } catch (msgErr) {
     const msg = msgErr instanceof Error ? msgErr.message : String(msgErr)
-    throw new Error(`sent to provider but DB insert failed: ${msg}`)
+    throw new DeliveredButNotRecordedError(waMessageId ?? null, msg)
   }
 
   await db
@@ -462,7 +463,7 @@ async function sendInteractiveViaProvider(
     })
   } catch (msgErr) {
     const msg = msgErr instanceof Error ? msgErr.message : String(msgErr)
-    throw new Error(`sent to provider but DB insert failed: ${msg}`)
+    throw new DeliveredButNotRecordedError(waMessageId ?? null, msg)
   }
 
   await db

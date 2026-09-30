@@ -1,4 +1,5 @@
 import { db, contacts, conversations, messages } from '@/db'
+import { DeliveredButNotRecordedError } from '@/lib/channels/delivery-error'
 import { firstOrNull } from '@/db/helpers'
 import { and, eq } from 'drizzle-orm'
 
@@ -181,7 +182,7 @@ async function sendViaProvider(input: SendInput): Promise<{ whatsapp_message_id:
     // The provider already has the message; record the DB error but don't
     // pretend the send failed.
     const msg = msgErr instanceof Error ? msgErr.message : String(msgErr)
-    throw new Error(`sent to provider but DB insert failed: ${msg}`)
+    throw new DeliveredButNotRecordedError(waMessageId ?? null, msg)
   }
 
   await db

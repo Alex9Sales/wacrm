@@ -276,7 +276,17 @@ export async function scheduleEventFromAi(input: {
         const sameTime = new Date(existing.startsAt).getTime() === start.getTime()
         await db
           .update(calendarEvents)
-          .set({ startsAt: start.toISOString(), endsAt: end.toISOString(), title, ...(deal?.id ? { dealId: deal.id } : {}) })
+          .set({
+            startsAt: start.toISOString(),
+            endsAt: end.toISOString(),
+            title,
+            ...(deal?.id ? { dealId: deal.id } : {}),
+            // Horário mudou = compromisso novo para quem vai ser avisado. Sem
+            // zerar, `reminders_sent` (que só anda para frente) faz a data nova
+            // nascer com os degraus queimados, e o lembrete da remarcação —
+            // justamente o mais necessário — nunca sai.
+            ...(sameTime ? {} : { remindersSent: 0, reminderBlock: null, reminderBlockAt: null }),
+          })
           .where(eq(calendarEvents.id, existing.id))
         if (!sameTime) {
           try {

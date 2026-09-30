@@ -20,6 +20,8 @@ const TODOS: MeetingReminderBlock[] = [
   'template_falhou',
   'sem_historico',
   'envio_falhou',
+  'ia_falhou',
+  'sem_ia',
 ]
 
 describe('o que vem do banco', () => {

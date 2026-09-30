@@ -237,6 +237,25 @@ export async function updateEvent(
     ) {
       set.endsAt = new Date(new Date(patch.startsAt).getTime() + 3_600_000).toISOString()
     }
+    // Remarcou a consulta → é um compromisso novo para quem vai ser avisado.
+    // `reminders_sent` só anda para frente, então sem zerar aqui a data nova já
+    // nasce com os degraus queimados e o paciente não recebe nada da remarcação
+    // — que é exatamente quando ele MAIS precisa ser avisado. O bloqueio antigo
+    // também vai embora: fala de uma tentativa que não existe mais.
+    if (patch.startsAt !== undefined) {
+      const antes = firstOrNull(
+        await db
+          .select({ startsAt: calendarEvents.startsAt })
+          .from(calendarEvents)
+          .where(and(eq(calendarEvents.id, id), eq(calendarEvents.accountId, ctx.accountId)))
+          .limit(1),
+      )
+      if (antes && new Date(antes.startsAt).getTime() !== new Date(patch.startsAt).getTime()) {
+        set.remindersSent = 0
+        set.reminderBlock = null
+        set.reminderBlockAt = null
+      }
+    }
     if (patch.calendarId !== undefined) set.calendarId = patch.calendarId
     if (patch.contactId !== undefined) set.contactId = patch.contactId || null
     if (patch.dealId !== undefined) set.dealId = patch.dealId || null

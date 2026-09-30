@@ -523,8 +523,18 @@ export function AgendaClient() {
                       }}
                       className="flex items-center gap-1 truncate rounded px-1 py-0.5 text-[11px] font-medium"
                       style={{ background: ev.calendarColor, color: inkOn(ev.calendarColor) }}
-                      title={ev.contactName ? `${ev.title} — ${ev.contactName}` : ev.title}
+                      title={
+                        ev.reminderBlock
+                          ? `${ev.title}${ev.contactName ? ` — ${ev.contactName}` : ''}: ${avisoNaAgenda(ev.reminderBlock)}`
+                          : ev.contactName
+                            ? `${ev.title} — ${ev.contactName}`
+                            : ev.title
+                      }
                     >
+                      {/* A Agenda ABRE no mês: um compromisso cujo paciente não
+                          foi avisado tem que dar sinal aqui, senão o aviso só
+                          existe para quem já foi procurar na visão de dia. */}
+                      {ev.reminderBlock && <AlertTriangle className="h-3 w-3 shrink-0" />}
                       {!ev.allDay && (
                         <span className="tabular-nums opacity-90">
                           {pad(new Date(ev.startsAt).getHours())}:{pad(new Date(ev.startsAt).getMinutes())}
@@ -649,12 +659,16 @@ function DayView({
                 }}
                 title={
                   ev.reminderBlock
-                    ? `${ev.title} — ${avisoNaAgenda(ev.reminderBlock)}`
+                    ? `${ev.title}${ev.contactName ? ` — ${ev.contactName}` : ''}: ${avisoNaAgenda(ev.reminderBlock)}`
                     : ev.contactName
                       ? `${ev.title} — ${ev.contactName} (recebe a confirmação)`
                       : `${ev.title} — sem cliente/paciente: ninguém é avisado`
                 }
               >
+                {/* Fora do bloco do nome de propósito: uma consulta de 30 min é
+                    baixa demais para mostrar o nome, e era justamente nela que
+                    o alerta sumia. O aviso não pode depender da duração. */}
+                {ev.reminderBlock && <AlertTriangle className="mr-1 inline h-3 w-3" />}
                 <span className="font-medium tabular-nums">
                   {pad(s.getHours())}:{pad(s.getMinutes())}
                 </span>{' '}
@@ -665,11 +679,6 @@ function DayView({
                   <div className="truncate opacity-80">
                     <User className="mr-1 inline h-3 w-3" />
                     {ev.contactName}
-                    {/* O paciente está ligado mas o aviso não conseguiu sair:
-                        dizer isso AQUI, senão o compromisso parece resolvido. */}
-                    {ev.reminderBlock && (
-                      <AlertTriangle className="ml-1 inline h-3 w-3" />
-                    )}
                   </div>
                 )}
               </div>

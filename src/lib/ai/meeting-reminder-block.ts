@@ -44,6 +44,10 @@ export type MeetingReminderBlock =
   | 'sem_historico'
   /** A mensagem foi gerada, mas o canal recusou na hora de enviar. */
   | 'envio_falhou'
+  /** A IA não conseguiu escrever o texto (chave sem saldo, provedor fora). */
+  | 'ia_falhou'
+  /** O agente está sem configuração de IA utilizável — não há quem escreva. */
+  | 'sem_ia'
 
 const MOTIVOS: MeetingReminderBlock[] = [
   'sem_conversa',
@@ -52,6 +56,8 @@ const MOTIVOS: MeetingReminderBlock[] = [
   'template_falhou',
   'sem_historico',
   'envio_falhou',
+  'ia_falhou',
+  'sem_ia',
 ]
 
 /** Valida o que veio do banco — coluna de texto aceita qualquer coisa. */
@@ -113,6 +119,20 @@ export function rotuloDoBloqueio(motivo: MeetingReminderBlock): {
         explicacao:
           'A mensagem foi escrita, mas o canal recusou na hora de enviar — em geral o número está fora do ar.',
         comoResolver: 'Veja a saúde do canal em Configurações → Canais.',
+      }
+    case 'ia_falhou':
+      return {
+        curto: 'a IA não conseguiu escrever',
+        explicacao:
+          'A assistente falhou ao escrever a mensagem — quase sempre é a chave da IA sem saldo ou o provedor fora do ar.',
+        comoResolver: 'Confira o saldo e a chave da IA em Agentes → Credenciais.',
+      }
+    case 'sem_ia':
+      return {
+        curto: 'agente sem IA configurada',
+        explicacao:
+          'Não há uma configuração de IA utilizável para escrever o lembrete deste compromisso.',
+        comoResolver: 'Confira se o agente está ativo e com a chave preenchida em Agentes.',
       }
   }
 }
