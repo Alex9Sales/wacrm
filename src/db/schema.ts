@@ -2853,6 +2853,11 @@ export const calendarEvents = pgTable("calendar_events", {
 	status: text().default('confirmed').notNull(),
 	// Lembretes de reunião já enviados (ordem cronológica) — migração 0094.
 	remindersSent: integer("reminders_sent").default(0).notNull(),
+	// Por que o lembrete NÃO conseguiu sair (migração 0199). Só anda para frente,
+	// então o que é reversível segura o degrau aqui em vez de queimá-lo — e a
+	// Agenda mostra o motivo no compromisso. Ver lib/ai/meeting-reminder-block.ts.
+	reminderBlock: text("reminder_block"),
+	reminderBlockAt: timestamp("reminder_block_at", { withTimezone: true, mode: 'string' }),
 	// 'local' | 'google'
 	source: text().default('local').notNull(),
 	googleEventId: text("google_event_id"),

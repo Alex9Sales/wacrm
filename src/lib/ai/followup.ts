@@ -7,6 +7,10 @@ import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { getProvider } from '@/lib/channels/registry'
 import { listChannels } from '@/lib/channels/channels'
 import { findOrCreateConversation } from '@/lib/channels/inbound'
+import {
+  decideImpedimento,
+  type MeetingReminderBlock,
+} from './meeting-reminder-block'
 import { loadAiConfigById } from './config'
 import { buildConversationContext, stripLeadingTimestamp } from './context'
 import { generateReply } from './generate'
@@ -1682,12 +1686,58 @@ async function loadConvMeta(
   }
 }
 
-/** Carimba quantos lembretes de reunião já saíram pra este evento. */
+/**
+ * Carimba quantos lembretes de reunião já saíram pra este evento.
+ *
+ * ⚠️ Só chame quando o degrau NÃO TEM VOLTA: ou a mensagem saiu, ou mandá-la
+ * agora seria pior do que não mandar (o card saiu da etapa, a IA leu a conversa
+ * e concluiu que não cabia). `reminders_sent` só anda para frente — carimbar um
+ * degrau que não saiu perde aquele aviso para sempre. Para tudo que ainda pode
+ * mudar até a consulta, use `segurarLembrete`.
+ */
 async function stampReminder(eventId: string, n: number): Promise<void> {
   try {
     await db
       .update(calendarEvents)
-      .set({ remindersSent: n })
+      .set({ remindersSent: n, reminderBlock: null, reminderBlockAt: null })
+      .where(eq(calendarEvents.id, eventId))
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * O lembrete não pôde sair por um motivo REVERSÍVEL: guarda o porquê no
+ * compromisso e NÃO queima o degrau — ele volta a ser tentado sozinho quando a
+ * condição mudar (a IA for religada, o template for escolhido, o canal voltar).
+ *
+ * Quem lê isso é a tela da Agenda, para dizer no próprio compromisso que aquele
+ * paciente não vai ser avisado. Sem isso, o lembrete sumia sem deixar rastro —
+ * era o buraco que o teste do Alex em 30/09 revelou.
+ *
+ * Não acumula atraso: o sweep só tenta o degrau vencido mais recente, então um
+ * degrau preso é descartado quando o próximo vence.
+ */
+async function segurarLembrete(
+  eventId: string,
+  motivo: MeetingReminderBlock,
+  /**
+   * Quando não há mais degrau a vencer e a janela de recuperação passou, o
+   * degrau é encerrado (carimbado) para o evento SAIR da fila — senão eventos
+   * travados ocupariam as 40 vagas por agente e empurrariam os avisos dos
+   * próximos dias para fora. O motivo é preservado de propósito: o compromisso
+   * continua dizendo que aquela pessoa não foi avisada.
+   */
+  encerrar?: { n: number },
+): Promise<void> {
+  try {
+    await db
+      .update(calendarEvents)
+      .set({
+        reminderBlock: motivo,
+        reminderBlockAt: sql`now()`,
+        ...(encerrar ? { remindersSent: encerrar.n } : {}),
+      })
       .where(eq(calendarEvents.id, eventId))
   } catch {
     /* best-effort */
@@ -1776,7 +1826,14 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
     let loaded = false
 
     for (const e of cands) {
-      if (!e.conversation_id) continue
+      // Compromisso que não é de ninguém — bloqueio de agenda ("não agendar"),
+      // almoço, reunião interna. Não há paciente para avisar, então NÃO é
+      // impedimento: marcar com aviso encheria a agenda de alerta falso (só a
+      // clínica da Joyce tem 41 bloqueios), e aviso que grita à toa deixa de
+      // ser lido. Quem cobra o vínculo é o campo "Cliente / paciente" no
+      // formulário, no momento de marcar.
+      if (!e.contact_id) continue
+
       const startMs = new Date(e.starts_at).getTime()
       // Índice do lembrete "vencido" mais recente (pula os perdidos anteriores).
       let dueIdx = -1
@@ -1787,11 +1844,43 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
       if (dueIdx < 0) continue // nenhum venceu ainda
       if (e.reminders_sent > dueIdx) continue // já mandou este (e anteriores)
 
+      /**
+       * O lembrete não conseguiu sair por um motivo reversível. Guarda o porquê
+       * no compromisso e decide, num lugar só, se ainda vale insistir ou se é
+       * hora de liberar a vaga na fila. Fica DEPOIS do cálculo do degrau de
+       * propósito: enquanto nenhum degrau venceu não há impedimento nenhum a
+       * relatar, e avisar antes da hora seria alarme prematuro num compromisso
+       * que ainda está a semanas de distância.
+       */
+      const impedir = async (motivo: MeetingReminderBlock): Promise<void> => {
+        const decisao = decideImpedimento({
+          ehUltimoDegrau: dueIdx === total - 1,
+          msDesdeODegrau:
+            Date.now() - (startMs + reminderSignedMinutes(reminders[dueIdx]) * 60_000),
+        })
+        await segurarLembrete(
+          e.event_id,
+          motivo,
+          decisao === 'encerra' ? { n: dueIdx + 1 } : undefined,
+        )
+      }
+
+      // Tem paciente, mas ele não tem conversa nenhuma: não há por onde mandar.
+      // Antes isso era um `continue` mudo — o compromisso era tentado para
+      // sempre e ninguém sabia que aquela pessoa não seria avisada.
+      if (!e.conversation_id) {
+        await impedir('sem_conversa')
+        continue
+      }
+
       // Lembrete de consulta/reunião é OPERACIONAL: sai com a conversa
       // atribuída ou fechada. Ver o comentário de loadConvMeta.
       const meta = await loadConvMeta(agent, e.conversation_id, { operacional: true })
       if (!meta) {
-        await stampReminder(e.event_id, dueIdx + 1)
+        // A IA está pausada naquela conversa, ou a conversa é de outro agente.
+        // Reversível: religar a IA (ou passar a conversa de volta) faz o degrau
+        // voltar sozinho. Antes queimava — e o aviso da consulta ia junto.
+        await impedir('ia_pausada')
         continue
       }
       const r = reminders[dueIdx]
@@ -1814,30 +1903,40 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
 
       // Canal oficial fora da janela → TEMPLATE; senão texto da IA.
       if (officialWindowApplies(meta.provider) && !windowOpen) {
-        if (r.templateName) {
-          try {
-            const params = await resolveTemplateParams(r.templateParams, {
-              accountId: agent.account_id,
-              contactId: e.contact_id,
-              name: firstName(meta.contactName),
-              tz,
-              meetingIso: e.starts_at,
-            })
-            await sendMessageToConversation(agent.account_id, {
-              conversationId: e.conversation_id,
-              messageType: 'template',
-              templateName: r.templateName,
-              templateLanguage: r.templateLanguage,
-              templateParams: params,
-            })
-            sent += 1
-            await logFollowUpTask(cfg, agent.account_id, e.conversation_id, `${reminderLabel(r)} — ${r.templateName}`)
-            console.log('[meeting-reminder] template:', r.templateName)
-          } catch (err) {
-            console.error('[meeting-reminder] template falhou:', err)
-          }
+        // Fora da janela de 24h a Meta só aceita template aprovado. Sem template
+        // escolhido, este degrau não tem como sair — mas a janela reabre assim
+        // que o cliente responder, então SEGURA em vez de queimar, e o motivo
+        // aparece no compromisso para quem marcou a consulta poder resolver.
+        if (!r.templateName) {
+          await impedir('sem_template')
+          continue
         }
-        await stampReminder(e.event_id, dueIdx + 1)
+        try {
+          const params = await resolveTemplateParams(r.templateParams, {
+            accountId: agent.account_id,
+            contactId: e.contact_id,
+            name: firstName(meta.contactName),
+            tz,
+            meetingIso: e.starts_at,
+          })
+          await sendMessageToConversation(agent.account_id, {
+            conversationId: e.conversation_id,
+            messageType: 'template',
+            templateName: r.templateName,
+            templateLanguage: r.templateLanguage,
+            templateParams: params,
+          })
+          sent += 1
+          await logFollowUpTask(cfg, agent.account_id, e.conversation_id, `${reminderLabel(r)} — ${r.templateName}`)
+          console.log('[meeting-reminder] template:', r.templateName)
+          await stampReminder(e.event_id, dueIdx + 1)
+        } catch (err) {
+          // A Meta recusou — quase sempre template de OUTRO número ou número de
+          // variáveis que não bate. Corrigido o template, este lembrete ainda
+          // pode sair, então o degrau fica segurado e o motivo vai para a tela.
+          console.error('[meeting-reminder] template falhou:', err)
+          await impedir('template_falhou')
+        }
         continue
       }
 
@@ -1854,7 +1953,10 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
       try {
         const messages = await buildConversationContext(e.conversation_id, undefined, tz)
         if (messages.length === 0) {
-          await stampReminder(e.event_id, dueIdx + 1)
+          // Conversa vazia: a IA escreve o lembrete a partir do histórico e não
+          // teria o que contextualizar. Uma única mensagem trocada resolve, então
+          // o degrau fica segurado — não queimado.
+          await impedir('sem_historico')
           continue
         }
         const companyProfile = formatCompanyProfileForPrompt(
@@ -1889,10 +1991,14 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
         })
         sent += 1
         await logFollowUpTask(cfg, agent.account_id, e.conversation_id, reminderLabel(r))
+        await stampReminder(e.event_id, dueIdx + 1)
       } catch (err) {
+        // O canal recusou (número fora do ar, sessão caída…). A mensagem existe
+        // e vale enviar quando o canal voltar: segura o degrau em vez de dar
+        // por feito um lembrete que o paciente nunca recebeu.
         console.error('[meeting-reminder] envio falhou:', err)
+        await impedir('envio_falhou')
       }
-      await stampReminder(e.event_id, dueIdx + 1)
     }
   }
   return { sent }

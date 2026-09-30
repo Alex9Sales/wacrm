@@ -11,6 +11,10 @@ import { db, calendars, calendarEvents, calendarConnections, contacts, deals, us
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { googleConfigured } from '@/lib/google/calendar'
+import {
+  isMeetingReminderBlock,
+  type MeetingReminderBlock,
+} from '@/lib/ai/meeting-reminder-block'
 import { importGoogleEvents, pushEventToGoogle } from '@/lib/google/sync'
 
 export type CalendarRow = {
@@ -42,6 +46,12 @@ export type EventRow = {
   contactName: string | null
   dealId: string | null
   dealTitle: string | null
+  /**
+   * Por que o lembrete deste compromisso não conseguiu sair (migração 0199).
+   * null = sem impedimento. A tela mostra isso NO compromisso: antes, o aviso
+   * da consulta sumia sem deixar rastro e quem marcou não ficava sabendo.
+   */
+  reminderBlock: MeetingReminderBlock | null
 }
 
 export type EventInput = {
@@ -132,6 +142,7 @@ export async function listEvents(range: {
       contactName: contacts.name,
       dealId: calendarEvents.dealId,
       dealTitle: deals.title,
+      reminderBlock: calendarEvents.reminderBlock,
     })
     .from(calendarEvents)
     .innerJoin(calendars, eq(calendarEvents.calendarId, calendars.id))
@@ -147,7 +158,12 @@ export async function listEvents(range: {
       ),
     )
     .orderBy(asc(calendarEvents.startsAt))
-  return rows as EventRow[]
+  // A coluna é texto livre: valida antes de entregar para a tela, senão um
+  // valor antigo/desconhecido viraria um aviso sem rótulo.
+  return rows.map((r) => ({
+    ...r,
+    reminderBlock: isMeetingReminderBlock(r.reminderBlock) ? r.reminderBlock : null,
+  })) as EventRow[]
 }
 
 export async function createEvent(

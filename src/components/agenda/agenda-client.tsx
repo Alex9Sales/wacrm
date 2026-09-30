@@ -7,8 +7,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { ChevronLeft, ChevronRight, Plus, X, Trash2, MapPin, RefreshCw, Link2, Unlink, User } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, X, Trash2, MapPin, RefreshCw, Link2, Unlink, User, AlertTriangle } from 'lucide-react'
 import { ContactPicker } from '@/components/contacts/contact-picker'
+import {
+  avisoNaAgenda,
+  rotuloDoBloqueio,
+  type MeetingReminderBlock,
+} from '@/lib/ai/meeting-reminder-block'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -71,6 +76,8 @@ type Draft = {
    * consultas da Dra. Joyce sem aviso.
    */
   contactId: string
+  /** Só leitura: por que o lembrete deste compromisso não saiu (null = saiu ou não travou). */
+  reminderBlock: MeetingReminderBlock | null
 }
 
 export function AgendaClient() {
@@ -244,6 +251,7 @@ export function AgendaClient() {
       location: '',
       description: '',
       contactId,
+      reminderBlock: null,
     })
   }
 
@@ -260,6 +268,7 @@ export function AgendaClient() {
       location: ev.location ?? '',
       description: ev.description ?? '',
       contactId: ev.contactId ?? '',
+      reminderBlock: ev.reminderBlock,
     })
   }
 
@@ -639,9 +648,11 @@ function DayView({
                   color: inkOn(ev.calendarColor),
                 }}
                 title={
-                  ev.contactName
-                    ? `${ev.title} — ${ev.contactName} (recebe a confirmação)`
-                    : `${ev.title} — sem cliente/paciente: ninguém é avisado`
+                  ev.reminderBlock
+                    ? `${ev.title} — ${avisoNaAgenda(ev.reminderBlock)}`
+                    : ev.contactName
+                      ? `${ev.title} — ${ev.contactName} (recebe a confirmação)`
+                      : `${ev.title} — sem cliente/paciente: ninguém é avisado`
                 }
               >
                 <span className="font-medium tabular-nums">
@@ -654,6 +665,11 @@ function DayView({
                   <div className="truncate opacity-80">
                     <User className="mr-1 inline h-3 w-3" />
                     {ev.contactName}
+                    {/* O paciente está ligado mas o aviso não conseguiu sair:
+                        dizer isso AQUI, senão o compromisso parece resolvido. */}
+                    {ev.reminderBlock && (
+                      <AlertTriangle className="ml-1 inline h-3 w-3" />
+                    )}
                   </div>
                 )}
               </div>
@@ -703,6 +719,27 @@ function EventModal({
         </div>
 
         <div className="flex flex-col gap-3">
+          {/* O lembrete deste compromisso não conseguiu sair. Fica no ALTO do
+              formulário, com o que fazer — antes isso não aparecia em lugar
+              nenhum e o paciente simplesmente não era avisado. */}
+          {draft.reminderBlock && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <div className="min-w-0 text-xs">
+                <p className="font-medium text-foreground">
+                  Este contato não recebeu a confirmação —{' '}
+                  {rotuloDoBloqueio(draft.reminderBlock).curto}.
+                </p>
+                <p className="mt-0.5 text-muted-foreground">
+                  {rotuloDoBloqueio(draft.reminderBlock).explicacao}
+                </p>
+                <p className="mt-1 text-foreground/80">
+                  {rotuloDoBloqueio(draft.reminderBlock).comoResolver}
+                </p>
+              </div>
+            </div>
+          )}
+
           <div>
             <Label className="mb-1 block text-xs">Título</Label>
             <Input
