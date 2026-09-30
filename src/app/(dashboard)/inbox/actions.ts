@@ -1627,6 +1627,73 @@ export async function transferConversationToAgent(
     )
 }
 
+/**
+ * O atendente SOLTA a própria conversa (30/09, Dra. Joyce).
+ *
+ * A Juliana, atendente da clínica, não tinha como devolver um atendimento: o
+ * menu de quem não é supervisor só oferece "transferir para um colega". E a
+ * atribuição acontece sozinha quando ela responde — então toda conversa que ela
+ * tocava ficava presa no nome dela para sempre.
+ *
+ * Isso não é cosmético: a IA se cala em conversa atribuída. Eram 324 das 750
+ * abertas da clínica sem follow-up e sem lembrete, por conversas que já tinham
+ * sido resolvidas havia dias.
+ *
+ * Só a PRÓPRIA: quem não é supervisor não solta a conversa de outro. Supervisor
+ * já fazia isso pelo seletor de responsável.
+ */
+export async function releaseOwnConversation(conversationId: string): Promise<void> {
+  const ctx = await getCurrentAccount()
+
+  const conv = firstOrNull(
+    await db
+      .select({
+        id: conversations.id,
+        assignedAgentId: conversations.assignedAgentId,
+        isPrivate: conversations.isPrivate,
+        sectorId: conversations.sectorId,
+      })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.accountId, ctx.accountId),
+        ),
+      )
+      .limit(1),
+  )
+  if (!conv) throw new Error('Conversa não encontrada.')
+  if (!conv.assignedAgentId) return // já está livre
+
+  const ehSupervisor = hasMinRole(ctx.role, 'supervisor')
+  if (!ehSupervisor && conv.assignedAgentId !== ctx.userId) {
+    throw new Error('Só dá para devolver um atendimento que está com você.')
+  }
+  if (
+    !(await canReadConversation(
+      ctx.role,
+      ctx.userId,
+      ctx.accountId,
+      conv.sectorId,
+      conv.assignedAgentId,
+      conversationId,
+      conv.isPrivate,
+    ))
+  ) {
+    throw new Error('Sem permissão para esta conversa.')
+  }
+
+  await db
+    .update(conversations)
+    .set({ assignedAgentId: null, updatedAt: new Date().toISOString() })
+    .where(
+      and(
+        eq(conversations.id, conversationId),
+        eq(conversations.accountId, ctx.accountId),
+      ),
+    )
+}
+
 // ============================================================
 // Contact sidebar (ContactSidebar component)
 // ============================================================

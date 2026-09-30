@@ -10,6 +10,7 @@ import {
   markConversationRead,
   markConversationUnread,
   updateConversationAssignment,
+  releaseOwnConversation,
   transferConversationToAgent,
   updateConversationStatus,
   listSectors,
@@ -56,6 +57,7 @@ import type {
 import {
   MessageSquare,
   ChevronDown,
+  UserMinus,
   UserPlus,
   Check,
   Clock,
@@ -1442,6 +1444,22 @@ export function MessageThread({
   // Transferir atendimento (Felipe): quem atende passa a conversa pra outro
   // atendente do mesmo setor. Diferente do assign (supervisor) — o servidor
   // valida permissão + setor e notifica o novo agente.
+  /** Solta a conversa que está comigo: ela volta para a fila e a IA volta a
+   *  cuidar dos lembretes e follow-ups dela. */
+  const handleReleaseOwn = useCallback(async () => {
+    if (!conversation) return;
+    try {
+      await releaseOwnConversation(conversation.id);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Falha ao devolver o atendimento",
+      );
+      return;
+    }
+    onAssignChange(conversation.id, null);
+    toast.success("Atendimento devolvido — a IA volta a acompanhar");
+  }, [conversation, onAssignChange]);
+
   const handleTransferToAgent = useCallback(
     async (targetUserId: string) => {
       if (!conversation || targetUserId === conversation.assigned_agent_id) return;
@@ -2084,6 +2102,23 @@ export function MessageThread({
               align="end"
               className="border-border bg-popover"
             >
+              {/* 30/09 (Juliana, clínica da Dra. Joyce): o atendente não tinha
+                  como devolver um atendimento — só transferir para um colega.
+                  Como a atribuição acontece sozinha ao responder, toda conversa
+                  que ele tocava ficava presa no nome dele, e a IA se cala em
+                  conversa atribuída: sem follow-up, sem lembrete de consulta. */}
+              {isAssignee && (
+                <>
+                  <DropdownMenuItem
+                    onClick={() => void handleReleaseOwn()}
+                    className="text-sm text-popover-foreground"
+                  >
+                    <UserMinus className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
+                    Devolver para a fila
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                </>
+              )}
               {!canAssign && (
                 <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
                   Transferir atendimento para:

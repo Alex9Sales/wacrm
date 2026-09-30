@@ -4,9 +4,10 @@
 // (CRM → Google) entra na etapa seguinte.
 // ============================================================
 
-import { and, eq, sql } from 'drizzle-orm'
-import { db, calendarConnections, calendars, calendarEvents } from '@/db'
+import { and, eq, isNull, sql } from 'drizzle-orm'
+import { db, calendarConnections, calendars, calendarEvents, contacts } from '@/db'
 import { firstOrNull } from '@/db/helpers'
+import { phoneFromDescription, phoneKey } from './event-contact'
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
 import { zonedIso } from '@/lib/assistant/rules'
 import { getAccountSettings } from '@/lib/settings/account-settings'
@@ -28,6 +29,42 @@ type ConnectionRow = {
 }
 
 /** Access token válido; renova pelo refresh_token quando perto de expirar. */
+
+/**
+ * O contato dono do telefone escrito na descrição do evento — ou null.
+ *
+ * Compara pelos 8 últimos dígitos, que é o pedaço que sobrevive a "com 55",
+ * "sem 55", "com o 9º dígito" e "sem". Devolve null quando não há telefone,
+ * quando ninguém tem aquele número e — principalmente — quando DOIS contatos
+ * têm: na dúvida o evento fica órfão, e alguém liga à mão.
+ */
+async function contatoPeloTelefone(
+  accountId: string,
+  description: string | null | undefined,
+): Promise<string | null> {
+  const fone = phoneFromDescription(description)
+  const chave = phoneKey(fone)
+  if (!chave) return null
+  try {
+    const achados = await db
+      .select({ id: contacts.id })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.accountId, accountId),
+          sql`right(regexp_replace(${contacts.phone}, '[^0-9]', '', 'g'), 8) = ${chave}`,
+        ),
+      )
+      .limit(2)
+    return achados.length === 1 ? achados[0].id : null
+  } catch (err) {
+    // Falha aqui não pode derrubar o sync da agenda: o evento entra órfão,
+    // como entrava antes.
+    console.error('[google-sync] contato pelo telefone falhou:', err)
+    return null
+  }
+}
+
 export async function getValidAccessToken(conn: ConnectionRow): Promise<string> {
   const expiryMs = conn.tokenExpiry ? Date.parse(conn.tokenExpiry) : 0
   const stillValid = expiryMs - Date.now() > 60_000
@@ -154,6 +191,11 @@ export async function importGoogleEvents(
             .where(and(eq(calendarEvents.calendarId, cal.id), eq(calendarEvents.googleEventId, ev.id)))
             .limit(1),
         )
+        // 📞 Liga ao paciente pelo telefone da descrição (ver event-contact.ts).
+        // Só quando há UM contato com aquele número: dois candidatos viram
+        // evento órfão, porque lembrete no paciente errado é pior que nenhum.
+        const contactId = await contatoPeloTelefone(accountId, ev.description)
+
         const values = {
           title: ev.summary?.trim() || '(sem título)',
           description: ev.description ?? null,
@@ -166,7 +208,16 @@ export async function importGoogleEvents(
           busy: ev.transparency !== 'transparent',
         }
         if (existing) {
+          // ⚠️ `contactId` NÃO entra no update do evento que já existe: alguém
+          // pode ter ligado o paciente à mão, e o sync (de 5 em 5 min) apagaria
+          // esse trabalho toda vez. Só preenche o que está vazio.
           await db.update(calendarEvents).set({ ...values, updatedAt: sql`now()` }).where(eq(calendarEvents.id, existing.id))
+          if (contactId) {
+            await db
+              .update(calendarEvents)
+              .set({ contactId })
+              .where(and(eq(calendarEvents.id, existing.id), isNull(calendarEvents.contactId)))
+          }
         } else {
           await db.insert(calendarEvents).values({
             accountId,
@@ -181,6 +232,7 @@ export async function importGoogleEvents(
             busy: values.busy,
             source: 'google',
             googleEventId: ev.id,
+            contactId,
           })
           imported += 1
         }
