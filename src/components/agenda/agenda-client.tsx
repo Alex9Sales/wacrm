@@ -7,7 +7,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { ChevronLeft, ChevronRight, Plus, X, Trash2, MapPin, RefreshCw, Link2, Unlink } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, X, Trash2, MapPin, RefreshCw, Link2, Unlink, User } from 'lucide-react'
+import { ContactPicker } from '@/components/contacts/contact-picker'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -62,6 +63,14 @@ type Draft = {
   end: string
   location: string
   description: string
+  /**
+   * Quem é o paciente/cliente do compromisso. Vazio = compromisso interno.
+   * ⚠️ É ESTE campo que faz o lembrete sair: o follow-up procura o evento
+   * pelo contact_id (`lib/ai/followup.ts`), não pelo título. Marcar sem
+   * contato é marcar sem confirmação — foi o que manteve 157 de 158
+   * consultas da Dra. Joyce sem aviso.
+   */
+  contactId: string
 }
 
 export function AgendaClient() {
@@ -160,6 +169,21 @@ export function AgendaClient() {
     }
   }, [])
 
+  // Vindo da conversa ("Marcar compromisso"): /agenda?contato=<id> abre o modal
+  // já com a pessoa escolhida. Espera as agendas carregarem, senão o evento
+  // nasceria na agenda local e a Dra. não veria no Google.
+  const veioDaConversa = useRef(false)
+  useEffect(() => {
+    if (veioDaConversa.current || calendars.length === 0) return
+    const contato = new URLSearchParams(window.location.search).get('contato')
+    if (!contato) return
+    veioDaConversa.current = true
+    window.history.replaceState(null, '', '/agenda')
+    openNew(undefined, undefined, contato)
+    // openNew só depende de `calendars` (via defaultCalendarId).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calendars])
+
   const onSyncGoogle = async () => {
     setSyncing(true)
     try {
@@ -202,7 +226,7 @@ export function AgendaClient() {
   const defaultCalendarId = () =>
     (calendars.find((c) => c.source === 'google') ?? calendars[0])?.id ?? ''
 
-  const openNew = (day?: Date, hour?: number) => {
+  const openNew = (day?: Date, hour?: number, contactId = '') => {
     const base = day ?? new Date()
     const start = new Date(base)
     if (hour != null) start.setHours(hour, 0, 0, 0)
@@ -219,6 +243,7 @@ export function AgendaClient() {
       end: toLocalInput(end),
       location: '',
       description: '',
+      contactId,
     })
   }
 
@@ -234,6 +259,7 @@ export function AgendaClient() {
       end: ev.allDay ? toDateInput(e) : toLocalInput(e),
       location: ev.location ?? '',
       description: ev.description ?? '',
+      contactId: ev.contactId ?? '',
     })
   }
 
@@ -270,6 +296,7 @@ export function AgendaClient() {
         endsAt,
         location: draft.location,
         description: draft.description,
+        contactId: draft.contactId || null,
       }
       // Dia do evento (pra pular a visão pra lá e evitar confusão de mês/data).
       const eventDate = new Date(draft.start.slice(0, 10) + 'T12:00:00')
@@ -487,7 +514,7 @@ export function AgendaClient() {
                       }}
                       className="flex items-center gap-1 truncate rounded px-1 py-0.5 text-[11px] font-medium"
                       style={{ background: ev.calendarColor, color: inkOn(ev.calendarColor) }}
-                      title={ev.title}
+                      title={ev.contactName ? `${ev.title} — ${ev.contactName}` : ev.title}
                     >
                       {!ev.allDay && (
                         <span className="tabular-nums opacity-90">
@@ -611,12 +638,24 @@ function DayView({
                   background: ev.calendarColor,
                   color: inkOn(ev.calendarColor),
                 }}
-                title={ev.title}
+                title={
+                  ev.contactName
+                    ? `${ev.title} — ${ev.contactName} (recebe a confirmação)`
+                    : `${ev.title} — sem cliente/paciente: ninguém é avisado`
+                }
               >
                 <span className="font-medium tabular-nums">
                   {pad(s.getHours())}:{pad(s.getMinutes())}
                 </span>{' '}
                 {ev.title}
+                {/* Com quem é o compromisso, quando há altura pra mostrar. Quem
+                    olha a agenda quer ver a PESSOA, não só o título. */}
+                {ev.contactName && durH >= 0.75 && (
+                  <div className="truncate opacity-80">
+                    <User className="mr-1 inline h-3 w-3" />
+                    {ev.contactName}
+                  </div>
+                )}
               </div>
             )
           })}
@@ -672,6 +711,42 @@ function EventModal({
               onChange={(e) => setDraft({ ...draft, title: e.target.value })}
               placeholder="Ex.: Reunião com cliente"
             />
+          </div>
+
+          <div>
+            <Label className="mb-1 block text-xs">
+              <User className="mr-1 inline h-3 w-3" />
+              Cliente / paciente
+            </Label>
+            <ContactPicker
+              value={draft.contactId}
+              onChange={(contactId, contact) =>
+                setDraft({
+                  ...draft,
+                  contactId,
+                  // Título em branco ganha o nome de quem é — o atendente digita
+                  // o mínimo e o compromisso já fica reconhecível na agenda.
+                  title: draft.title || (contact?.name ? contact.name : draft.title),
+                })
+              }
+              placeholder="Buscar por nome ou telefone..."
+            />
+            {/* Campo que, em branco, desliga o lembrete em silêncio: diz isso aqui,
+                no lugar, e não num toast que some. */}
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              {draft.contactId ? (
+                <>
+                  Quem estiver aqui <strong>recebe a confirmação</strong> da consulta pelo
+                  WhatsApp, se os lembretes do agente estiverem ligados.
+                </>
+              ) : (
+                <>
+                  Sem preencher, o compromisso entra na agenda mas{' '}
+                  <strong>ninguém é avisado</strong> — o lembrete procura a pessoa por
+                  este campo.
+                </>
+              )}
+            </p>
           </div>
 
           <div>

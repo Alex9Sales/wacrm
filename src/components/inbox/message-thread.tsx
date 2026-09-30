@@ -78,7 +78,9 @@ import {
   Bot,
   BotOff,
   CornerUpRight,
+  CalendarPlus,
 } from "lucide-react";
+import Link from "next/link";
 import { startOutboundCall } from "@/components/calls/incoming-call-modal";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { Badge } from "@/components/ui/badge";
@@ -2176,6 +2178,21 @@ export function MessageThread({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+          )}
+
+          {/* 30/09 (Rafael: "a ideia é marcar tudo pelo CRM"). Marcar daqui leva
+              a pessoa junto, e é o vínculo com o contato que faz o lembrete de
+              consulta sair — marcar na agenda "na mão", sem contato, agenda em
+              silêncio. Em grupo não aparece: não há uma pessoa pra confirmar. */}
+          {contact?.id && !isGroupConversation && (
+            <Link
+              href={`/agenda?contato=${contact.id}`}
+              className="inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted"
+              title={`Marcar compromisso com ${contact.name || "este contato"}`}
+            >
+              <CalendarPlus className="h-3 w-3" />
+              <span className="hidden sm:inline">Agendar</span>
+            </Link>
           )}
 
           {/* Sector dropdown — routes/privacy */}
