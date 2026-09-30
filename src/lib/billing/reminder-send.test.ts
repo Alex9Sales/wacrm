@@ -59,7 +59,11 @@ describe('quantas variáveis cada degrau manda', () => {
     expect(paramsDoDegrau(3, p)).toEqual(['Appia', 'R$ 130,00', '29/09'])
   })
 
+  it('o agradecimento leva nome e valor — o texto não repete a data', () => {
+    expect(paramsDoDegrau(99, p)).toEqual(['Appia', 'R$ 130,00'])
+  })
+
   it('degrau desconhecido passa tudo em vez de cortar no escuro', () => {
-    expect(paramsDoDegrau(99, p)).toEqual(p)
+    expect(paramsDoDegrau(7, p)).toEqual(p)
   })
 })

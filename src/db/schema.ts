@@ -182,6 +182,11 @@ export const organizationBilling = pgTable("organization_billing", {
 	// vez. Coluna própria porque cancelar bate em /payments, não /subscriptions:
 	// um id trocado faria o cancelamento dar 404 e a cobrança seguir de pé.
 	asaasPaymentId: text("asaas_payment_id"),
+	// Último pagamento já agradecido (migr 0198). O boleto emite CONFIRMED e
+	// depois RECEIVED, e o Asaas reenvia — guardar o ID (não um booleano) faz o
+	// segundo evento reconhecer que já agradeceu AQUELE pagamento, e deixa o do
+	// mês seguinte passar.
+	thankedPaymentId: text("thanked_payment_id"),
 	// Documento do cliente (migr 0191): o formulário do site já pedia e
 	// validava, mas mandava direto pro Asaas sem guardar — sem ele não dava
 	// pra achar o cliente lá a partir do CRM.

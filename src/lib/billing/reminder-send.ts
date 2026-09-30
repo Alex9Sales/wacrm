@@ -47,6 +47,10 @@ const TEMPLATE_POR_DEGRAU: Record<number, string> = {
   [-5]: 'fluxia_mensalidade_5_dias',
   0: 'fluxia_mensalidade_vence_hoje',
   3: 'fluxia_mensalidade_em_aberto',
+  // 99 = "obrigado pelo pagamento" (29/09). Não é degrau de lembrete: entra
+  // aqui para reusar o mesmo caminho — conversa, janela de 24 h, template
+  // quando ela está fechada.
+  99: 'fluxia_pagamento_recebido',
 }
 
 /**
@@ -69,7 +73,7 @@ const TEMPLATE_COM_LINK: Record<number, string> = {
 }
 
 /** Quantas variáveis o corpo de cada degrau realmente tem. */
-const VARIAVEIS_POR_DEGRAU: Record<number, number> = { [-5]: 3, 0: 2, 3: 3 }
+const VARIAVEIS_POR_DEGRAU: Record<number, number> = { [-5]: 3, 0: 2, 3: 3, 99: 2 }
 
 /** Os params na medida do template — nem a mais (a Meta recusa), nem a menos. */
 export function paramsDoDegrau(step: number, params: string[]): string[] {

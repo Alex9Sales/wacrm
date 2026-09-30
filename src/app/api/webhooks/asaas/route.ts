@@ -10,10 +10,11 @@
 // ============================================================
 
 import { NextResponse, after } from 'next/server'
-import { eq } from 'drizzle-orm'
+import { and, eq, isNull, ne, or } from 'drizzle-orm'
 
-import { db, organizationBilling } from '@/db'
+import { db, organization, organizationBilling } from '@/db'
 import { firstOrNull } from '@/db/helpers'
+import { logBillingEvent } from '@/lib/admin/billing-events'
 import {
   isActivateEvent,
   extractOrgRef,
@@ -65,6 +66,120 @@ export async function POST(request: Request) {
   return NextResponse.json({ status: 'received' }, { status: 200 })
 }
 
+
+/**
+ * Agradece o pagamento — uma vez por pagamento, nunca duas.
+ *
+ * A trava é o próprio banco: o UPDATE só passa se o `thanked_payment_id` ainda
+ * NÃO for este. Um boleto gera dois eventos (CONFIRMED hoje, RECEIVED amanhã) e
+ * o Asaas reenvia quando desconfia da entrega — sem isso o cliente ouviria
+ * "obrigado" três vezes pelo mesmo boleto. Quem consegue marcar, manda.
+ *
+ * Se o envio falhar, a marca volta para null: o segundo evento do boleto vira a
+ * retentativa natural, sem nenhum código de retry.
+ *
+ * O valor vem do PRÓPRIO evento, não do cadastro: é o que ele pagou. Num
+ * contrato semestral são os R$ 780, não os R$ 130 de mensalidade.
+ */
+/** Degrau que NÃO existe nos lembretes — o agradecimento não tem template
+ *  próprio ainda, então cai no texto livre quando a janela está aberta. */
+const OBRIGADO = 99
+
+async function agradecerPagamento(
+  orgId: string,
+  payment: Record<string, unknown>,
+): Promise<void> {
+  const paymentId = typeof payment.id === 'string' ? payment.id : null
+  if (!paymentId) return
+
+  const channelId = process.env.PLATFORM_BILLING_CHANNEL_ID?.trim()
+  if (!channelId) return
+
+  // Compare-and-swap: só um evento vence a corrida.
+  const ganhou = await db
+    .update(organizationBilling)
+    .set({ thankedPaymentId: paymentId, updatedAt: new Date().toISOString() })
+    .where(
+      and(
+        eq(organizationBilling.organizationId, orgId),
+        or(
+          isNull(organizationBilling.thankedPaymentId),
+          ne(organizationBilling.thankedPaymentId, paymentId),
+        ),
+      ),
+    )
+    .returning({ id: organizationBilling.organizationId })
+  if (!ganhou.length) return // já agradecemos este pagamento
+
+  try {
+    const dados = firstOrNull(
+      await db
+        .select({
+          nome: organization.name,
+          fone: organizationBilling.billingPhone,
+        })
+        .from(organizationBilling)
+        .innerJoin(organization, eq(organization.id, organizationBilling.organizationId))
+        .where(eq(organizationBilling.organizationId, orgId))
+        .limit(1),
+    )
+    if (!dados?.fone) return // sem telefone não há a quem agradecer
+
+    const [{ loadChannel }, { getProvider }, { enviarRegistrando }, { firstNameForGreeting }] =
+      await Promise.all([
+        import('@/lib/channels/channels'),
+        import('@/lib/channels/registry'),
+        import('@/lib/billing/reminder-send'),
+        import('@/lib/cdl/names'),
+      ])
+    const channel = await loadChannel(channelId)
+    if (!channel) return
+
+    const valor = Number(payment.value)
+    const valorBr =
+      Number.isFinite(valor) && valor > 0
+        ? valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/\u00A0/g, ' ')
+        : ''
+    const primeiro = firstNameForGreeting(dados.nome) || dados.nome
+    const texto =
+      `Olá, ${primeiro}! Aqui é da Fluxia. Recebemos o seu pagamento` +
+      `${valorBr ? ` de ${valorBr}` : ''} — obrigado! Está tudo certo por aqui, ` +
+      `qualquer coisa é só me chamar.`
+
+    const via = await enviarRegistrando(
+      channel,
+      getProvider(channel.provider),
+      dados.fone.replace(/\D/g, ''),
+      texto,
+      dados.nome,
+      { step: OBRIGADO, params: [primeiro, valorBr, ''] },
+    )
+    console.log(`[webhooks/asaas] obrigado enviado a "${dados.nome}" · ${via}`)
+
+    await logBillingEvent({
+      organizationId: orgId,
+      event: 'payment_received',
+      toStatus: 'active',
+      actorType: 'system',
+      actorLabel: 'Asaas',
+      metadata: { paymentId, value: payment.value ?? null, dueDate: payment.dueDate ?? null },
+    })
+  } catch (err) {
+    // Devolve a marca: o próximo evento do mesmo boleto tenta de novo.
+    await db
+      .update(organizationBilling)
+      .set({ thankedPaymentId: null })
+      .where(
+        and(
+          eq(organizationBilling.organizationId, orgId),
+          eq(organizationBilling.thankedPaymentId, paymentId),
+        ),
+      )
+      .catch(() => {})
+    throw err
+  }
+}
+
 /** Ativa a conta cujo pagamento foi confirmado. Best-effort (não derruba). */
 async function activateFromPayment(payment: unknown): Promise<void> {
   try {
@@ -107,6 +222,13 @@ async function activateFromPayment(payment: unknown): Promise<void> {
       .set(set)
       .where(eq(organizationBilling.organizationId, orgId))
     console.log('[webhooks/asaas] conta ativada:', orgId)
+
+    // 📣 Obrigado pelo pagamento (29/09). Até aqui, quem pagava não ouvia nada:
+    // o webhook ativava a conta e ia embora. Roda DEPOIS da ativação — o aviso
+    // é cortesia, e cortesia nunca pode custar a ativação.
+    void agradecerPagamento(orgId, p).catch((err) =>
+      console.error('[webhooks/asaas] agradecimento falhou:', err),
+    )
   } catch (err) {
     console.error('[webhooks/asaas] activate error:', err)
   }
