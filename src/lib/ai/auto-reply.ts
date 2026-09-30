@@ -45,7 +45,8 @@ import {
   setVoicePreference,
 } from './close-actions'
 import { formatMeetingWhen, scheduleEventFromAi } from './schedule-actions'
-import { loadBookedForContact, loadBusySlots } from './busy-slots'
+import { loadBookedForContact, loadBusySlots, loadBusyByCalendar } from './busy-slots'
+import { blocoDeAgendasParaPrompt } from './agenda-do-profissional'
 import { loadLeadFormContext } from './lead-form-context'
 import { syncAccountCalendars } from '@/lib/google/sync'
 import { listRoutingTags, applyTransfer } from './transfer-actions'
@@ -831,6 +832,14 @@ export async function dispatchInboundToAiReply(
     // curto lá dentro — nunca lança e nunca segura a resposta.
     let busySlots: string[] | undefined
     let bookedForLead: string | null = null
+    /**
+     * Quem atende e quando cada um está ocupado — só quando a conta tem MAIS DE
+     * UMA agenda. Numa clínica com 10 dentistas, a lista única de ocupados não
+     * dizia de quem era cada horário, então um compromisso da Dra. Bruna às 10h
+     * tirava as 10h de todos os outros nove. Conta com uma agenda só não recebe
+     * este bloco: seria peso no prompt sem nenhuma informação nova.
+     */
+    let agendasDaEquipe: string | undefined
     if (tools.includes('schedule')) {
       await syncAccountCalendars(accountId)
       const tz = settings.businessTimezone || 'America/Sao_Paulo'
@@ -838,6 +847,12 @@ export async function dispatchInboundToAiReply(
       // (a IA não "ajusta o horário" da própria reunião; Zelo 18/09).
       busySlots = await loadBusySlots(accountId, tz, undefined, { excludeContactId: contactId })
       bookedForLead = contactId ? await loadBookedForContact(accountId, contactId, tz) : null
+      const porAgenda = await loadBusyByCalendar(accountId, tz, undefined, {
+        excludeContactId: contactId,
+      })
+      if (porAgenda.agendas.length > 1) {
+        agendasDaEquipe = blocoDeAgendasParaPrompt(porAgenda.agendas, porAgenda.ocupados)
+      }
     }
 
     const systemPrompt = buildSystemPrompt({
@@ -858,6 +873,7 @@ export async function dispatchInboundToAiReply(
       scheduleApproval,
       busySlots,
       bookedForLead,
+      agendasDaEquipe,
       extraInstructions: (() => {
         const extra: string[] = []
         if (openDebt) extra.push(collectionInstruction(openDebt))
@@ -1136,6 +1152,7 @@ export async function dispatchInboundToAiReply(
           contactId,
           startsLocal: dirs.schedule.startsLocal,
           title: dirs.schedule.title || 'Reunião',
+          profissional: dirs.schedule.profissional,
           timezone: settings.businessTimezone,
         })
         if (ev) {

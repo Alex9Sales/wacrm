@@ -7,7 +7,7 @@
 
 import { and, asc, eq, gt, gte, isNull, lt, ne, or } from 'drizzle-orm'
 
-import { db, calendarEvents } from '@/db'
+import { db, calendarEvents, calendars } from '@/db'
 
 /** Quantos dias à frente a IA enxerga. */
 export const BUSY_SLOTS_DAYS = 14
@@ -83,6 +83,77 @@ export async function loadBusySlots(
   } catch (err) {
     console.error('[ai busy-slots] agenda indisponível (segue sem):', err instanceof Error ? err.message : err)
     return []
+  }
+}
+
+/**
+ * Os horários ocupados SEPARADOS POR AGENDA, para clínicas com vários
+ * profissionais.
+ *
+ * 30/09: a clínica da Dra. Joyce tem 10 dentistas, cada um com sua agenda. A
+ * lista única de `loadBusySlots` não diz de quem é cada horário, então um
+ * compromisso da Dra. Bruna às 10h tirava as 10h de todos os outros nove — a IA
+ * lia "10h ocupado" e não oferecia. Com o mapa por agenda ela pode responder
+ * "com a Dra. Bruna não tenho, mas com o Dr. Lucas tenho 10h".
+ *
+ * Devolve só agendas que o Google sincroniza ou que a conta usa de fato; a
+ * ordem das agendas é a de criação, que é a que a pessoa vê na tela.
+ */
+export async function loadBusyByCalendar(
+  accountId: string,
+  tz: string,
+  now = new Date(),
+  opts: { excludeContactId?: string | null } = {},
+): Promise<{
+  agendas: { id: string; name: string }[]
+  ocupados: Map<string, string[]>
+}> {
+  const vazio = { agendas: [] as { id: string; name: string }[], ocupados: new Map<string, string[]>() }
+  try {
+    const until = new Date(now.getTime() + BUSY_SLOTS_DAYS * 86_400_000)
+    const agendas = await db
+      .select({ id: calendars.id, name: calendars.name })
+      .from(calendars)
+      .where(and(eq(calendars.accountId, accountId), eq(calendars.isVisible, true)))
+      .orderBy(asc(calendars.createdAt))
+    if (agendas.length === 0) return vazio
+
+    const rows = await db
+      .select({
+        calendarId: calendarEvents.calendarId,
+        startsAt: calendarEvents.startsAt,
+        endsAt: calendarEvents.endsAt,
+        allDay: calendarEvents.allDay,
+      })
+      .from(calendarEvents)
+      .where(
+        and(
+          eq(calendarEvents.accountId, accountId),
+          eq(calendarEvents.status, 'confirmed'),
+          opts.excludeContactId
+            ? or(isNull(calendarEvents.contactId), ne(calendarEvents.contactId, opts.excludeContactId))
+            : undefined,
+          eq(calendarEvents.busy, true),
+          gte(calendarEvents.endsAt, now.toISOString()),
+          lt(calendarEvents.startsAt, until.toISOString()),
+        ),
+      )
+      .orderBy(asc(calendarEvents.startsAt))
+      // Teto maior que o da lista única: são várias agendas dividindo o mesmo
+      // bolo, e cortar cedo demais faria a IA achar que um dentista está livre
+      // num horário que já tem paciente.
+      .limit(MAX_SLOTS * 6)
+
+    const ocupados = new Map<string, string[]>()
+    for (const r of rows) {
+      const lista = ocupados.get(r.calendarId) ?? []
+      lista.push(formatBusySlot(r, tz))
+      ocupados.set(r.calendarId, lista)
+    }
+    return { agendas, ocupados }
+  } catch (err) {
+    console.error('[ai busy-slots] agendas indisponíveis (segue sem):', err instanceof Error ? err.message : err)
+    return vazio
   }
 }
 

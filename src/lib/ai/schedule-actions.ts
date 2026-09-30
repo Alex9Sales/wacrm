@@ -8,6 +8,7 @@ import { and, asc, desc, eq, gt, sql } from 'drizzle-orm'
 import { db, calendarConnections, calendars, calendarEvents, contacts, deals, scheduledMessages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { pushEventToGoogle } from '@/lib/google/sync'
+import { escolherAgenda } from './agenda-do-profissional'
 import { enqueueScheduledMessage } from '@/lib/queue/queues'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 
@@ -121,6 +122,41 @@ export function zonedWallToUtc(local: string, tz: string): Date | null {
  * antes de o Google ser conectado. A reunião marcada pela IA nunca chegava no
  * Google do dono (o espelho só roda em agenda do Google).
  */
+/**
+ * A agenda do profissional que a IA nomeou no 3º campo do `[[AGENDAR]]`.
+ *
+ * Devolve null quando não há nome, quando não reconhece, ou quando ficou
+ * AMBÍGUO (duas Simones na clínica) — e aí quem chama usa a agenda padrão, que
+ * é onde a recepção já olha todo dia. Errar a agenda manda o paciente para a
+ * cadeira do dentista errado e só se descobre na hora da consulta; cair na
+ * padrão, no pior caso, dá um pouco de trabalho para a recepção mover.
+ */
+async function agendaDoProfissional(
+  accountId: string,
+  nomeDito: string | null | undefined,
+): Promise<string | null> {
+  if (!nomeDito) return null
+  try {
+    const disponiveis = await db
+      .select({ id: calendars.id, name: calendars.name })
+      .from(calendars)
+      .where(and(eq(calendars.accountId, accountId), eq(calendars.isVisible, true)))
+    const achada = escolherAgenda(nomeDito, disponiveis)
+    if (achada === 'ambiguo') {
+      console.warn(`[ai schedule] "${nomeDito}" casou com mais de uma agenda — usando a padrão`)
+      return null
+    }
+    if (!achada) {
+      console.warn(`[ai schedule] agenda "${nomeDito}" não encontrada — usando a padrão`)
+      return null
+    }
+    return achada.id
+  } catch (err) {
+    console.error('[ai schedule] falha ao escolher a agenda do profissional:', err)
+    return null
+  }
+}
+
 async function ensureAiCalendar(
   accountId: string,
   userId: string | null,
@@ -219,6 +255,11 @@ export async function scheduleEventFromAi(input: {
   title: string
   timezone: string
   durationMin?: number
+  /**
+   * De quem é a agenda, como a IA escreveu ("Dra. Bruna"). Clínica com vários
+   * profissionais marca cada paciente na agenda certa. Vazio = agenda padrão.
+   */
+  profissional?: string | null
 }): Promise<ScheduleResult | null> {
   const { accountId, userId, conversationId, contactId, startsLocal, timezone } =
     input
@@ -227,7 +268,12 @@ export async function scheduleEventFromAi(input: {
     if (!start) return null
     const dur = input.durationMin && input.durationMin > 0 ? input.durationMin : 60
     const end = new Date(start.getTime() + dur * 60000)
-    const calendarId = await ensureAiCalendar(accountId, userId)
+    // A agenda do profissional que a IA nomeou; se não reconhecer ou ficar
+    // ambíguo, cai na padrão — marcar na agenda errada põe o paciente na cadeira
+    // do dentista errado, e ninguém percebe até o dia da consulta.
+    const calendarId =
+      (await agendaDoProfissional(accountId, input.profissional)) ??
+      (await ensureAiCalendar(accountId, userId))
     const title = (input.title || 'Reunião').trim().slice(0, 200)
 
     // Vincula ao negócio ABERTO mais novo da conversa (depois de um [[GANHO]]

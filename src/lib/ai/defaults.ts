@@ -94,9 +94,16 @@ export const HANDOFF_SUMMARY_DIRECTIVE = /\[\[\s*resumo\s*:\s*([\s\S]+?)\s*\]\](
 export const SKIP_DIRECTIVE = /\[\[\s*ignorar\s*\]\]/i
 /** Etiquetar o contato com uma etiqueta EXISTENTE (captura o nome). Global. */
 export const TAG_DIRECTIVE = /\[\[\s*etiqueta\s*:\s*([^\]]+?)\s*\]\]/gi
-/** Agendar: [[AGENDAR:YYYY-MM-DDTHH:MM|título]] (data local + título opcional). */
+/**
+ * Agendar: `[[AGENDAR:YYYY-MM-DDTHH:MM|título|profissional]]`
+ *
+ * O 3º campo (opcional) é de quem é a agenda — clínica com vários dentistas
+ * marca cada paciente na agenda do profissional certo (30/09, Dra. Joyce: 10
+ * profissionais). Sem ele, cai na agenda padrão da conta, como sempre foi:
+ * quem só tem uma agenda não precisa saber que este campo existe.
+ */
 export const SCHEDULE_DIRECTIVE =
-  /\[\[\s*agendar\s*:\s*(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2})\s*(?:\|\s*([^\]]+?))?\s*\]\]/i
+  /\[\[\s*agendar\s*:\s*(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2})\s*(?:\|\s*([^|\]]*?))?\s*(?:\|\s*([^\]]*?))?\s*\]\]/i
 /**
  * 🧾 Cobrança (Fase 3): o que o devedor acabou de fazer.
  *   [[COBRANCA:promessa|YYYY-MM-DD]] · [[COBRANCA:comprovante]]
@@ -156,7 +163,7 @@ export interface AgentDirectives {
   /** Resumo pra quem assume no handoff ([[RESUMO:…]]), ou null. */
   handoffSummary: string | null
   /** Agendamento: horário combinado (hora local "YYYY-MM-DDTHH:MM") + título. */
-  schedule: { startsLocal: string; title: string } | null
+  schedule: { startsLocal: string; title: string; profissional: string | null } | null
   /** Transferência: etiqueta de roteamento + resumo pro atendente. */
   transfer: { tag: string; summary: string } | null
   /** Criar card no funil: título do negócio, ou null. */
@@ -192,7 +199,12 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
   const handoffSummary = hsm ? hsm[1].trim() || null : null
   const sm = raw.match(SCHEDULE_DIRECTIVE)
   const schedule = sm
-    ? { startsLocal: sm[1].trim(), title: (sm[2] || '').trim() }
+    ? {
+        startsLocal: sm[1].trim(),
+        title: (sm[2] || '').trim(),
+        // De quem é a agenda (3º campo). Vazio = agenda padrão da conta.
+        profissional: (sm[3] || '').trim() || null,
+      }
     : null
   const chm = raw.match(CHARGE_DIRECTIVE)
   const charge = chm
@@ -335,7 +347,7 @@ export function transferInstruction(routingTags: string[]): string {
 }
 
 /** Instrução: agendar reunião de verdade quando combinar um horário. */
-export function scheduleInstruction(opts: { approval?: boolean; busySlots?: string[]; booked?: string | null } = {}): string {
+export function scheduleInstruction(opts: { approval?: boolean; busySlots?: string[]; booked?: string | null; agendasDaEquipe?: string } = {}): string {
   // 09/09: com aprovação, a IA NÃO pode dizer que está marcado — o humano
   // aprova em Precisa de você e o CRM manda a confirmação depois.
   const closing = opts.approval
@@ -354,10 +366,19 @@ export function scheduleInstruction(opts: { approval?: boolean; busySlots?: stri
   const booked = opts.booked
     ? ` THIS customer ALREADY HAS a meeting booked: ${opts.booked} (business timezone). That slot is taken by THIS meeting, not by a conflict — do not offer other times because of it, do not say you need to adjust it, and do NOT emit [[AGENDAR]] again unless the customer explicitly asks to change the day or time.`
     : ''
+  // 30/09 (clínica da Dra. Joyce, 10 profissionais): a lista única de horários
+  // ocupados não dizia DE QUEM era cada um, então um compromisso de uma dentista
+  // tirava aquele horário de todas as outras. Com uma agenda por profissional a
+  // IA passa a oferecer o horário de quem ESTÁ livre — e a marcar na agenda
+  // certa, pelo 3º campo do marcador.
+  const equipe = opts.agendasDaEquipe
+    ? ` THIS BUSINESS HAS SEVERAL CALENDARS, one per professional. Each one has its OWN availability — a time booked in one calendar does NOT block the others. Here is who exists and when each is busy (business timezone):\n${opts.agendasDaEquipe}\nWhen the customer asks for a specific professional, check THAT professional's line and offer only times that do not overlap it. When the customer has no preference, offer a time from whoever is free. When you book, put the professional's name in the THIRD field of the marker: "[[AGENDAR:YYYY-MM-DDTHH:MM|<short title>|<professional name>]]", copying the name EXACTLY as written in the list above. If the customer did not name a professional and you did not pick one, leave the third field out. NEVER invent a professional who is not in the list, and never promise a time that overlaps that professional's busy list.`
+    : ''
   return (
     'Scheduling: when you and the customer clearly AGREE on a specific date and time for a meeting, call, or appointment, emit ONCE the marker "[[AGENDAR:YYYY-MM-DDTHH:MM|<short title>]]" — computing the ABSOLUTE date/time from the current date/time given above (business timezone). Resolve relative times ("tomorrow at 3pm", "friday morning") to the real date, use 24h time (e.g. 15:00), and put a short title after the "|" (e.g. the customer name and topic). Emit it ONLY when a concrete time is actually agreed — never for a vague "sometime". ' +
     closing +
     busy +
+    equipe +
     booked +
     ' This marker is control metadata: never show it to the customer.'
   )
@@ -485,6 +506,8 @@ export function buildSystemPrompt(args: {
   /** 📅 Compromissos já marcados nos próximos dias (formatados). Só com a
    *  ferramenta schedule; undefined = não consultado. */
   busySlots?: string[]
+  /** Uma linha por profissional, com os horários ocupados dele. */
+  agendasDaEquipe?: string
   /** 📅 Reunião JÁ marcada com ESTE lead (formatada), ou null. */
   bookedForLead?: string | null
   /** Etapas do funil ligado (pra ferramenta move_card escolher pelo nome). */
@@ -659,7 +682,7 @@ export function buildSystemPrompt(args: {
     if (has('tag') && args.availableTags && args.availableTags.length > 0) {
       parts.push(tagInstruction(args.availableTags))
     }
-    if (has('schedule')) parts.push(scheduleInstruction({ approval: !!args.scheduleApproval, busySlots: args.busySlots, booked: args.bookedForLead }))
+    if (has('schedule')) parts.push(scheduleInstruction({ approval: !!args.scheduleApproval, busySlots: args.busySlots, booked: args.bookedForLead, agendasDaEquipe: args.agendasDaEquipe }))
     if (has('create_card')) parts.push(createCardInstruction())
     if (has('private_note')) parts.push(noteInstruction())
     if (has('send_material') && args.materials && args.materials.length > 0) {

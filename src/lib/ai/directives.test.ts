@@ -26,8 +26,31 @@ describe('parseCloseDirectives', () => {
     expect(d.schedule).toEqual({
       startsLocal: '2026-08-16T15:00',
       title: 'Reunião com Matheus',
+      // Sem 3º campo = agenda padrão da conta. Quem tem uma agenda só nem
+      // precisa saber que este campo existe.
+      profissional: null,
     })
     expect(d.text).toBe('Combinado! Te vejo amanhã.')
+  })
+
+  it('extrai o PROFISSIONAL no 3º campo — clínica com várias agendas', () => {
+    // 30/09 (Dra. Joyce, 10 dentistas): sem isto, todo paciente caía na mesma
+    // agenda, independentemente de com quem a consulta foi combinada.
+    const d = parseCloseDirectives(
+      'Marquei! Até quarta.\n[[AGENDAR:2026-10-01T10:00|Avaliação · Ana Souza|Dra. Bruna Diodatti]]',
+    )
+    expect(d.schedule).toEqual({
+      startsLocal: '2026-10-01T10:00',
+      title: 'Avaliação · Ana Souza',
+      profissional: 'Dra. Bruna Diodatti',
+    })
+    expect(d.text).toBe('Marquei! Até quarta.')
+  })
+
+  it('3º campo vazio não vira profissional', () => {
+    const d = parseCloseDirectives('ok\n[[AGENDAR:2026-10-01T10:00|Avaliação|]]')
+    expect(d.schedule?.profissional).toBeNull()
+    expect(d.schedule?.title).toBe('Avaliação')
   })
 
   it('extrai [[TRANSFERIR:etiqueta|resumo]]', () => {
