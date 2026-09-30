@@ -79,10 +79,13 @@ describe('templates por tipo de mensagem (23/09)', () => {
       descricao: '',
       dias: '7',
       parcelas: '2',
+      // Uma a menos que o total (29/09, João): com 2 em aberto, pagar 1 já
+      // regulariza o combinado dele.
+      minimo: '1',
     })
     expect(templateVarsFromPayload({ kind: 'reminder', dueIn: 3 }).dias).toBe('3')
     expect(templateVarsFromPayload({ kind: 'due_today', dueIn: 0 }).dias).toBe('hoje')
-    expect(templateVarsFromPayload({})).toEqual({ valor: '', link: '', vencimento: '', descricao: '', dias: '', parcelas: '' })
+    expect(templateVarsFromPayload({})).toEqual({ valor: '', link: '', vencimento: '', descricao: '', dias: '', parcelas: '', minimo: '' })
     // Vencimento e descrição vêm prontos do pedido (templateFactsFrom).
     expect(templateVarsFromPayload({ dueDateText: '25/09/2026', descriptionText: 'RA Play Master' })).toMatchObject({
       vencimento: '25/09/2026',

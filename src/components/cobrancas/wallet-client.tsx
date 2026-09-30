@@ -2382,11 +2382,23 @@ function RulePanel({
               value={draft.manyChargesText}
               onChange={(e) => setDraft({ ...draft, manyChargesText: e.target.value })}
             />
+            {/* ⚠️ 29/09 (João, GoLink): ele configurou o número, deixou o texto
+                em branco e passou dias achando que a mensagem saía — ela nunca
+                saiu, porque a régra exige TEXTO e quantidade. O campo aceitava
+                a metade da configuração sem dizer nada. */}
+            {!draft.manyChargesText.trim() && (
+              <p className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-1.5 text-xs text-amber-700 dark:text-amber-400">
+                Sem o texto acima, esta mensagem <strong>não é enviada</strong> — quem acumulou
+                recebe o lembrete de sempre. O número sozinho não liga nada.
+              </p>
+            )}
             <p className="mt-1 text-xs text-muted-foreground">
               Quem deve três meses não responde ao mesmo lembrete de quem atrasou uma semana. Com o
               texto preenchido, a régua manda ele no lugar do normal. Dá para usar{' '}
-              <code>{'{nome}'}</code>, <code>{'{parcelas}'}</code>, <code>{'{valor}'}</code>,{' '}
-              <code>{'{dias}'}</code> e <code>{'{lista}'}</code>, que traz as parcelas com os links.
+              <code>{'{nome}'}</code>, <code>{'{parcelas}'}</code>, <code>{'{minimo}'}</code>,{' '}
+              <code>{'{valor}'}</code>, <code>{'{dias}'}</code> e <code>{'{lista}'}</code>, que traz
+              as parcelas com os links. <code>{'{minimo}'}</code> é uma a menos que o total — com 4
+              em aberto ele escreve 3.
             </p>
           </div>
 

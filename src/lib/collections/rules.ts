@@ -35,7 +35,20 @@ export interface CollectionTemplateRef {
   params: string[]
 }
 /** O que pode ir numa variável de template; o executor troca pelos dados da cobrança. */
-export const TEMPLATE_VARS = ['{nome}', '{valor}', '{link}', '{vencimento}', '{descricao}', '{dias}', '{parcelas}'] as const
+export const TEMPLATE_VARS = [
+  '{nome}',
+  '{valor}',
+  '{link}',
+  '{vencimento}',
+  '{descricao}',
+  '{dias}',
+  '{parcelas}',
+  // 29/09 (João, GoLink): "se tiver 4 em aberto precisamos de 3 parcelas pra
+  // manter anúncio ativo; se tiver 2, precisamos de pelo menos uma paga". É
+  // sempre uma a menos que o total — o acordo é não deixar passar de uma
+  // pendente. Sem esta variável, o texto teria de ser reescrito por faixa.
+  '{minimo}',
+] as const
 /** Preço público do Asaas por aviso de WhatsApp (R$), 09/2026. */
 export const ASAAS_WHATSAPP_FEE_DEFAULT = 0.55
 /** Preço do Asaas por aviso de E-MAIL (R$) — o que o Alex vê na fatura (23/09). */
@@ -1315,6 +1328,12 @@ export interface TemplateVars {
   /** Dias de atraso (régua) ou até vencer (lembrete); "hoje" no aviso do dia. */
   dias?: string
   parcelas?: string
+  /**
+   * Quantas ele precisa quitar para regularizar: uma a menos que o total,
+   * nunca zero (29/09, João — "se tiver 4 em aberto precisamos de 3"). O
+   * acordo dele é não deixar passar de uma parcela pendente.
+   */
+  minimo?: string
   /** As parcelas com os links, uma por linha (`formatDebtBody`). Só no texto livre. */
   lista?: string
 }
@@ -1529,6 +1548,8 @@ export function templateVarsFromPayload(p: Record<string, unknown>): Omit<Templa
     descricao: desc,
     dias,
     parcelas: charges != null ? String(charges) : '',
+    // Uma a menos que o total, nunca zero: com uma parcela só, o mínimo é ela.
+    minimo: charges != null ? String(Math.max(1, charges - 1)) : '',
   }
 }
 
