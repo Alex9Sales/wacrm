@@ -90,6 +90,16 @@ function shiftOutOfQuiet(ms: number, tz: string): number {
 const SILENT = '[[SILENT]]'
 const WINDOW_MS = 24 * 60 * 60 * 1000
 const PER_AGENT_CAP = 40
+/**
+ * Teto do varredor de LEMBRETE DE CONSULTA, maior que o dos outros.
+ *
+ * Aqui cada linha é uma pessoa com hora marcada, e ficar de fora não é perder
+ * um follow-up comercial: é o paciente não ser avisado. Uma clínica com 10
+ * profissionais tem dezenas de consultas por dia — a da Dra. Joyce tem 44 só
+ * nas próximas 48h. Com a fila já cortada na consulta pelos que têm degrau
+ * vencido, o que chega aqui é pouco e sai rápido.
+ */
+const MEETING_CAP = 300
 /** Envios por agente por tick (1 min): drena fila represada sem rajada. */
 const MAX_SENDS_PER_TICK = 8
 /** 1º toque só se o silêncio tem menos de 24h (ver loop do sweep). */
@@ -1803,6 +1813,11 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
     )
     const total = reminders.length
 
+    // Quanto ANTES da consulta o primeiro degrau vence (em minutos, positivo).
+    // Um compromisso mais distante que isso ainda não tem nada a enviar, e não
+    // pode ocupar vaga na fila — ver o comentário do LIMIT abaixo.
+    const antecedenciaMax = Math.max(0, -reminderSignedMinutes(reminders[0]))
+
     const rows = await db.execute(sql`
       SELECT e.id AS event_id, e.starts_at, e.reminders_sent, e.contact_id,
              COALESCE(dl.conversation_id,
@@ -1816,17 +1831,26 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
         AND e.status = 'confirmed'
         AND e.reminders_sent < ${total}
         AND e.starts_at > now() - interval '2 days'
-        AND e.starts_at < now() + interval '30 days'
+        -- Só quem JÁ tem algum degrau vencido. Sem isto, a fila era ordenada por
+        -- data e os 40 primeiros eram compromissos distantes, que nada tinham a
+        -- enviar — mas ocupavam a vaga do que vencia hoje.
+        --
+        -- 30/09: a clínica da Dra. Joyce reconectou o Google e apareceram as
+        -- agendas dos 10 profissionais: de 130 compromissos futuros para 571,
+        -- 344 na janela. Só nas próximas 48h são 44, mais que as 40 vagas que
+        -- havia aqui. Uma consulta na posição 45 perderia o lembrete de véspera
+        -- em silêncio — e o cliente nem saberia que faltou.
+        AND e.starts_at < now() + interval '1 minute' * ${antecedenciaMax}
         -- Degrau travado espera antes de ser tentado de novo. A varredura roda
         -- a cada minuto: sem isto, um lembrete preso depois da geração (envio
         -- recusado, conversa vazia) mandaria a IA reescrever o texto 60 vezes
-        -- por hora, e ainda ocuparia uma das ${PER_AGENT_CAP} vagas o tempo
-        -- todo, empurrando as consultas dos próximos dias para fora da fila.
+        -- por hora, e ainda ocuparia uma vaga da fila o tempo todo, empurrando
+        -- as consultas dos próximos dias para fora.
         AND (e.reminder_block IS NULL
              OR e.reminder_block_at IS NULL
              OR e.reminder_block_at < now() - interval '15 minutes')
       ORDER BY e.starts_at ASC
-      LIMIT ${PER_AGENT_CAP}
+      LIMIT ${MEETING_CAP}
     `)
     const cands = rows.rows as unknown as MeetingCandRow[]
     if (cands.length === 0) continue

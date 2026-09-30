@@ -153,7 +153,8 @@ export const RECUPERACAO_MS = 6 * 60 * 60 * 1000
  * o vencido MAIS RECENTE, então o preso é naturalmente substituído. O risco
  * aparece no ÚLTIMO degrau — aí o evento fica na fila até a janela da consulta
  * expirar, e num dia em que o canal caiu os travados de ontem empurrariam os
- * avisos de amanhã para fora do limite. Isso seria trocar um buraco por outro.
+ * avisos de amanhã para fora do limite (numa clínica com 10 profissionais isso
+ * é dezenas de consultas por dia). Seria trocar um buraco por outro.
  *
  * `encerra` não apaga o aviso: o motivo continua no compromisso, para quem
  * marcou saber que aquela pessoa não foi avisada.

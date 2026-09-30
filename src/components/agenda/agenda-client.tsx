@@ -33,6 +33,7 @@ import {
   type GoogleStatus,
 } from '@/app/(dashboard)/agenda/actions'
 import { inkOn } from '@/lib/ui/ink-on'
+import { cn } from '@/lib/utils'
 
 const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
 
@@ -90,6 +91,8 @@ export function AgendaClient() {
   const [google, setGoogle] = useState<GoogleStatus | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [view, setView] = useState<'month' | 'day'>('month')
+  /** Ver só UMA agenda (id) ou todas (null). Escolha da sessão, não é salva. */
+  const [calendarFilter, setCalendarFilter] = useState<string | null>(null)
   const [dayDate, setDayDate] = useState<Date>(() => new Date())
   const viewRef = useRef(view)
   viewRef.current = view
@@ -233,12 +236,13 @@ export function AgendaClient() {
       const s = startOfDay(day).getTime()
       const e = s + 86_400_000 - 1
       return events.filter((ev) => {
+        if (calendarFilter && ev.calendarId !== calendarFilter) return false
         const es = new Date(ev.startsAt).getTime()
         const ee = new Date(ev.endsAt).getTime()
         return es <= e && ee >= s
       })
     },
-    [events],
+    [events, calendarFilter],
   )
 
   // Novo evento cai numa agenda do Google por padrão (pra sincronizar); só usa a
@@ -474,15 +478,50 @@ export function AgendaClient() {
         </div>
       </div>
 
-      {/* Legenda das agendas — linha própria, quebra em telas menores */}
+      {/* Agendas — clicar filtra a grade para ver só aquela.
+          30/09 (clínica da Dra. Joyce): assim que o Google reconectou, entraram
+          as agendas dos 10 profissionais e o mês virou uma parede de eventos de
+          todo mundo junto. A recepção precisa olhar UMA agenda por vez, que era
+          o pedido do Rafael: "aparecer só os compromissos da Letícia". Era
+          legenda — informação sem ação; agora é o filtro. */}
       {calendars.length > 0 && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          {calendars.map((c) => (
-            <span key={c.id} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: c.color }} />
-              {c.name}
-            </span>
-          ))}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          {calendars.length > 1 && (
+            <button
+              type="button"
+              onClick={() => setCalendarFilter(null)}
+              className={cn(
+                'rounded-full px-2 py-0.5 text-xs transition-colors',
+                calendarFilter === null
+                  ? 'bg-foreground/10 font-medium text-foreground'
+                  : 'text-muted-foreground hover:bg-muted',
+              )}
+            >
+              Todas
+            </button>
+          )}
+          {calendars.map((c) => {
+            const ativa = calendarFilter === c.id
+            return (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => setCalendarFilter(ativa ? null : c.id)}
+                title={ativa ? `Mostrando só ${c.name} — clique para ver todas` : `Ver só ${c.name}`}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs transition-colors',
+                  ativa
+                    ? 'bg-foreground/10 font-medium text-foreground'
+                    : calendarFilter === null
+                      ? 'text-muted-foreground hover:bg-muted'
+                      : 'text-muted-foreground/50 hover:bg-muted hover:text-muted-foreground',
+                )}
+              >
+                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: c.color }} />
+                {c.name}
+              </button>
+            )
+          })}
         </div>
       )}
 
