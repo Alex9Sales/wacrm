@@ -15,7 +15,8 @@ import {
   isMeetingReminderBlock,
   type MeetingReminderBlock,
 } from '@/lib/ai/meeting-reminder-block'
-import { importGoogleEvents, pushEventToGoogle } from '@/lib/google/sync'
+import { apagarEventoNoGoogle, importGoogleEvents, pushEventToGoogle } from '@/lib/google/sync'
+import { planoDaEdicao } from '@/lib/google/event-move'
 
 export type CalendarRow = {
   id: string
@@ -93,6 +94,47 @@ async function ensureDefaultCalendar(
       .returning({ id: calendars.id }),
   )
   return created.id
+}
+
+// ---------- O que vem da tela tem que ser DESTA conta ----------
+// 01/10: createEvent/updateEvent aceitavam qualquer calendarId/contactId/dealId.
+// Com o UUID de uma agenda de outra conta, o push escrevia no Google DELA (e o
+// evento agora leva o telefone do paciente, que o import de lá liga a um
+// contato de lá). Com o de um contato/negócio de outra conta, a Agenda mostrava
+// o nome dele aqui.
+
+/** A agenda é desta conta? Devolve se ela sincroniza com o Google; null = não é. */
+async function agendaDaConta(accountId: string, calendarId: string): Promise<{ google: boolean } | null> {
+  const c = firstOrNull(
+    await db
+      .select({ googleCalendarId: calendars.googleCalendarId, connectionId: calendars.connectionId })
+      .from(calendars)
+      .where(and(eq(calendars.id, calendarId), eq(calendars.accountId, accountId)))
+      .limit(1),
+  )
+  return c ? { google: Boolean(c.googleCalendarId && c.connectionId) } : null
+}
+
+async function contatoDaConta(accountId: string, contactId: string): Promise<boolean> {
+  const c = firstOrNull(
+    await db
+      .select({ id: contacts.id })
+      .from(contacts)
+      .where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
+      .limit(1),
+  )
+  return Boolean(c)
+}
+
+async function negocioDaConta(accountId: string, dealId: string): Promise<boolean> {
+  const d = firstOrNull(
+    await db
+      .select({ id: deals.id })
+      .from(deals)
+      .where(and(eq(deals.id, dealId), eq(deals.accountId, accountId)))
+      .limit(1),
+  )
+  return Boolean(d)
 }
 
 /** Agendas da conta (cria a padrão na primeira visita). */
@@ -182,8 +224,21 @@ export async function createEvent(
       endsAt = new Date(new Date(input.startsAt).getTime() + 3_600_000).toISOString()
     }
 
-    const calendarId =
-      input.calendarId ?? (await ensureDefaultCalendar(ctx.accountId, ctx.userId))
+    let calendarId: string
+    if (input.calendarId) {
+      if (!(await agendaDaConta(ctx.accountId, input.calendarId))) {
+        return { id: null, error: 'Agenda não encontrada.' }
+      }
+      calendarId = input.calendarId
+    } else {
+      calendarId = await ensureDefaultCalendar(ctx.accountId, ctx.userId)
+    }
+    if (input.contactId && !(await contatoDaConta(ctx.accountId, input.contactId))) {
+      return { id: null, error: 'Contato não encontrado.' }
+    }
+    if (input.dealId && !(await negocioDaConta(ctx.accountId, input.dealId))) {
+      return { id: null, error: 'Negócio não encontrado.' }
+    }
 
     const created = firstOrThrow(
       await db
@@ -237,39 +292,98 @@ export async function updateEvent(
     ) {
       set.endsAt = new Date(new Date(patch.startsAt).getTime() + 3_600_000).toISOString()
     }
+    // Como o compromisso está ANTES de gravar: a data (lembretes) e a agenda
+    // (trocar de agenda no Google). A agenda vem junto só se for desta conta.
+    const antes = firstOrNull(
+      await db
+        .select({
+          startsAt: calendarEvents.startsAt,
+          calendarId: calendarEvents.calendarId,
+          googleEventId: calendarEvents.googleEventId,
+          calGoogleId: calendars.googleCalendarId,
+          connectionId: calendars.connectionId,
+        })
+        .from(calendarEvents)
+        .leftJoin(calendars, and(eq(calendars.id, calendarEvents.calendarId), eq(calendars.accountId, ctx.accountId)))
+        .where(and(eq(calendarEvents.id, id), eq(calendarEvents.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!antes) return { error: 'Compromisso não encontrado.' }
+
+    // Agenda vazia/null não é troca (a coluna é NOT NULL): fica onde está.
+    let novaAgenda: { calendarId: string; google: boolean } | null = null
+    if (patch.calendarId) {
+      const agenda = await agendaDaConta(ctx.accountId, patch.calendarId)
+      if (!agenda) return { error: 'Agenda não encontrada.' }
+      novaAgenda = { calendarId: patch.calendarId, google: agenda.google }
+    }
+    if (patch.contactId && !(await contatoDaConta(ctx.accountId, patch.contactId))) {
+      return { error: 'Contato não encontrado.' }
+    }
+    if (patch.dealId && !(await negocioDaConta(ctx.accountId, patch.dealId))) {
+      return { error: 'Negócio não encontrado.' }
+    }
+
     // Remarcou a consulta → é um compromisso novo para quem vai ser avisado.
     // `reminders_sent` só anda para frente, então sem zerar aqui a data nova já
     // nasce com os degraus queimados e o paciente não recebe nada da remarcação
     // — que é exatamente quando ele MAIS precisa ser avisado. O bloqueio antigo
     // também vai embora: fala de uma tentativa que não existe mais.
-    if (patch.startsAt !== undefined) {
-      const antes = firstOrNull(
-        await db
-          .select({ startsAt: calendarEvents.startsAt })
-          .from(calendarEvents)
-          .where(and(eq(calendarEvents.id, id), eq(calendarEvents.accountId, ctx.accountId)))
-          .limit(1),
-      )
-      if (antes && new Date(antes.startsAt).getTime() !== new Date(patch.startsAt).getTime()) {
-        set.remindersSent = 0
-        set.reminderBlock = null
-        set.reminderBlockAt = null
-      }
+    if (
+      patch.startsAt !== undefined &&
+      new Date(antes.startsAt).getTime() !== new Date(patch.startsAt).getTime()
+    ) {
+      set.remindersSent = 0
+      set.reminderBlock = null
+      set.reminderBlockAt = null
     }
-    if (patch.calendarId !== undefined) set.calendarId = patch.calendarId
     if (patch.contactId !== undefined) set.contactId = patch.contactId || null
     if (patch.dealId !== undefined) set.dealId = patch.dealId || null
     if (patch.status !== undefined) set.status = patch.status
+
+    // 🔀 Trocou de agenda (ver lib/google/event-move.ts): grava a troca com o
+    // vínculo do Google zerado, apaga o evento na agenda ANTIGA pelo id que
+    // estava gravado e cria na nova. Sem isso o evento antigo ficava no Google e
+    // voltava pelo import como um compromisso fantasma — com o telefone do
+    // paciente. Grava ANTES de apagar: se o UPDATE falhar, nada saiu do Google
+    // (apagar primeiro deixaria a linha apontando para um evento apagado, e o
+    // import a daria por cancelada).
+    const plano = planoDaEdicao(
+      {
+        calendarId: antes.calendarId,
+        googleEventId: antes.googleEventId,
+        google: Boolean(antes.calGoogleId && antes.connectionId),
+      },
+      novaAgenda,
+    )
+    if (plano.trocou && novaAgenda) {
+      set.calendarId = novaAgenda.calendarId
+      set.googleEventId = null
+      // O vínculo com o Google é refeito pelo push 'create' (que volta a marcar 'google').
+      set.source = 'local'
+    }
 
     await db
       .update(calendarEvents)
       .set(set)
       .where(and(eq(calendarEvents.id, id), eq(calendarEvents.accountId, ctx.accountId)))
+
+    if (plano.apagarNaAntiga && antes.googleEventId) {
+      try {
+        await apagarEventoNoGoogle(ctx.accountId, antes.calendarId, antes.googleEventId)
+      } catch (err) {
+        // Best-effort, como todo push: a troca no CRM fica. O evento antigo
+        // pode ficar no Google — o log é o rastro.
+        console.error('[agenda] trocar de agenda: apagar na agenda antiga do Google falhou:', err)
+      }
+    }
     // Espelha a edição no Google (best-effort).
-    try {
-      await pushEventToGoogle(ctx.accountId, id, 'update')
-    } catch (err) {
-      console.error('[agenda] push update → google:', err)
+    if (plano.pushDepois) {
+      try {
+        await pushEventToGoogle(ctx.accountId, id, plano.pushDepois)
+      } catch (err) {
+        console.error(`[agenda] push ${plano.pushDepois} → google:`, err)
+      }
     }
     return { error: null }
   } catch (err) {

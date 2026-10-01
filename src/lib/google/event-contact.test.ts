@@ -39,6 +39,14 @@ describe('o telefone que vem do Capim na descrição', () => {
     expect(phoneFromDescription('Telefone:')).toBeNull()
   })
 
+  it('descrição em HTML (editada pela tela do Google): o número para na quebra', () => {
+    // Antes: "…5678<br>chegar 10 min antes" virava 1191234567810 (chave de outra pessoa).
+    // Número fictício.
+    expect(phoneFromDescription('Telefone: (11) 91234-5678<br>chegar 10 min antes')).toBe('11912345678')
+    expect(phoneFromDescription('<div>Telefone: (11) 91234-5678</div><div>Cadeira: 102</div>')).toBe('11912345678')
+    expect(phoneFromDescription('Telefone: <b>(11) 91234-5678</b><br>Cadeira: 102')).toBe('11912345678')
+  })
+
   it('recusa lixo longo — dois números colados não são um', () => {
     expect(phoneFromDescription('Telefone: 11984242024 / 11939614854')).toBeNull()
   })

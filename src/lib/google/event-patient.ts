@@ -1,29 +1,33 @@
 // ============================================================
-// 🩺 O paciente do compromisso VAI JUNTO para o Google.
+// 🩺 O paciente do compromisso VAI JUNTO para o Google — na DESCRIÇÃO.
 //
 // 01/10 (dona de uma clínica): "como eu faço para quando eu agendar o paciente as
 // informações do paciente ficarem vinculadas na agenda do Google também?". Ela
 // criou "RSC" no CRM com a paciente escolhida e no Google apareceu só "rsc" —
 // o CRM mandava título, descrição e local, e o paciente ficava para trás.
 //
-// Agora o evento leva:
-//  - no título, o nome do paciente ("RSC · Ana Teste"), que é o que aparece na
-//    grade do Google sem precisar abrir o evento;
-//  - no FIM da descrição, um bloco do FluxiaCRM com "Paciente:" e "Telefone:",
-//    no mesmo formato que o Capim já escreve — é o que o import
-//    (event-contact.ts → phoneFromDescription) lê para religar o contato.
+// Agora a descrição leva, no FIM, um bloco do FluxiaCRM com "Paciente:" e
+// "Telefone:", no mesmo formato que o Capim já escreve — é o que o import
+// (event-contact.ts → phoneFromDescription) lê para religar o contato.
 //
-// ⚠️ IDA E VOLTA. O sync de 5 em 5 min SOBRESCREVE título e descrição do CRM
-// com o que vem do Google, então o bloco e o sufixo do título voltam para cá
-// sozinhos. Tudo aqui tem que ser idempotente: aplicar de novo sobre o que
-// voltou não pode duplicar nada. Por isso o bloco tem uma linha marcadora
-// própria — é ela que permite trocar o bloco velho pelo atual sem encostar no
-// resto da descrição (as linhas do Capim, o que a recepção digitou).
+// O TÍTULO não é tocado: vai como foi digitado. A rodada 1 (01/10) punha
+// " · <nome>" no título e a revisão achou meia dúzia de jeitos de o sufixo
+// crescer ou ficar com o paciente antigo — não há onde guardar o que foi
+// mandado sem depender de texto editável. O bloco da descrição tem marcadora
+// própria, então dá para trocá-lo sem adivinhar.
+//
+// SÓ para quem optou (`googlePatientInfo` nas configurações da conta, padrão
+// desligado) e NUNCA em reunião com convidados: o Google manda a descrição no
+// convite por e-mail, e nome + telefone de paciente não podem ir para fora.
+//
+// ⚠️ IDA E VOLTA. O sync de 5 em 5 min SOBRESCREVE a descrição do CRM com a do
+// Google, então o bloco volta para cá sozinho — às vezes em HTML, quando alguém
+// edita pela tela do Google. Tudo aqui tem que ser idempotente: aplicar de novo
+// sobre o que voltou não pode duplicar nada, e nenhuma linha fora do bloco sai
+// (as do Capim, o que a recepção digitou).
 //
 // Sem 'server-only': o worker do sync alcança este arquivo.
 // ============================================================
-
-import { isBarePhone } from '@/lib/contacts/name-rule'
 
 /** Nome e telefone crus do contato ligado ao compromisso (como estão no banco). */
 export type PacienteDoEvento = { name: string | null; phone: string | null }
@@ -31,45 +35,194 @@ export type PacienteDoEvento = { name: string | null; phone: string | null }
 /** Linha que abre o bloco do FluxiaCRM na descrição do Google. */
 export const MARCADOR_FLUXIA = '— FluxiaCRM —'
 
-const QUEBRA = String.raw`(?:\r?\n|<br\s*/?>)`
-const MARCADOR_RE = MARCADOR_FLUXIA.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+// ------------------------------------------------------------
+// Descrição em texto OU em HTML.
+//
+// Quando alguém edita a descrição pela tela do Google, ela volta em HTML:
+// "<br>", "<div>…</div>", "<p>", "&nbsp;", "&mdash;", "<b>" em volta. Para achar o
+// bloco, cada linha é lida já sem tags e sem entidades; para tirá-lo, corta-se
+// o trecho ORIGINAL daquelas linhas — o HTML do resto fica como estava.
+// ------------------------------------------------------------
 
-// O bloco: a marcadora numa linha só, seguida das NOSSAS duas linhas (cada uma
-// opcional, nesta ordem). Engole também as quebras antes da marcadora, que são
-// o espaçamento que nós mesmos pusemos. `<br>` conta como quebra porque o Google
-// devolve HTML quando alguém edita a descrição pela tela dele.
-const FONTE_BLOCO =
-  String.raw`(?:^|(?:[ \t]*${QUEBRA})+)[ \t]*${MARCADOR_RE}[ \t]*(?=${QUEBRA}|$)` +
-  String.raw`(?:${QUEBRA}[ \t]*Paciente[ \t]*:[ \t]*([^\r\n<]*))?` +
-  String.raw`(?:${QUEBRA}[ \t]*Telefone[ \t]*:[ \t]*([^\r\n<]*))?`
-
-/** Sem acento, minúsculo — "Ana" casa com "ANA" e "Conceição" com "conceicao". */
-function normalizar(s: string): string {
-  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+// Quebras de linha. `</div><div>` (e `</p><p>`) é UMA quebra: é assim que o
+// editor do Google separa duas linhas. Vem antes na alternância de propósito.
+const QUEBRA_RE =
+  /<\/(?:div|p)\s*>\s*<(?:div|p)(?:\s[^<>]*)?>|\r?\n|<br\s*\/?>|<\/?(?:div|p)(?:\s[^<>]*)?>/gi
+// Tag de verdade começa com letra: o "<3" de um nome não é tag.
+const TAG_RE = /<\/?[a-z][^<>]*>/gi
+const ENTIDADES: Record<string, string> = {
+  nbsp: ' ',
+  mdash: '—',
+  ndash: '–',
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
 }
 
-function palavras(s: string): string[] {
-  return normalizar(s).split(/[^a-z0-9]+/).filter(Boolean)
+function decodificarEntidades(s: string): string {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (inteira, e: string) => {
+    const k = e.toLowerCase()
+    if (k.startsWith('#')) {
+      const n = k.startsWith('#x') ? parseInt(k.slice(2), 16) : parseInt(k.slice(1), 10)
+      return Number.isFinite(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : inteira
+    }
+    return ENTIDADES[k] ?? inteira
+  })
 }
 
-/** Nome de verdade do contato, numa linha só — ou null (vazio, ou é o próprio telefone). */
+/** Um trecho do original como a recepção o lê: sem tags, sem entidades, espaço único. */
+function textoPlano(trecho: string): string {
+  // `\s` já cobre o espaço duro (U+00A0) que o &nbsp; vira.
+  return decodificarEntidades(trecho.replace(TAG_RE, '')).replace(/\s+/g, ' ').trim()
+}
+
+type Linha = {
+  /** Trecho da linha no ORIGINAL: [ini, fim). */
+  ini: number
+  fim: number
+  /** O que a linha diz, já sem HTML. */
+  texto: string
+  /** Onde termina a quebra que fecha esta linha, e se ela é um `</div>`/`</p>` sozinho. */
+  quebraFim: number | null
+  quebraFecha: boolean
+}
+
+function linhasDe(texto: string): Linha[] {
+  const out: Linha[] = []
+  const re = new RegExp(QUEBRA_RE.source, 'gi')
+  let ini = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(texto))) {
+    out.push({
+      ini,
+      fim: m.index,
+      texto: textoPlano(texto.slice(ini, m.index)),
+      quebraFim: m.index + m[0].length,
+      quebraFecha: /^<\/(?:div|p)\s*>$/i.test(m[0]),
+    })
+    ini = m.index + m[0].length
+  }
+  out.push({ ini, fim: texto.length, texto: textoPlano(texto.slice(ini)), quebraFim: null, quebraFecha: false })
+  return out
+}
+
+/** A descrição inteira em texto puro, uma linha por quebra (texto ou HTML). */
+export function descricaoEmTexto(description: string | null | undefined): string {
+  return linhasDe(description ?? '')
+    .map((l) => l.texto)
+    .join('\n')
+}
+
+/** Tem HTML? (Então o bloco entra com `<br>`, não com quebra de texto.) */
+function temHtml(s: string): boolean {
+  return /<\/?[a-z][a-z0-9]*(?:\s[^<>]*)?\/?>/i.test(s)
+}
+
+const MARCADOR_PLANO = textoPlano(MARCADOR_FLUXIA).toLowerCase()
+
+/**
+ * Trechos do original ocupados por blocos do FluxiaCRM: a marcadora numa linha
+ * só, seguida das NOSSAS linhas "Paciente:" e "Telefone:" (cada uma opcional,
+ * nesta ordem). Vão junto as linhas em branco antes da marcadora — são o
+ * espaçamento que nós mesmos pusemos.
+ */
+function trechosDoBloco(texto: string): Array<[number, number]> {
+  const ls = linhasDe(texto)
+  const cortes: Array<[number, number]> = []
+  let i = 0
+  while (i < ls.length) {
+    if (ls[i].texto.toLowerCase() !== MARCADOR_PLANO) {
+      i++
+      continue
+    }
+    let ultima = i
+    if (ultima + 1 < ls.length && /^paciente\s*:/i.test(ls[ultima + 1].texto)) ultima++
+    if (ultima + 1 < ls.length && /^telefone\s*:/i.test(ls[ultima + 1].texto)) ultima++
+
+    let anterior = i - 1
+    while (anterior >= 0 && !ls[anterior].texto) anterior--
+    let ini: number
+    let fim = ls[ultima].fim
+    if (anterior >= 0) {
+      // Logo depois da última linha com texto — mas sem levar o `</div>` que a
+      // fecha, senão a tag dela fica aberta.
+      const a = ls[anterior]
+      ini = a.quebraFecha && a.quebraFim !== null ? a.quebraFim : a.fim
+    } else {
+      // Bloco no começo: vai junto o espaço até a próxima linha com texto.
+      ini = 0
+      let prox = ultima + 1
+      while (prox < ls.length && !ls[prox].texto) prox++
+      fim = prox < ls.length ? ls[prox].ini : texto.length
+    }
+    cortes.push([ini, fim])
+    i = ultima + 1
+  }
+  return cortes
+}
+
+/**
+ * A descrição sem o bloco do FluxiaCRM. Nenhuma outra linha sai. Sem bloco,
+ * devolve a descrição EXATAMENTE como veio (nem o espaço do fim muda).
+ */
+export function tirarBlocoFluxia(description: string | null | undefined): string {
+  const texto = description ?? ''
+  if (!/fluxiacrm/i.test(texto)) return texto
+  const cortes = trechosDoBloco(texto)
+  if (!cortes.length) return texto
+  let out = ''
+  let cursor = 0
+  for (const [ini, fim] of cortes) {
+    if (ini > cursor) out += texto.slice(cursor, ini)
+    cursor = Math.max(cursor, fim)
+  }
+  out += texto.slice(cursor)
+  // Sobrou só casca de HTML (um "</div>" solto)? Então não sobrou nada.
+  return descricaoEmTexto(out).trim() ? out.trim() : ''
+}
+
+// ------------------------------------------------------------
+// Quem é o paciente, do jeito que vai no bloco.
+// ------------------------------------------------------------
+
+/**
+ * Nome de verdade do contato, numa linha só — ou null.
+ *
+ * Sem nenhuma letra não é nome: o próprio telefone, um CPF/CNPJ gravado no
+ * lugar do nome ("123.456.789-01"), um perfil do WhatsApp só de emoji. Nesses
+ * casos vai só o telefone — documento não pode parar na agenda do Google.
+ * "<" e ">" saem: o bloco pode ir dentro de HTML, e "Ana <3" quebraria a linha.
+ */
 function nomeDoPaciente(name: string | null | undefined): string | null {
-  const n = (name ?? '').replace(/\s+/g, ' ').trim()
-  if (!n || isBarePhone(n)) return null
+  const n = (name ?? '').replace(/[<>]/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!/\p{L}/u.test(n)) return null
   return n
+}
+
+/** DDD com os dois dígitos de 1 a 9; celular (11 dígitos) começa com 9; fixo
+ *  ou celular sem o 9º dígito (10) começa de 2 a 9. */
+function brasileiroValido(nacional: string): boolean {
+  if (!/^[1-9]{2}/.test(nacional)) return false
+  if (nacional.length === 11) return nacional[2] === '9'
+  if (nacional.length === 10) return /[2-9]/.test(nacional[2])
+  return false
 }
 
 /**
  * Telefone no formato que a recepção lê: "(11) 98765-4321".
  *
- * Com ou sem o 55 (o ERP grava sem). Número de fora do Brasil vai com "+" e os
- * dígitos. Menos de 10 dígitos não identifica ninguém (falta o DDD) e não vai.
+ * Com ou sem o 55 (o ERP grava sem). Só formata como brasileiro o que é número
+ * brasileiro válido: "12025550123" (EUA, sem o +) virava "(12) 02555-0123", com
+ * cara de São José dos Campos. O resto vai com "+" e os dígitos. Menos de 10
+ * dígitos não identifica ninguém (falta o DDD) e não vai.
  */
 export function telefoneLegivel(phone: string | null | undefined): string | null {
   const d = (phone ?? '').replace(/\D/g, '')
   if (d.length < 10) return null
   const nacional = d.startsWith('55') && (d.length === 12 || d.length === 13) ? d.slice(2) : d
-  if (nacional.length === 10 || nacional.length === 11) {
+  if (brasileiroValido(nacional)) {
     const resto = nacional.slice(2)
     return `(${nacional.slice(0, 2)}) ${resto.slice(0, -4)}-${resto.slice(-4)}`
   }
@@ -93,102 +246,70 @@ export function textoTemTelefone(texto: string | null | undefined, phone: string
   return false
 }
 
-/** A descrição sem o bloco do FluxiaCRM. Nenhuma outra linha sai. */
-export function tirarBlocoFluxia(description: string | null | undefined): string {
-  const texto = description ?? ''
-  if (!/fluxiacrm/i.test(texto)) return texto.trim()
-  return texto.replace(new RegExp(FONTE_BLOCO, 'gi'), '').trim()
-}
-
-/**
- * Quem o bloco do FluxiaCRM dizia que era o paciente (o nome, ou o telefone
- * quando não havia nome). É o que permite tirar do título o sufixo de um
- * paciente que foi trocado ou desligado do compromisso.
- */
-export function rotuloDoBlocoFluxia(description: string | null | undefined): string | null {
-  const m = new RegExp(FONTE_BLOCO, 'i').exec(description ?? '')
-  if (!m) return null
-  return m[1]?.trim() || m[2]?.trim() || null
-}
-
 /**
  * Descrição que vai para o Google: a do CRM, sem o bloco antigo, com o bloco
- * do paciente atual no fim.
+ * do paciente atual no fim. Sem paciente, só tira o bloco antigo — é assim que
+ * desligar o paciente LIMPA o Google (quem chama manda '' quando der vazio).
  *
  * Não põe bloco quando a descrição já traz o telefone do paciente — o evento do
- * Capim já vem com "Paciente:" e "Telefone:", repetir só polui. Devolve null
- * quando não havia descrição e não há o que acrescentar (o Google fica como está).
+ * Capim já vem com "Paciente:" e "Telefone:", repetir só polui. Quando a
+ * descrição está em HTML, o bloco entra com `<br>`: um "\n" no meio de HTML
+ * vira espaço, e o bloco apareceria numa linha só.
  */
 export function descricaoParaGoogle(
   description: string | null | undefined,
   paciente: PacienteDoEvento | null,
-): string | null {
+): string {
   const base = tirarBlocoFluxia(description)
   const nome = nomeDoPaciente(paciente?.name)
   const telefone = telefoneLegivel(paciente?.phone)
-  const linhas = [nome && `Paciente: ${nome}`, telefone && `Telefone: ${telefone}`].filter(Boolean)
-  const jaTem = telefone !== null && textoTemTelefone(base, paciente?.phone)
-  if (!linhas.length || jaTem) return description == null ? null : base
-  const bloco = [MARCADOR_FLUXIA, ...linhas].join('\n')
-  return base ? `${base}\n\n${bloco}` : bloco
+  // Nenhuma das duas linhas leva "<" ou ">": o nome sai limpo de nomeDoPaciente
+  // e o telefone legível só tem dígitos, parênteses, espaço, hífen e "+".
+  const linhas = [nome && `Paciente: ${nome}`, telefone && `Telefone: ${telefone}`].filter(
+    (l): l is string => Boolean(l),
+  )
+  if (!linhas.length) return base
+  if (telefone !== null && textoTemTelefone(descricaoEmTexto(base), paciente?.phone)) return base
+  const quebra = temHtml(base) ? '<br>' : '\n'
+  const bloco = [MARCADOR_FLUXIA, ...linhas].join(quebra)
+  const b = base.trim()
+  return b ? `${b}${quebra}${quebra}${bloco}` : bloco
 }
 
-// "Dra. Ana" não pode fazer qualquer título com "Dra" parecer já ter o paciente.
-const PRONOMES = new Set(['sr', 'sra', 'srta', 'dr', 'dra'])
+// ------------------------------------------------------------
+// Quando o paciente vai.
+// ------------------------------------------------------------
 
-/** O título já identifica este paciente? Ver o teste "basta o primeiro nome". */
-function tituloJaTem(titulo: string, nome: string | null, phone: string | null | undefined): boolean {
-  if (nome) {
-    const primeiro = palavras(nome).find((p) => !PRONOMES.has(p))
-    return primeiro !== undefined && palavras(titulo).includes(primeiro)
-  }
-  return textoTemTelefone(titulo, phone)
-}
+// A sala do Meet vira o "local" do evento (sync.ts) — é o rastro que fica na
+// linha do CRM de que aquilo é reunião com gente de fora.
+const LINK_DE_REUNIAO = /meet\.google\.com|zoom\.us\/|teams\.microsoft\.com|teams\.live\.com/i
 
-/** Tira " · <rótulo>" do fim do título (ou o título inteiro, se era só o rótulo). */
-function semSufixo(titulo: string, rotulo: string): string {
-  if (normalizar(titulo) === normalizar(rotulo)) return ''
-  const sufixo = ` · ${rotulo}`
-  if (titulo.length > sufixo.length && normalizar(titulo.slice(-sufixo.length)) === normalizar(sufixo)) {
-    return titulo.slice(0, -sufixo.length).trim()
-  }
-  return titulo
+/** A linha do evento tem cara de reunião com convidados (link de videochamada)? */
+export function pareceReuniaoComConvidados(ev: {
+  location?: string | null
+  description?: string | null
+}): boolean {
+  return LINK_DE_REUNIAO.test(`${ev.location ?? ''}\n${ev.description ?? ''}`)
 }
 
 /**
- * Título que vai para o Google: "<título> · <Nome do paciente>", a não ser que
- * o título já traga o paciente. Sem nome, vai o telefone. Título vazio → só o
- * paciente.
+ * Este push leva o paciente para o Google?
  *
- * `rotuloAnterior` é o paciente que o bloco antigo da descrição registrava: se
- * mudou (ou saiu), o sufixo dele sai do título antes de entrar o novo.
+ * - Só na conta que optou (`googlePatientInfo === true`; qualquer outro valor
+ *   gravado no jsonb conta como desligado).
+ * - Nunca em evento com convidados: na criação, convidados ou sala do Meet
+ *   pedidos; na edição, link de videochamada na linha do evento. O Google manda
+ *   a descrição no convite por e-mail — o convite da Zelo levaria
+ *   "Paciente: <lead>" e o telefone para fora.
  */
-export function tituloParaGoogle(
-  title: string | null | undefined,
-  paciente: PacienteDoEvento | null,
-  rotuloAnterior?: string | null,
-): string {
-  const original = (title ?? '').trim()
-  const nome = nomeDoPaciente(paciente?.name)
-  const rotulo = nome ?? telefoneLegivel(paciente?.phone)
-  // O import grava "(sem título)" quando o Google não tem título.
-  let base = original === '(sem título)' ? '' : original
-  if (rotuloAnterior && (!rotulo || normalizar(rotuloAnterior) !== normalizar(rotulo))) {
-    base = semSufixo(base, rotuloAnterior)
-  }
-  if (!rotulo) return base || original
-  if (!base) return rotulo
-  if (tituloJaTem(base, nome, paciente?.phone)) return base
-  return `${base} · ${rotulo}`
-}
-
-/** Título e descrição do compromisso do CRM do jeito que vão para o Google. */
-export function eventoParaGoogle(
-  ev: { title: string; description: string | null },
-  paciente: PacienteDoEvento | null,
-): { summary: string; description: string | null } {
-  return {
-    summary: tituloParaGoogle(ev.title, paciente, rotuloDoBlocoFluxia(ev.description)),
-    description: descricaoParaGoogle(ev.description, paciente),
-  }
+export function levarPacienteAoGoogle(args: {
+  ligadoNaConta: unknown
+  op: 'create' | 'update'
+  convidados?: readonly string[]
+  meet?: boolean
+  evento: { location: string | null; description: string | null }
+}): boolean {
+  if (args.ligadoNaConta !== true) return false
+  if (args.op === 'create' && ((args.convidados?.length ?? 0) > 0 || args.meet)) return false
+  return !pareceReuniaoComConvidados(args.evento)
 }

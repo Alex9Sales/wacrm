@@ -8,7 +8,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm'
 import { db, calendarConnections, calendars, calendarEvents, contacts } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { phoneFromDescription, phoneKey } from './event-contact'
-import { eventoParaGoogle, type PacienteDoEvento } from './event-patient'
+import { descricaoParaGoogle, levarPacienteAoGoogle, type PacienteDoEvento } from './event-patient'
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
 import { zonedIso } from '@/lib/assistant/rules'
 import { getAccountSettings } from '@/lib/settings/account-settings'
@@ -461,9 +461,50 @@ async function pacienteDoEvento(accountId: string, contactId: string | null): Pr
       .where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
       .limit(1),
   )
-  if (!c) return null
-  // Grupo do WhatsApp guarda o id do grupo em `phone` — não é telefone de ninguém.
-  return { name: c.name, phone: c.isGroup ? null : c.phone }
+  // Grupo do WhatsApp não é paciente: o `phone` dele é o id do grupo e o nome
+  // é o do grupo. Nenhum bloco.
+  if (!c || c.isGroup) return null
+  return { name: c.name, phone: c.phone }
+}
+
+/** Token da conexão do Google — só se a conexão for desta conta. null = não há. */
+async function tokenDaConexao(accountId: string, connectionId: string): Promise<string | null> {
+  const conn = firstOrNull(
+    await db
+      .select({
+        id: calendarConnections.id,
+        accessToken: calendarConnections.accessToken,
+        refreshToken: calendarConnections.refreshToken,
+        tokenExpiry: calendarConnections.tokenExpiry,
+      })
+      .from(calendarConnections)
+      .where(and(eq(calendarConnections.id, connectionId), eq(calendarConnections.accountId, accountId)))
+      .limit(1),
+  )
+  return conn ? getValidAccessToken(conn) : null
+}
+
+/**
+ * Apaga no Google um evento que a linha do CRM JÁ NÃO aponta — o que ficou na
+ * agenda antiga quando o compromisso trocou de agenda (ver event-move.ts).
+ * No-op se aquela agenda não for do Google desta conta. 404/410 = já não existe.
+ */
+export async function apagarEventoNoGoogle(
+  accountId: string,
+  calendarId: string,
+  googleEventId: string,
+): Promise<void> {
+  const cal = firstOrNull(
+    await db
+      .select({ calGoogleId: calendars.googleCalendarId, connectionId: calendars.connectionId })
+      .from(calendars)
+      .where(and(eq(calendars.id, calendarId), eq(calendars.accountId, accountId)))
+      .limit(1),
+  )
+  if (!cal?.calGoogleId || !cal.connectionId) return
+  const accessToken = await tokenDaConexao(accountId, cal.connectionId)
+  if (!accessToken) return
+  await deleteGoogleEvent(accessToken, cal.calGoogleId, googleEventId)
 }
 
 /** Espelha um evento do CRM no Google. op: 'create' | 'update' | 'delete'.
@@ -495,48 +536,52 @@ export async function pushEventToGoogle(
         connectionId: calendars.connectionId,
       })
       .from(calendarEvents)
-      .innerJoin(calendars, eq(calendarEvents.calendarId, calendars.id))
+      // A agenda e a conexão também têm que ser DESTA conta (01/10): o evento
+      // agora leva telefone, e escrever com o token de outra conta faria o
+      // import DELA ligar o evento a um contato dela e disparar lembrete.
+      .innerJoin(calendars, and(eq(calendarEvents.calendarId, calendars.id), eq(calendars.accountId, accountId)))
       .where(and(eq(calendarEvents.id, eventId), eq(calendarEvents.accountId, accountId)))
       .limit(1),
   )
   // Agenda local (não-Google) → nada a espelhar.
   if (!row || !row.calGoogleId || !row.connectionId) return
 
-  const conn = firstOrNull(
-    await db
-      .select({
-        id: calendarConnections.id,
-        accessToken: calendarConnections.accessToken,
-        refreshToken: calendarConnections.refreshToken,
-        tokenExpiry: calendarConnections.tokenExpiry,
-      })
-      .from(calendarConnections)
-      .where(eq(calendarConnections.id, row.connectionId))
-      .limit(1),
-  )
-  if (!conn) return
-
-  const accessToken = await getValidAccessToken(conn)
+  const accessToken = await tokenDaConexao(accountId, row.connectionId)
+  if (!accessToken) return
 
   if (op === 'delete') {
     if (row.googleEventId) await deleteGoogleEvent(accessToken, row.calGoogleId, row.googleEventId)
     return
   }
 
-  const tz = (await getAccountSettings(accountId)).businessTimezone || 'America/Sao_Paulo'
+  const settings = await getAccountSettings(accountId)
+  const tz = settings.businessTimezone || 'America/Sao_Paulo'
   const body = toGoogleBody(row as PushRow, tz)
 
-  // 🩺 01/10 (pedido de uma clínica): o paciente vai junto — nome no título, bloco com
-  // nome e telefone no fim da descrição (ver event-patient.ts). Vale para criar
-  // e para editar. O bloco NÃO é gravado na descrição do CRM: ele volta sozinho
+  // 🩺 01/10 (pedido de uma clínica): o paciente vai junto — bloco com nome e
+  // telefone no fim da DESCRIÇÃO (ver event-patient.ts); o título vai como foi
+  // digitado. Só na conta que optou (googlePatientInfo) e nunca em reunião com
+  // convidados. O bloco NÃO é gravado na descrição do CRM: ele volta sozinho
   // pelo import, e reaplicar sobre o que voltou não duplica.
+  //
+  // Sem paciente (desligado, conta sem a opção, reunião), o bloco antigo SAI.
+  // E na edição a descrição vai SEMPRE, '' quando o CRM está vazio: o Google
+  // espelha o CRM. Mandar nada deixava no Google o bloco do paciente desligado —
+  // e o import religava esse mesmo paciente pelo telefone do bloco.
   try {
-    const paciente = await pacienteDoEvento(accountId, row.contactId)
-    const comPaciente = eventoParaGoogle({ title: row.title, description: row.description }, paciente)
-    body.summary = comPaciente.summary
-    body.description = comPaciente.description ?? undefined
+    const levar = levarPacienteAoGoogle({
+      ligadoNaConta: settings.googlePatientInfo,
+      op,
+      convidados: opts.attendees,
+      meet: opts.meet,
+      evento: { location: row.location, description: row.description },
+    })
+    const paciente = levar ? await pacienteDoEvento(accountId, row.contactId) : null
+    const descricao = descricaoParaGoogle(row.description, paciente)
+    body.description = op === 'update' ? descricao : descricao || undefined
   } catch (err) {
-    console.error('[google-sync] paciente do evento falhou (vai como estava):', err)
+    // Na dúvida, não mexe: a descrição vai como estava (vazia = o Google fica como está).
+    console.error('[google-sync] paciente do evento falhou (descrição vai como estava):', err)
   }
 
   if (op === 'update' && row.googleEventId) {

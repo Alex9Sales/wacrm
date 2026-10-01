@@ -158,6 +158,12 @@ export interface AccountSettings {
   aiMeetingOnline: boolean
   /** E-mails convidados em TODA reunião marcada pela IA (ex.: o vendedor). */
   aiMeetingInvitees: string[]
+  /** 🩺 O paciente ligado ao compromisso vai junto para o Google: bloco do
+   *  FluxiaCRM com "Paciente:" e "Telefone:" no fim da DESCRIÇÃO (o título não
+   *  muda). OFF por padrão — nome e telefone de paciente numa agenda que pode
+   *  ser compartilhada é decisão da conta (01/10, pedido de uma clínica). Nunca
+   *  vale para reunião com convidados. Ver lib/google/event-patient.ts. */
+  googlePatientInfo: boolean
 }
 
 /** Mon–Fri 08:00–18:00, weekend closed. Index 0=Sunday … 6=Saturday. */
@@ -240,6 +246,7 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   aiCalendarId: null,
   aiMeetingOnline: false,
   aiMeetingInvitees: [],
+  googlePatientInfo: false,
 }
 
 /** Read an account's settings, merged over the defaults. */

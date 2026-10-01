@@ -37,9 +37,14 @@
  * evento órfão do que evento ligado a quem não é.
  */
 export function phoneFromDescription(description: string | null | undefined): string | null {
-  const texto = description ?? ''
+  // A captura para no primeiro "<" (01/10): descrição editada pela tela do
+  // Google volta em HTML, e "Telefone: (11) 91234-5678<br>chegar 10 min antes"
+  // grudava o "10" no número — 13 dígitos, chave de outra pessoa. Antes de
+  // cortar, saem as tags que não quebram linha ("<b>" em volta do número), para
+  // o corte parar só na quebra (<br>, <div>, <p>).
+  const texto = (description ?? '').replace(/<\/?(?!(?:br|div|p)\b)[a-z][^<>]*>/gi, '')
   if (!texto) return null
-  const m = texto.match(/telefone\s*:\s*([^\n\r]+)/i)
+  const m = texto.match(/telefone\s*:\s*([^\n\r<]+)/i)
   if (!m) return null
   const digitos = m[1].replace(/\D/g, '')
   // 10 = DDD + 8 (fixo ou celular antigo). Menos que isso não identifica
