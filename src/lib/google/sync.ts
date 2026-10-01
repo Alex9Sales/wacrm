@@ -12,6 +12,7 @@ import { descricaoParaGoogle, levarPacienteAoGoogle, type PacienteDoEvento } fro
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
 import { zonedIso } from '@/lib/assistant/rules'
 import { getAccountSettings } from '@/lib/settings/account-settings'
+import { recomecoDoLembrete } from '@/lib/ai/meeting-reminder-block'
 import {
   refreshAccessToken,
   listGoogleEvents,
@@ -252,7 +253,7 @@ export async function importGoogleEvents(
         if (!times) continue
         const existing = firstOrNull(
           await db
-            .select({ id: calendarEvents.id })
+            .select({ id: calendarEvents.id, startsAt: calendarEvents.startsAt })
             .from(calendarEvents)
             .where(and(eq(calendarEvents.calendarId, cal.id), eq(calendarEvents.googleEventId, ev.id)))
             .limit(1),
@@ -277,7 +278,18 @@ export async function importGoogleEvents(
           // ⚠️ `contactId` NÃO entra no update do evento que já existe: alguém
           // pode ter ligado o paciente à mão, e o sync (de 5 em 5 min) apagaria
           // esse trabalho toda vez. Só preenche o que está vazio.
-          await db.update(calendarEvents).set({ ...values, updatedAt: sql`now()` }).where(eq(calendarEvents.id, existing.id))
+          //
+          // 01/10: arrastou no Google para outro horário = lembrete recomeça,
+          // como na Agenda e na IA (ver recomecoDoLembrete). Antes o contador
+          // da data antiga seguia valendo e a data nova ficava sem aviso.
+          await db
+            .update(calendarEvents)
+            .set({
+              ...values,
+              ...recomecoDoLembrete(existing.startsAt, values.startsAt),
+              updatedAt: sql`now()`,
+            })
+            .where(eq(calendarEvents.id, existing.id))
           if (contactId) {
             await db
               .update(calendarEvents)

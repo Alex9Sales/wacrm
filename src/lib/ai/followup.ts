@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, sql, type SQL } from 'drizzle-orm'
 
 import { db, aiConfigs, conversations, deals, calendarEvents, contacts, messages, tasks } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -11,6 +11,7 @@ import { listChannels } from '@/lib/channels/channels'
 import { findOrCreateConversation } from '@/lib/channels/inbound'
 import {
   decideImpedimento,
+  isMeetingReminderBlock,
   type MeetingReminderBlock,
 } from './meeting-reminder-block'
 import { chaveDoDegrau, decidirLembreteDuplicado } from './meeting-reminder-dedup'
@@ -1627,6 +1628,7 @@ interface MeetingCandRow {
   description: string | null
   conversation_id: string | null
   created_at: string
+  reminder_block: string | null
   /** O mesmo atendimento em outra agenda — ver meeting-reminder-dedup.ts. */
   duplicados: Array<{
     id: string
@@ -1636,6 +1638,8 @@ interface MeetingCandRow {
     status: string
     created_at: string
     reminders_sent: number
+    reminder_block: string | null
+    conversation_id: string | null
   }> | null
 }
 
@@ -1733,6 +1737,60 @@ async function stampReminder(eventId: string, n: number): Promise<void> {
 }
 
 /**
+ * Carimba o degrau no ATENDIMENTO, não só no compromisso: este e todos os
+ * confirmados da mesma conta, do mesmo contato e no mesmo instante — a mesma
+ * consulta lançada em outra agenda (meeting-reminder-dedup.ts).
+ *
+ * 01/10: antes a cópia só carimbava na varredura SEGUINTE, olhando o contador
+ * do canônico. Se o canônico fosse cancelado nesse minuto (a recepção limpando
+ * a duplicata, o Capim apagando no Google), a cópia ficava sozinha, virava
+ * canônica e mandava o mesmo degrau de novo. Gravando junto, não há janela.
+ *
+ * GREATEST porque só anda para frente. Limpa o motivo de todos: o degrau foi
+ * resolvido para o paciente, e o aviso "não vai receber" que uma cópia
+ * espelhou deixou de ser verdade. A ligação vem do próprio compromisso no
+ * banco (e), sem devolver o starts_at em texto ao Postgres para comparar.
+ *
+ * Mesma regra de `stampReminder`: só para o degrau que NÃO TEM VOLTA.
+ */
+export function sqlCarimboDoAtendimento(accountId: string, eventId: string, n: number): SQL {
+  return sql`
+    UPDATE calendar_events AS d
+       SET reminders_sent = GREATEST(d.reminders_sent, ${n}),
+           reminder_block = NULL,
+           reminder_block_at = NULL
+      FROM calendar_events AS e
+     WHERE e.id = ${eventId}
+       AND e.account_id = ${accountId}
+       AND d.account_id = e.account_id
+       AND (d.id = e.id
+            OR (d.contact_id = e.contact_id
+                AND d.starts_at = e.starts_at
+                AND d.status = 'confirmed'))
+  `
+}
+
+async function carimbarAtendimento(accountId: string, eventId: string, n: number): Promise<void> {
+  try {
+    await db.execute(sqlCarimboDoAtendimento(accountId, eventId, n))
+  } catch (err) {
+    // Pelo menos o próprio compromisso sai da fila; a cópia ainda tem a rede
+    // de segurança da decisão (vê o contador dele na varredura seguinte).
+    console.error('[meeting-reminder] carimbo do grupo falhou:', err)
+    await stampReminder(eventId, n)
+  }
+}
+
+/**
+ * A fila dos lembretes. Desempata pelo MESMO critério de `escolherCanonico`
+ * (criado primeiro, no milissegundo como o JS lê; empate, menor id como texto
+ * byte a byte), para o canônico vir antes das cópias: se uma cópia cabe no
+ * limite da página, o canônico também cabe, e quando ele resolve o degrau a
+ * cópia já vê isso na mesma varredura.
+ */
+export const MEETING_QUEUE_ORDER: SQL = sql`e.starts_at ASC, date_trunc('milliseconds', e.created_at) ASC, (e.id::text) COLLATE "C" ASC`
+
+/**
  * O lembrete não pôde sair por um motivo REVERSÍVEL: guarda o porquê no
  * compromisso e NÃO queima o degrau — ele volta a ser tentado sozinho quando a
  * condição mudar (a IA for religada, o template for escolhido, o canal voltar).
@@ -1805,9 +1863,12 @@ function buildMeetingReminderPrompt(
  */
 export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
   let sent = 0
-  // chaveDoDegrau → compromisso que ENVIOU nesta varredura. Fica fora do laço
-  // de agentes: dois agentes da mesma conta varrem os mesmos compromissos.
-  const enviadosNestaVarredura = new Map<string, string>()
+  // chaveDoDegrau → compromisso que RESOLVEU o degrau nesta varredura (enviou,
+  // ou o degrau não tinha mais volta). O carimbo do grupo já grava isso no
+  // banco; o mapa é a defesa para a cópia que leu a linha ANTES do carimbo.
+  // Fica fora do laço de agentes: dois agentes da mesma conta varrem os mesmos
+  // compromissos.
+  const resolvidosNestaVarredura = new Map<string, string>()
   const agentsRes = await db.execute(AGENT_SWEEP_SELECT)
   const agents = agentsRes.rows as unknown as AgentRow[]
 
@@ -1838,19 +1899,28 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
 
     const rows = await db.execute(sql`
       SELECT e.id AS event_id, e.starts_at, e.reminders_sent, e.contact_id, e.description,
-             e.created_at,
+             e.created_at, e.reminder_block,
              COALESCE(dl.conversation_id,
                (SELECT cv.id FROM conversations cv
                   WHERE cv.contact_id = e.contact_id AND cv.account_id = e.account_id
                   ORDER BY cv.last_message_at DESC NULLS LAST LIMIT 1)
              ) AS conversation_id,
              -- O mesmo atendimento lançado em outra agenda (mesmo contato, mesmo
-             -- instante, confirmado). Quem envia é decidido no código.
+             -- instante, confirmado). Quem envia é decidido no código. Leva o
+             -- motivo e a conversa de cada um, resolvida pelo mesmo COALESCE da
+             -- linha principal: cópia em conversa diferente assume quando o
+             -- canônico trava; na mesma conversa, espelha o motivo dele.
              (SELECT json_agg(json_build_object(
                        'id', d.id, 'account_id', d.account_id, 'contact_id', d.contact_id,
                        'starts_at', d.starts_at, 'status', d.status,
-                       'created_at', d.created_at, 'reminders_sent', d.reminders_sent))
+                       'created_at', d.created_at, 'reminders_sent', d.reminders_sent,
+                       'reminder_block', d.reminder_block,
+                       'conversation_id', COALESCE(dl2.conversation_id,
+                         (SELECT cv2.id FROM conversations cv2
+                            WHERE cv2.contact_id = d.contact_id AND cv2.account_id = d.account_id
+                            ORDER BY cv2.last_message_at DESC NULLS LAST LIMIT 1))))
                 FROM calendar_events d
+                LEFT JOIN deals dl2 ON dl2.id = d.deal_id
                WHERE d.account_id = e.account_id
                  AND d.contact_id = e.contact_id
                  AND d.starts_at = e.starts_at
@@ -1881,7 +1951,8 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
         AND (e.reminder_block IS NULL
              OR e.reminder_block_at IS NULL
              OR e.reminder_block_at < now() - interval '15 minutes')
-      ORDER BY e.starts_at ASC
+      -- Desempate igual ao de escolherCanonico: o canônico antes das cópias.
+      ORDER BY ${MEETING_QUEUE_ORDER}
       LIMIT ${MEETING_CAP}
     `)
     const cands = rows.rows as unknown as MeetingCandRow[]
@@ -1926,13 +1997,14 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
       if (e.reminders_sent > dueIdx) continue // já mandou este (e anteriores)
 
       // 01/10: a recepção lança a mesma consulta na agenda da dona E na do
-      // profissional. Só um compromisso do grupo envia; a cópia espera por ele
-      // e carimba quando ele já resolveu o degrau (meeting-reminder-dedup.ts).
+      // profissional. Só um compromisso do grupo envia; a cópia espera por ele,
+      // espelha o motivo quando ele trava e carimba quando ele resolve
+      // (meeting-reminder-dedup.ts).
       const chave = chaveDoDegrau(agent.account_id, e.contact_id, e.starts_at, dueIdx)
-      const enviadoPor = enviadosNestaVarredura.get(chave)
-      if (enviadoPor && enviadoPor !== e.event_id) {
+      const resolvidoPor = resolvidosNestaVarredura.get(chave)
+      if (resolvidoPor && resolvidoPor !== e.event_id) {
         console.log(
-          `[meeting-reminder] duplicado: ${e.event_id} carimba o degrau ${dueIdx + 1} — saiu por ${enviadoPor} nesta varredura`,
+          `[meeting-reminder] duplicado: ${e.event_id} carimba o degrau ${dueIdx + 1} — resolvido por ${resolvidoPor} nesta varredura`,
         )
         await stampReminder(e.event_id, dueIdx + 1)
         continue
@@ -1946,6 +2018,8 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
           status: 'confirmed',
           createdAt: e.created_at,
           remindersSent: e.reminders_sent,
+          reminderBlock: isMeetingReminderBlock(e.reminder_block) ? e.reminder_block : null,
+          conversationId: e.conversation_id,
         },
         outros: (e.duplicados ?? []).map((d) => ({
           id: d.id,
@@ -1955,21 +2029,55 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
           status: d.status,
           createdAt: d.created_at,
           remindersSent: Number(d.reminders_sent),
+          reminderBlock: isMeetingReminderBlock(d.reminder_block) ? d.reminder_block : null,
+          conversationId: d.conversation_id,
         })),
         degrau: dueIdx,
       })
       if (dup.decisao === 'espera') {
+        // Passageiro: o responsável vem antes na fila (MEETING_QUEUE_ORDER), e
+        // na varredura seguinte ou ele resolveu, ou ganhou um motivo.
         console.log(
-          `[meeting-reminder] duplicado: ${e.event_id} espera ${dup.canonicoId} resolver o degrau ${dueIdx + 1}`,
+          `[meeting-reminder] duplicado: ${e.event_id} espera ${dup.responsavelId} resolver o degrau ${dueIdx + 1}`,
         )
+        continue
+      }
+      if (dup.decisao === 'espelha') {
+        // Quem responde pelo degrau travou NESTA conversa. O mesmo motivo vai
+        // para a cópia — é ela que a recepção vê na agenda do profissional — e
+        // o reminder_block_at a tira da fila por 15 min, como a ele. Se ele já
+        // encerrou o degrau, encerra junto, SEM limpar o motivo.
+        if (dup.motivo) {
+          if (e.reminder_block !== dup.motivo || dup.encerra) {
+            console.log(
+              `[meeting-reminder] duplicado: ${e.event_id} espelha "${dup.motivo}" de ${dup.responsavelId} no degrau ${dueIdx + 1}${dup.encerra ? ' (encerrado)' : ''}`,
+            )
+          }
+          await segurarLembrete(e.event_id, dup.motivo, dup.encerra ? { n: dueIdx + 1 } : undefined)
+        }
         continue
       }
       if (dup.decisao === 'carimba') {
         console.log(
-          `[meeting-reminder] duplicado: ${e.event_id} carimba o degrau ${dueIdx + 1} — já resolvido no grupo de ${dup.canonicoId} (${dup.duplicados.join(', ')})`,
+          `[meeting-reminder] duplicado: ${e.event_id} carimba o degrau ${dueIdx + 1} — já resolvido por ${dup.responsavelId} (grupo de ${dup.canonicoId})`,
         )
         await stampReminder(e.event_id, dueIdx + 1)
         continue
+      }
+      if (dup.canonicoId && dup.canonicoId !== e.event_id) {
+        console.log(
+          `[meeting-reminder] duplicado: ${e.event_id} assume o degrau ${dueIdx + 1} — ${dup.canonicoId} travou em outra conversa`,
+        )
+      }
+
+      /**
+       * O degrau foi resolvido e não tem volta (saiu, ou não cabia mais):
+       * carimba o atendimento inteiro — este compromisso e as cópias dele —
+       * e avisa o resto desta varredura.
+       */
+      const resolver = async (): Promise<void> => {
+        resolvidosNestaVarredura.set(chave, e.event_id)
+        await carimbarAtendimento(agent.account_id, e.event_id, dueIdx + 1)
       }
 
       /**
@@ -2020,7 +2128,7 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
       // pode ficar segurado, virou um caminho possível e precisa ser fechado na
       // mão. É definitivo: carimba, e um degrau "depois", se houver, assume.
       if (r.when === 'before' && Date.now() >= startMs) {
-        await stampReminder(e.event_id, dueIdx + 1)
+        await resolver()
         continue
       }
 
@@ -2031,7 +2139,7 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
       if (r.onlyIfStage) {
         const stage = await currentStageName(agent.account_id, e.conversation_id)
         if (!stage || normStage(stage) !== normStage(r.onlyIfStage)) {
-          await stampReminder(e.event_id, dueIdx + 1)
+          await resolver()
           continue
         }
       }
@@ -2066,10 +2174,9 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
             templateParams: params,
           })
           sent += 1
-          enviadosNestaVarredura.set(chave, e.event_id)
           await logFollowUpTask(cfg, agent.account_id, e.conversation_id, `${reminderLabel(r)} — ${r.templateName}`)
           console.log('[meeting-reminder] template:', r.templateName)
-          await stampReminder(e.event_id, dueIdx + 1)
+          await resolver()
         } catch (err) {
           // A Meta recusou — quase sempre template de OUTRO número ou número de
           // variáveis que não bate. Corrigido o template, este lembrete ainda
@@ -2138,7 +2245,7 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
       }
 
       if (!text || text.includes(SILENT)) {
-        await stampReminder(e.event_id, dueIdx + 1)
+        await resolver()
         continue
       }
       try {
@@ -2150,9 +2257,8 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
           text,
         })
         sent += 1
-        enviadosNestaVarredura.set(chave, e.event_id)
         await logFollowUpTask(cfg, agent.account_id, e.conversation_id, reminderLabel(r))
-        await stampReminder(e.event_id, dueIdx + 1)
+        await resolver()
       } catch (err) {
         // ⚠️ 30/09, em produção: "a chamada lançou" NÃO é "a mensagem não
         // chegou". O WhatsApp aceitou o lembrete do Rafael e só o INSERT em
@@ -2162,8 +2268,7 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
         // novo para quem já leu — pior do que não registrar.
         if (jaFoiEntregue(err)) {
           console.error('[meeting-reminder] entregue mas não registrado:', err)
-          enviadosNestaVarredura.set(chave, e.event_id)
-          await stampReminder(e.event_id, dueIdx + 1)
+          await resolver()
         } else {
           // Aí sim o canal recusou (número fora do ar, sessão caída…): a
           // mensagem não chegou a ninguém e vale tentar quando o canal voltar.

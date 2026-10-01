@@ -15,6 +15,11 @@ import {
 const CONTA = 'conta-0001'
 const PACIENTE = 'contato-ana-teste'
 const SABADO_13H = '2026-10-03T16:00:00.000Z'
+// A conversa por onde o lembrete sai. Os dois do par costumam cair na mesma.
+const CONVERSA = 'conversa-whatsapp'
+const OUTRA_CONVERSA = 'conversa-oficial'
+
+const SEM_COPIA = { motivo: null, encerra: false }
 
 function compromisso(p: Partial<CompromissoDoLembrete> & { id: string }): CompromissoDoLembrete {
   return {
@@ -24,6 +29,8 @@ function compromisso(p: Partial<CompromissoDoLembrete> & { id: string }): Compro
     status: 'confirmed',
     createdAt: '2026-09-20T12:00:00.000Z',
     remindersSent: 0,
+    reminderBlock: null,
+    conversationId: CONVERSA,
     ...p,
   }
 }
@@ -65,7 +72,7 @@ describe('o que é duplicado', () => {
     const bloqueio2 = compromisso({ id: 'evt-d', contactId: null })
     expect(duplicadosDe(bloqueio1, [bloqueio2])).toEqual([])
     expect(decidirLembreteDuplicado({ evento: bloqueio1, outros: [bloqueio2], degrau: 0 })).toEqual(
-      { decisao: 'envia', canonicoId: null, duplicados: [] },
+      { decisao: 'envia', canonicoId: null, responsavelId: null, duplicados: [], ...SEM_COPIA },
     )
   })
 
@@ -101,6 +108,23 @@ describe('quem do grupo envia', () => {
     expect(escolherCanonico([y, x])?.id).toBe('evt-1')
   })
 
+  it('criados no mesmo MILISSEGUNDO: o menor id, como a fila do worker', () => {
+    // O Postgres guarda microssegundos; o JS lê até o milissegundo. A fila
+    // ordena por date_trunc('milliseconds', created_at) e depois pelo id como
+    // texto (COLLATE "C") — então aqui o microssegundo não pode desempatar.
+    const x = compromisso({ id: 'evt-1', createdAt: '2026-09-20 12:00:00.123999+00' })
+    const y = compromisso({ id: 'evt-2', createdAt: '2026-09-20 12:00:00.123001+00' })
+    expect(escolherCanonico([x, y])?.id).toBe('evt-1')
+    expect(escolherCanonico([y, x])?.id).toBe('evt-1')
+  })
+
+  it('id comparado byte a byte, como COLLATE "C" (não pela língua)', () => {
+    const maiuscula = compromisso({ id: 'Evt-9' })
+    const minuscula = compromisso({ id: 'evt-1' })
+    // 'E' (0x45) vem antes de 'e' (0x65) em "C"; numa collation de idioma não.
+    expect(escolherCanonico([minuscula, maiuscula])?.id).toBe('Evt-9')
+  })
+
   it('grupo vazio não tem canônico', () => {
     expect(escolherCanonico([])).toBeNull()
   })
@@ -111,12 +135,16 @@ describe('par: a mesma consulta em duas agendas', () => {
     expect(decidirLembreteDuplicado({ evento: DONA, outros: [PROFISSIONAL], degrau: 0 })).toEqual({
       decisao: 'envia',
       canonicoId: 'evt-b',
+      responsavelId: 'evt-b',
       duplicados: ['evt-a'],
+      ...SEM_COPIA,
     })
     expect(decidirLembreteDuplicado({ evento: PROFISSIONAL, outros: [DONA], degrau: 0 })).toEqual({
       decisao: 'espera',
       canonicoId: 'evt-b',
+      responsavelId: 'evt-b',
       duplicados: ['evt-b'],
+      ...SEM_COPIA,
     })
   })
 
@@ -140,9 +168,7 @@ describe('par: a mesma consulta em duas agendas', () => {
     ).toBe('espera')
   })
 
-  it('a cópia nunca envia, mesmo com o canônico travado', () => {
-    // Canônico segurado (IA pausada, canal fora) continua com reminders_sent
-    // baixo: a cópia não "ajuda" mandando no lugar dele.
+  it('enquanto o canônico não tentou, a cópia não envia em nenhum degrau', () => {
     for (const degrau of [0, 1, 2]) {
       expect(
         decidirLembreteDuplicado({ evento: PROFISSIONAL, outros: [DONA], degrau }).decisao,
@@ -154,7 +180,7 @@ describe('par: a mesma consulta em duas agendas', () => {
     const donaCancelada = { ...DONA, status: 'cancelled' }
     expect(
       decidirLembreteDuplicado({ evento: PROFISSIONAL, outros: [donaCancelada], degrau: 0 }),
-    ).toEqual({ decisao: 'envia', canonicoId: null, duplicados: [] })
+    ).toEqual({ decisao: 'envia', canonicoId: null, responsavelId: null, duplicados: [], ...SEM_COPIA })
   })
 
   it('canônico não repete o degrau que uma cópia já resolveu', () => {
@@ -167,6 +193,168 @@ describe('par: a mesma consulta em duas agendas', () => {
     expect(
       decidirLembreteDuplicado({ evento: DONA, outros: [profissionalJaMandou], degrau: 1 }).decisao,
     ).toBe('envia')
+  })
+})
+
+describe('canônico travado na MESMA conversa: a cópia espelha o motivo', () => {
+  // A recepção filtra a Agenda por UMA agenda de cada vez — a do profissional,
+  // que costuma ser a cópia. O aviso tem que aparecer lá também.
+  it('segurado: a cópia ganha o mesmo motivo, sem encerrar o degrau', () => {
+    const donaSemTemplate = { ...DONA, reminderBlock: 'sem_template' as const }
+    expect(
+      decidirLembreteDuplicado({ evento: PROFISSIONAL, outros: [donaSemTemplate], degrau: 0 }),
+    ).toEqual({
+      decisao: 'espelha',
+      canonicoId: 'evt-b',
+      responsavelId: 'evt-b',
+      duplicados: ['evt-b'],
+      motivo: 'sem_template',
+      encerra: false,
+    })
+  })
+
+  it('encerrado travado: a cópia encerra junto e MANTÉM o motivo — não carimba limpo', () => {
+    // Último degrau, mais de 6h segurado: o canônico avança o contador SEM ter
+    // mandado nada. Carimbar a cópia limpo diria que o paciente foi avisado.
+    const donaEncerrada = { ...DONA, remindersSent: 2, reminderBlock: 'ia_pausada' as const }
+    const r = decidirLembreteDuplicado({ evento: PROFISSIONAL, outros: [donaEncerrada], degrau: 1 })
+    expect(r.decisao).toBe('espelha')
+    expect(r.motivo).toBe('ia_pausada')
+    expect(r.encerra).toBe(true)
+  })
+
+  it('motivo velho de um degrau anterior também espelha — é o último estado conhecido', () => {
+    const donaTravadaNoPrimeiro = { ...DONA, remindersSent: 0, reminderBlock: 'envio_falhou' as const }
+    expect(
+      decidirLembreteDuplicado({ evento: PROFISSIONAL, outros: [donaTravadaNoPrimeiro], degrau: 1 }),
+    ).toMatchObject({ decisao: 'espelha', motivo: 'envio_falhou', encerra: false })
+  })
+
+  it('cópia sem conversa nenhuma espelha — não teria por onde assumir', () => {
+    const profissionalSemConversa = { ...PROFISSIONAL, conversationId: null }
+    const donaSemConversa = { ...DONA, conversationId: null, reminderBlock: 'sem_conversa' as const }
+    expect(
+      decidirLembreteDuplicado({
+        evento: profissionalSemConversa,
+        outros: [donaSemConversa],
+        degrau: 0,
+      }),
+    ).toMatchObject({ decisao: 'espelha', motivo: 'sem_conversa' })
+  })
+
+  it('o canônico travado continua sendo quem tenta — ele não espelha ninguém', () => {
+    const donaTravada = { ...DONA, reminderBlock: 'ia_pausada' as const }
+    expect(
+      decidirLembreteDuplicado({ evento: donaTravada, outros: [PROFISSIONAL], degrau: 0 }).decisao,
+    ).toBe('envia')
+  })
+
+  it('o canônico NÃO carimba por causa de uma cópia que só encerrou travada', () => {
+    // A cópia avançou o contador guardando o motivo: ninguém foi avisado, e o
+    // canônico segue tentando (e acaba travando com o motivo dele).
+    const profissionalEncerrada = {
+      ...PROFISSIONAL,
+      remindersSent: 1,
+      reminderBlock: 'sem_template' as const,
+    }
+    expect(
+      decidirLembreteDuplicado({ evento: DONA, outros: [profissionalEncerrada], degrau: 0 }).decisao,
+    ).toBe('envia')
+  })
+})
+
+describe('canônico travado em OUTRA conversa: a cópia assume', () => {
+  // O evento da IA usa a conversa do NEGÓCIO; o lançado pela recepção, a mais
+  // recente do contato. Se a do canônico travou (IA pausada lá, janela oficial
+  // fechada sem template), por outra conversa o aviso ainda sai.
+  const DONA_TRAVADA = {
+    ...DONA,
+    conversationId: OUTRA_CONVERSA,
+    reminderBlock: 'ia_pausada' as const,
+  }
+
+  it('a cópia envia no lugar dele', () => {
+    expect(
+      decidirLembreteDuplicado({ evento: PROFISSIONAL, outros: [DONA_TRAVADA], degrau: 0 }),
+    ).toEqual({
+      decisao: 'envia',
+      canonicoId: 'evt-b',
+      responsavelId: 'evt-a',
+      duplicados: ['evt-b'],
+      ...SEM_COPIA,
+    })
+  })
+
+  it('assume também depois que o canônico encerrou o degrau travado', () => {
+    // Antes: a cópia carimbava em cima do encerramento e o paciente ficava
+    // sem lembrete nenhum, embora a conversa dela funcionasse.
+    const donaEncerrada = { ...DONA_TRAVADA, remindersSent: 2 }
+    expect(
+      decidirLembreteDuplicado({ evento: PROFISSIONAL, outros: [donaEncerrada], degrau: 1 }).decisao,
+    ).toBe('envia')
+  })
+
+  it('canônico SEM motivo em outra conversa: a cópia ainda espera ele tentar', () => {
+    const donaOutraConversa = { ...DONA, conversationId: OUTRA_CONVERSA }
+    expect(
+      decidirLembreteDuplicado({ evento: PROFISSIONAL, outros: [donaOutraConversa], degrau: 0 })
+        .decisao,
+    ).toBe('espera')
+  })
+
+  it('depois que a cópia avisou, o canônico carimba em vez de repetir', () => {
+    const profissionalAvisou = { ...PROFISSIONAL, remindersSent: 1 }
+    expect(
+      decidirLembreteDuplicado({ evento: DONA_TRAVADA, outros: [profissionalAvisou], degrau: 0 }),
+    ).toMatchObject({ decisao: 'carimba', responsavelId: 'evt-a' })
+  })
+})
+
+describe('trio com conversas diferentes: só um assume', () => {
+  const A = compromisso({ id: 'evt-z', createdAt: '2026-09-20T11:00:00.000Z' })
+  const B = compromisso({ id: 'evt-y', createdAt: '2026-09-20T12:00:00.000Z' })
+  const C = compromisso({ id: 'evt-x', createdAt: '2026-09-20T13:00:00.000Z' })
+  const decide = (evento: CompromissoDoLembrete, outros: CompromissoDoLembrete[]) =>
+    decidirLembreteDuplicado({ evento, outros, degrau: 0 })
+
+  it('as duas cópias na outra conversa: assume a primeira, a segunda espera por ELA', () => {
+    const aTravado = { ...A, conversationId: OUTRA_CONVERSA, reminderBlock: 'sem_template' as const }
+    expect(decide(B, [aTravado, C])).toMatchObject({ decisao: 'envia', responsavelId: 'evt-y' })
+    expect(decide(C, [aTravado, B])).toMatchObject({ decisao: 'espera', responsavelId: 'evt-y' })
+  })
+
+  it('quem assumiu também travou na conversa dela: a outra espelha o motivo DELA', () => {
+    const aTravado = { ...A, conversationId: OUTRA_CONVERSA, reminderBlock: 'sem_template' as const }
+    const bTravado = { ...B, reminderBlock: 'envio_falhou' as const }
+    expect(decide(C, [aTravado, bTravado])).toMatchObject({
+      decisao: 'espelha',
+      responsavelId: 'evt-y',
+      motivo: 'envio_falhou',
+    })
+  })
+
+  it('uma cópia na conversa do canônico espelha; a da outra conversa assume', () => {
+    const aTravado = { ...A, conversationId: OUTRA_CONVERSA, reminderBlock: 'ia_pausada' as const }
+    const bNaMesma = { ...B, conversationId: OUTRA_CONVERSA }
+    expect(decide(bNaMesma, [aTravado, C])).toMatchObject({
+      decisao: 'espelha',
+      responsavelId: 'evt-z',
+      motivo: 'ia_pausada',
+    })
+    expect(decide(C, [aTravado, bNaMesma])).toMatchObject({
+      decisao: 'envia',
+      responsavelId: 'evt-x',
+    })
+  })
+
+  it('três conversas: a vez passa adiante até a que ainda não travou', () => {
+    const aTravado = { ...A, conversationId: 'conversa-1', reminderBlock: 'ia_pausada' as const }
+    const bTravado = { ...B, conversationId: 'conversa-2', reminderBlock: 'sem_template' as const }
+    const c = { ...C, conversationId: 'conversa-3' }
+    expect(decide(c, [aTravado, bTravado])).toMatchObject({
+      decisao: 'envia',
+      responsavelId: 'evt-x',
+    })
   })
 })
 
@@ -190,11 +378,23 @@ describe('trio: a mesma consulta em três agendas', () => {
   })
 
   it('a cópia espera pelo canônico, não por outra cópia', () => {
-    const segundoCarimbado = { ...SEGUNDO, remindersSent: 1 }
+    // O segundo espelhou um motivo antigo: isso não faz dele o responsável.
+    const segundoEspelhado = { ...SEGUNDO, reminderBlock: 'ia_pausada' as const }
     expect(
-      decidirLembreteDuplicado({ evento: TERCEIRO, outros: [PRIMEIRO, segundoCarimbado], degrau: 0 })
-        .decisao,
-    ).toBe('espera')
+      decidirLembreteDuplicado({ evento: TERCEIRO, outros: [PRIMEIRO, segundoEspelhado], degrau: 0 }),
+    ).toMatchObject({ decisao: 'espera', responsavelId: 'evt-z' })
+  })
+
+  it('qualquer um do grupo que resolveu LIMPO vale para todos', () => {
+    // Quem resolve carimba o grupo inteiro na hora; isto é a rede de segurança
+    // se o carimbo do grupo falhar: o paciente já foi avisado por alguém.
+    const segundoResolveu = { ...SEGUNDO, remindersSent: 1 }
+    expect(
+      decidirLembreteDuplicado({ evento: TERCEIRO, outros: [PRIMEIRO, segundoResolveu], degrau: 0 }),
+    ).toMatchObject({ decisao: 'carimba', responsavelId: 'evt-y' })
+    expect(
+      decidirLembreteDuplicado({ evento: PRIMEIRO, outros: [segundoResolveu, TERCEIRO], degrau: 0 }),
+    ).toMatchObject({ decisao: 'carimba', responsavelId: 'evt-y' })
   })
 
   it('depois do canônico, as duas cópias carimbam', () => {

@@ -3,6 +3,7 @@ import {
   avisoNaAgenda,
   decideImpedimento,
   isMeetingReminderBlock,
+  recomecoDoLembrete,
   RECUPERACAO_MS,
   rotuloDoBloqueio,
   type MeetingReminderBlock,
@@ -108,5 +109,34 @@ describe('o texto que a pessoa lê', () => {
       const tudo = `${r.curto} ${r.explicacao} ${r.comoResolver}`
       expect(tudo).not.toMatch(/conversation_id|contact_id|reminders_sent|stamp|sweep/)
     }
+  })
+})
+
+describe('remarcou: o lembrete recomeça', () => {
+  // 01/10: consulta arrastada no Google depois do lembrete de 24h ficava sem
+  // lembrete na data nova — o sync mantinha o contador da data antiga.
+  const ZERA = { remindersSent: 0, reminderBlock: null, reminderBlockAt: null }
+
+  it('horário novo zera o contador e o motivo', () => {
+    expect(recomecoDoLembrete('2026-10-02T13:00:00.000Z', '2026-10-03T16:00:00.000Z')).toEqual(ZERA)
+  })
+
+  it('o mesmo instante em formatos diferentes NÃO é remarcação', () => {
+    // O banco devolve o texto do Postgres; o Google, ISO.
+    expect(recomecoDoLembrete('2026-10-03 13:00:00-03', '2026-10-03T16:00:00.000Z')).toEqual({})
+  })
+
+  it('milissegundos que o Google não guarda NÃO são remarcação', () => {
+    // Zerar aqui repetiria para o paciente um degrau que já saiu.
+    expect(recomecoDoLembrete('2026-10-03 16:00:00.123456+00', '2026-10-03T16:00:00Z')).toEqual({})
+  })
+
+  it('um segundo de diferença já é outro horário', () => {
+    expect(recomecoDoLembrete('2026-10-03T16:00:00Z', '2026-10-03T16:00:01Z')).toEqual(ZERA)
+  })
+
+  it('horário ilegível não zera — na dúvida, não repete degrau', () => {
+    expect(recomecoDoLembrete('não é data', '2026-10-03T16:00:00Z')).toEqual({})
+    expect(recomecoDoLembrete('2026-10-03T16:00:00Z', '')).toEqual({})
   })
 })

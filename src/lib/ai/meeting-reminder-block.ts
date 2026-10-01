@@ -181,6 +181,33 @@ export function decideImpedimento(args: {
 }
 
 /**
+ * O compromisso mudou de horário? Então o lembrete recomeça.
+ *
+ * É a ÚNICA vez em que `reminders_sent` volta: os degraus que ele conta, e o
+ * motivo guardado em `reminder_block`, falavam da data ANTIGA. Sem zerar, a
+ * data nova nasce com os degraus queimados e o paciente não recebe nada da
+ * remarcação — justamente quando mais precisa ser avisado. A Agenda e a IA já
+ * zeravam ao remarcar; o sync do Google não (01/10): a consulta ARRASTADA no
+ * Google depois do lembrete de 24h ficava sem lembrete na data nova. E agora
+ * pesa em dobro: o contador de um compromisso também cala as cópias dele
+ * (meeting-reminder-dedup.ts).
+ *
+ * Compara o instante até o SEGUNDO, que é o que o Google guarda: um horário
+ * do CRM com milissegundos volta do Google sem eles, e isso não é remarcação —
+ * zerar ali repetiria para o paciente um degrau que já saiu. Horário ilegível
+ * também não zera, pelo mesmo motivo.
+ */
+export function recomecoDoLembrete(
+  antes: string,
+  depois: string,
+): { remindersSent: 0; reminderBlock: null; reminderBlockAt: null } | Record<string, never> {
+  const a = Math.floor(new Date(antes).getTime() / 1000)
+  const b = Math.floor(new Date(depois).getTime() / 1000)
+  if (Number.isNaN(a) || Number.isNaN(b) || a === b) return {}
+  return { remindersSent: 0, reminderBlock: null, reminderBlockAt: null }
+}
+
+/**
  * Aviso de uma linha para o compromisso na Agenda.
  *
  * Nunca diz só "erro": diz que o PACIENTE não será avisado, que é a
