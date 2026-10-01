@@ -140,10 +140,10 @@ export interface SendMessageParams {
    */
   emailTo?: string | null;
   /**
-   * Não avisar a caixa de entrada em tempo real. Só o composer do inbox usa:
-   * a aba de quem digitou já pintou a bolha otimista (`temp-…`) e só troca pelo
-   * id real quando o envio responde — um refetch disparado pelo aviso, se
-   * chegasse antes, deixava as duas bolhas na tela com o mesmo id.
+   * Não avisar a caixa de entrada daqui: o CHAMADOR avisa. Só a rota do
+   * composer (`/api/whatsapp/send`) usa — ela publica no fim, depois do
+   * claim/setor, levando o `originTabId` da aba que pintou a bolha otimista
+   * (`temp-…`). Essa aba não recarrega o thread; os colegas sim (01/10).
    */
   skipRealtimeNudge?: boolean;
 }

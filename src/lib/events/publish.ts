@@ -27,7 +27,16 @@ export type RealtimeEvent =
   // `fromMe` marks an operator's own outgoing echo (they replied from their
   // phone) — consumers that refetch (unread) still act, but the notification
   // sound/pop-up skips it (you don't get alerted about your own reply).
-  | { type: "message.received"; conversationId: string; fromMe?: boolean }
+  //
+  // `originTabId` (01/10): the inbox tab whose composer sent it. That tab
+  // already shows the optimistic bubble, so it skips the thread refetch;
+  // every other tab (teammates included) refetches as usual.
+  | {
+      type: "message.received";
+      conversationId: string;
+      fromMe?: boolean;
+      originTabId?: string;
+    }
   | { type: "conversation.created"; conversationId: string }
   | {
       type: "internal_message";

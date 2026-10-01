@@ -2,6 +2,8 @@
 
 import { useCallback } from "react";
 
+import { parseOriginTabId } from "@/lib/realtime/origin-tab";
+
 import { useServerEvents, type ServerEvent } from "./use-server-events";
 
 /**
@@ -20,7 +22,12 @@ export interface UseRealtimeOptions {
   /** Kept for call-site compatibility; not used by the SSE transport. */
   channelName?: string;
   /** Fired for `message.received` events on the account channel. */
-  onMessageEvent?: (event: { type: "message.received"; conversationId?: string }) => void;
+  onMessageEvent?: (event: {
+    type: "message.received";
+    conversationId?: string;
+    /** Aba que enviou pelo composer — ela não recarrega o próprio thread. */
+    originTabId?: string;
+  }) => void;
   /** Fired for `conversation.created` events on the account channel. */
   onConversationEvent?: (event: {
     type: "conversation.created";
@@ -52,6 +59,7 @@ export function useRealtime(options: UseRealtimeOptions) {
           type: "message.received",
           conversationId:
             typeof e.conversationId === "string" ? e.conversationId : undefined,
+          originTabId: parseOriginTabId(e.originTabId),
         });
       } else if (e.type === "conversation.created") {
         onConversationEvent?.({

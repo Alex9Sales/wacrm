@@ -9,6 +9,8 @@ import {
 } from "./actions";
 import { conversationAccessInfo } from "./access-info-actions";
 import { conversationUnavailableMessage } from "@/lib/inbox/access-notice";
+import { planInboxMessageEvent } from "@/lib/inbox/message-event";
+import { thisTabId } from "@/lib/realtime/origin-tab";
 import type {
   Conversation,
   Message,
@@ -276,10 +278,21 @@ export default function InboxPage() {
   // MessageThread refetches its messages. `hydrateConversation` dedupes
   // and self-heals convs we've never seen, so a first-message ping for an
   // unknown conversation surfaces it correctly.
+  //
+  // O eco do envio feito pelo composer DESTA aba (originTabId) não recarrega o
+  // thread — a bolha otimista já está lá; ver planInboxMessageEvent.
   const handleMessageEvent = useCallback(
-    (event: { type: "message.received"; conversationId?: string }) => {
+    (event: {
+      type: "message.received";
+      conversationId?: string;
+      originTabId?: string;
+    }) => {
+      const plan = planInboxMessageEvent(event, {
+        tabId: thisTabId(),
+        activeConversationId: activeConversation?.id,
+      });
       const convId = event.conversationId;
-      if (!convId) {
+      if (plan.fullResync || !convId) {
         // No id to target — fall back to a full resync.
         setResyncToken((n) => n + 1);
         return;
@@ -291,17 +304,17 @@ export default function InboxPage() {
       // authoritative reset the "1" badge resurrects on the active thread the
       // moment you're already replying to it. (Masking it only in `hydrate`
       // wasn't enough: the full-list resync bypasses that mask.)
-      if (activeConversation?.id === convId) {
+      if (plan.markRead) {
         void markConversationRead(convId).catch(() => {});
       }
 
       // Refresh the conversation row (preview text, unread_count, contact).
-      hydrateConversation(convId);
+      if (plan.hydrate) hydrateConversation(convId);
 
       // If the message is for the thread the user is currently viewing,
       // pull its messages so the new bubble appears without a manual
       // refresh. The token also re-fetches the list as a safety net.
-      if (activeConversation?.id === convId) {
+      if (plan.refetchThread) {
         setResyncToken((n) => n + 1);
       }
     },

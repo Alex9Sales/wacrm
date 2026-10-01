@@ -27,6 +27,7 @@ import {
   type MyWhatsAppNumber,
 } from "@/app/(dashboard)/inbox/actions";
 import { isStaleActionError, reloadForStaleAction } from "@/lib/stale-action";
+import { thisTabId } from "@/lib/realtime/origin-tab";
 import { CAPABILITIES, type ProviderId } from "@/lib/channels/provider";
 import { OUTSIDE_WINDOW_MESSAGE } from "@/lib/channels/provider-error";
 import { promptCsatOnClose } from "./csat-prompt";
@@ -898,6 +899,9 @@ export function MessageThread({
             message_type: "text",
             content_text: text,
             reply_to_message_id: replyToId,
+            // O aviso em tempo real volta com este id: esta aba não recarrega
+            // o thread (a bolha otimista já está aqui); os colegas sim.
+            origin_tab_id: thisTabId(),
           }),
         });
 
@@ -978,6 +982,7 @@ export function MessageThread({
             filename: payload.filename,
             mimetype: payload.mimetype,
             reply_to_message_id: payload.replyToId,
+            origin_tab_id: thisTabId(),
           }),
         });
 
@@ -1087,6 +1092,7 @@ export function MessageThread({
             },
             template_params: values.body,
             content_text: renderedBody,
+            origin_tab_id: thisTabId(),
           }),
         });
 

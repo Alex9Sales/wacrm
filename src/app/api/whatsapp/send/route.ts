@@ -15,6 +15,7 @@ import {
 import { hasMinRole } from '@/lib/auth/roles'
 import { getUserSectorIds, isAdminUser } from '@/lib/sectors/access'
 import { looksLikeBareCode } from '@/lib/whatsapp/bare-code'
+import { parseOriginTabId } from '@/lib/realtime/origin-tab'
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -75,6 +76,8 @@ export async function POST(request: Request) {
       template_params,
       template_message_params,
       reply_to_message_id,
+      // Aba do inbox que enviou (bolha otimista) — vai no aviso em tempo real.
+      origin_tab_id,
     } = body
 
     if ((!conversationIdInput && !contact_id) || !message_type) {
@@ -335,7 +338,7 @@ export async function POST(request: Request) {
         templateParams: template_params,
         templateMessageParams: template_message_params,
         replyToMessageId: reply_to_message_id,
-        // A aba de quem enviou já mostra a bolha (otimista) — ver o parâmetro.
+        // O aviso sai daqui, no fim — depois do claim/setor e com a aba de origem.
         skipRealtimeNudge: true,
       })
 
@@ -441,6 +444,18 @@ export async function POST(request: Request) {
           }
         }
       }
+
+      // 01/10: a resposta de um atendente só aparecia na tela dos colegas com
+      // F5 — esta rota não avisava ninguém, para não duplicar a bolha otimista
+      // na aba de quem digitou. Agora avisa com o id dessa aba: só ela pula o
+      // refetch do thread (ver planInboxMessageEvent). Sai DEPOIS do claim e do
+      // setor para quem recarregar a linha já ver o novo responsável.
+      await publishEvent(accountId, {
+        type: 'message.received',
+        conversationId,
+        fromMe: true,
+        originTabId: parseOriginTabId(origin_tab_id),
+      })
 
       return NextResponse.json({
         success: true,

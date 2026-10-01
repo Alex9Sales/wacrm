@@ -200,6 +200,12 @@ vi.mock('@/lib/whatsapp/meta-api', () => ({
   sendMediaMessage: vi.fn(),
 }))
 
+// Aviso em tempo real: a rota publica UMA vez, no fim, com a aba de origem.
+const { publishEvent } = vi.hoisted(() => ({
+  publishEvent: vi.fn(async () => {}),
+}))
+vi.mock('@/lib/events/publish', () => ({ publishEvent }))
+
 import { POST } from './route'
 
 function postContactTemplate(overrides: Record<string, unknown> = {}) {
@@ -305,5 +311,52 @@ describe('POST /api/whatsapp/send — contact_id template path', () => {
       }),
     )
     expect(res.status).toBe(400)
+  })
+})
+
+describe('POST /api/whatsapp/send — aviso em tempo real para os colegas', () => {
+  beforeEach(() => {
+    h.conversationInserts.length = 0
+    h.messageInserts.length = 0
+    h.existingConversation = null
+    h.createdConversation = null
+    h.contactRow = CONTACT
+  })
+
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('publica uma vez, com a aba que enviou', async () => {
+    const res = await postContactTemplate({ origin_tab_id: 'aba-1234-abcd' })
+    expect(res.status).toBe(200)
+
+    expect(publishEvent).toHaveBeenCalledTimes(1)
+    expect(publishEvent).toHaveBeenCalledWith('acct-1', {
+      type: 'message.received',
+      conversationId: 'conv-new',
+      fromMe: true,
+      originTabId: 'aba-1234-abcd',
+    })
+  })
+
+  it('sem aba (ou com id inválido) publica mesmo assim, sem originTabId', async () => {
+    await postContactTemplate()
+    await postContactTemplate({ origin_tab_id: '<script>alert(1)</script>' })
+    await postContactTemplate({ origin_tab_id: 'a'.repeat(65) })
+
+    expect(publishEvent).toHaveBeenCalledTimes(3)
+    for (const call of publishEvent.mock.calls as unknown[][]) {
+      const event = call[1] as Record<string, unknown>
+      expect(event.type).toBe('message.received')
+      expect(event.originTabId).toBeUndefined()
+    }
+  })
+
+  it('não publica quando o envio não acontece', async () => {
+    h.contactRow = null
+    const res = await postContactTemplate({ origin_tab_id: 'aba-1234-abcd' })
+    expect(res.status).toBe(404)
+    expect(publishEvent).not.toHaveBeenCalled()
   })
 })
