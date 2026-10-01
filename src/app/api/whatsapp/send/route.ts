@@ -450,12 +450,17 @@ export async function POST(request: Request) {
       // na aba de quem digitou. Agora avisa com o id dessa aba: só ela pula o
       // refetch do thread (ver planInboxMessageEvent). Sai DEPOIS do claim e do
       // setor para quem recarregar a linha já ver o novo responsável.
-      await publishEvent(accountId, {
-        type: 'message.received',
-        conversationId,
-        fromMe: true,
-        originTabId: parseOriginTabId(origin_tab_id),
-      })
+      // Em after(): com o Redis lento, o publish esperaria o connectTimeout com
+      // o atendente olhando o "enviando…".
+      const originTabId = parseOriginTabId(origin_tab_id)
+      after(() =>
+        publishEvent(accountId, {
+          type: 'message.received',
+          conversationId,
+          fromMe: true,
+          originTabId,
+        }),
+      )
 
       return NextResponse.json({
         success: true,

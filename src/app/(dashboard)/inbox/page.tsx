@@ -699,9 +699,17 @@ export default function InboxPage() {
 
   const handleUpdateMessage = useCallback(
     (id: string, updates: Partial<Message>) => {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === id ? { ...m, ...updates } : m))
-      );
+      setMessages((prev) => {
+        // 01/10: a bolha otimista (temp-…) vira o id real quando o POST
+        // responde. Se um aviso de OUTRA origem (cliente, IA, colega) já
+        // recarregou o thread nesse meio tempo, a mensagem real já está na
+        // lista — renomear a temp deixaria duas bolhas com o mesmo id.
+        const novoId = updates.id;
+        if (novoId && novoId !== id && prev.some((m) => m.id === novoId)) {
+          return prev.filter((m) => m.id !== id);
+        }
+        return prev.map((m) => (m.id === id ? { ...m, ...updates } : m));
+      });
     },
     []
   );

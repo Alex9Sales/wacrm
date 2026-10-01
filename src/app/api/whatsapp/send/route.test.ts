@@ -21,6 +21,18 @@ const h = vi.hoisted(() => ({
   createdConversation: null as Record<string, unknown> | null,
 }))
 
+// `after()` do Next só existe dentro de uma requisição de verdade. Aqui ele
+// roda o trabalho na hora, para o teste enxergar o aviso em tempo real.
+vi.mock('next/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next/server')>()
+  return {
+    ...actual,
+    after: (task: unknown) => {
+      if (typeof task === 'function') void (task as () => unknown)()
+    },
+  }
+})
+
 const CONTACT = {
   id: 'contact-1',
   accountId: 'acct-1',
