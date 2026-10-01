@@ -57,7 +57,17 @@ export class ForbiddenError extends Error {
  */
 export class AccountSuspendedError extends Error {
   readonly status = 403 as const;
-  constructor(message = "Conta suspensa. Fale com a Fluxia.") {
+  constructor(
+    message = "Conta suspensa. Fale com a Fluxia.",
+    /**
+     * Para a tela de conta suspensa: por que e como pagar. Só chega a quem
+     * passou pela sessão desta conta — o /api/me lê daqui, e nada mais expõe.
+     */
+    readonly detalhe: { reason: string | null; invoiceUrl: string | null } = {
+      reason: null,
+      invoiceUrl: null,
+    },
+  ) {
     super(message);
     this.name = "AccountSuspendedError";
   }
@@ -258,6 +268,8 @@ async function loadAccountContext(
           dueAt: organizationBilling.dueAt,
           cancelAt: organizationBilling.cancelAt,
           deletedAt: organizationBilling.deletedAt,
+          suspendReason: organizationBilling.suspendReason,
+          suspendInvoiceUrl: organizationBilling.suspendInvoiceUrl,
         })
         .from(organizationBilling)
         .where(eq(organizationBilling.organizationId, account.id))
@@ -268,7 +280,10 @@ async function loadAccountContext(
       throw new AccountDeletedError();
     }
     if (billing?.status === "suspended") {
-      throw new AccountSuspendedError();
+      throw new AccountSuspendedError(undefined, {
+        reason: billing.suspendReason ?? null,
+        invoiceUrl: billing.suspendInvoiceUrl ?? null,
+      });
     }
     // Cancelada: status já 'canceled', OU o cancelamento agendado (cancel_at =
     // fim do período pago) já passou. Antes de cancel_at o acesso continua.

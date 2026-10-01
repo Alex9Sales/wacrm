@@ -10,6 +10,7 @@
 // Returns the updated billing row. Unknown org → 404.
 // ============================================================
 
+import { camposAoMudarStatus } from "@/lib/billing/suspension";
 import { NextResponse } from "next/server";
 import { and, eq, isNotNull, isNull, ne } from "drizzle-orm";
 
@@ -229,7 +230,33 @@ export async function PATCH(
     const updates: Partial<typeof organizationBilling.$inferInsert> = {
       updatedAt: now,
     };
-    if (status !== undefined) updates.status = status;
+    // Trava de inadimplência (0200): as colunas de suspensão acompanham a
+    // TRANSIÇÃO de status — nunca o status repetido, que o editar cobrança
+    // reenvia em todo Salvar. Ver camposAoMudarStatus.
+    let suspensaoWarning: string | null = null;
+    if (status !== undefined) {
+      updates.status = status;
+      const atual = firstOrNull(
+        await db
+          .select({
+            status: organizationBilling.status,
+            suspendReason: organizationBilling.suspendReason,
+          })
+          .from(organizationBilling)
+          .where(eq(organizationBilling.organizationId, orgId))
+          .limit(1),
+      );
+      if (atual) {
+        Object.assign(
+          updates,
+          camposAoMudarStatus(atual, status, new Date()),
+        );
+        if (atual.status === "suspended" && atual.suspendReason === "inadimplencia" && status !== "suspended") {
+          suspensaoWarning =
+            "A fatura continua vencida no Asaas. A trava não vai suspender de novo por ela — mas, se o cliente pagou por fora, dê baixa no Asaas (receber em dinheiro) para o vencimento avançar.";
+        }
+      }
+    }
     if (startedAt !== undefined) updates.startedAt = startedAt;
     if (dueAt !== undefined) updates.dueAt = dueAt;
     if (plan !== undefined) updates.plan = plan;
@@ -351,7 +378,12 @@ export async function PATCH(
         .returning();
     }
 
-    return NextResponse.json({ ...row, phoneWarning });
+    return NextResponse.json({
+      ...row,
+      phoneWarning,
+      // O client-actions já mostra asaasWarning como toast de aviso.
+      ...(suspensaoWarning ? { asaasWarning: suspensaoWarning } : {}),
+    });
   } catch (err) {
     return toErrorResponse(err);
   }

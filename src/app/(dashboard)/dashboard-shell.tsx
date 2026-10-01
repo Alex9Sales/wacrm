@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Ban, LogOut, Clock3, Gift, RotateCw } from "lucide-react";
+import { Ban, LogOut, Clock3, Gift, RotateCw, CreditCard } from "lucide-react";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
@@ -25,6 +25,8 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
     loadError,
     refreshProfile,
     suspended,
+    suspendInvoiceUrl,
+    suspendReason,
     trialActive,
     trialEndsAt,
     trialExpired,
@@ -42,6 +44,11 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
         )
       : null;
   const router = useRouter();
+
+  // "Já paguei" da tela de suspensão: o cliente precisa VER que a checagem
+  // aconteceu. Sem retorno, o botão parece quebrado e vira chamado.
+  const [verificandoPagamento, setVerificandoPagamento] = useState(false);
+  const [pagamentoAindaNao, setPagamentoAindaNao] = useState(false);
 
   // Sidebar drawer state — only used on mobile. On lg+ the sidebar is
   // always visible and this stays at `false` (ignored by the component).
@@ -110,7 +117,11 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
   // throws AccountSuspendedError, so every org-scoped page would break —
   // show a friendly full-page notice instead. Platform admins operate via
   // /admin (a separate layout) and are never suspended here.
-  if (!profileLoading && suspended) {
+  // ⚠️ Sem `!profileLoading` aqui: o "Já paguei" reconsulta o perfil, e
+  // durante a reconsulta a tela de suspensão sumia — o CRM tentava abrir e
+  // quebrava, porque a conta ainda está suspensa. A tela vale pelo último
+  // perfil conhecido até a resposta dizer o contrário.
+  if (suspended) {
     return (
       <div className="flex h-screen flex-col items-center justify-center gap-6 bg-background px-6 text-center">
         <div className="flex size-14 items-center justify-center rounded-full bg-destructive/10 text-destructive">
@@ -120,11 +131,64 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
           <h1 className="font-heading text-xl font-semibold text-foreground">
             Sua conta está suspensa
           </h1>
-          <p className="text-sm text-muted-foreground">
-            O acesso à sua conta foi temporariamente pausado. Para
-            reativá-la, fale com a Fluxia e regularize a sua assinatura.
-          </p>
+          {/* Trava de inadimplência (30/09): a tela só dizia "fale com a
+              Fluxia", sem link. Com o acesso todo trancado, o botão de pagar é
+              a única porta de saída que o cliente tem — sem ele, a suspensão
+              automática viraria um chamado para cada cliente suspenso. */}
+          {suspendReason === "inadimplencia" ? (
+            <p className="text-sm text-muted-foreground">
+              A mensalidade está em aberto há mais de 5 dias, e por isso o
+              acesso foi pausado. Ele volta sozinho quando o pagamento for
+              confirmado: pelo Pix, em poucos minutos; pelo boleto, quando o
+              banco compensar (até 3 dias úteis). Se você já pagou o boleto,
+              não pague de novo.
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              O acesso à sua conta foi temporariamente pausado. Para
+              reativá-la, fale com a Fluxia e regularize a sua assinatura.
+            </p>
+          )}
         </div>
+        {suspendInvoiceUrl && (
+          <a
+            href={suspendInvoiceUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex h-10 items-center gap-2 rounded-full bg-primary px-5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            <CreditCard className="size-4" />
+            Pagar agora
+          </a>
+        )}
+        {suspendInvoiceUrl && (
+          <div className="flex flex-col items-center gap-1">
+            <button
+              type="button"
+              disabled={verificandoPagamento}
+              onClick={async () => {
+                setVerificandoPagamento(true);
+                setPagamentoAindaNao(false);
+                try {
+                  await refreshProfile();
+                } finally {
+                  setVerificandoPagamento(false);
+                  // Se a conta liberou, esta tela some e isto nem aparece.
+                  setPagamentoAindaNao(true);
+                }
+              }}
+              className="text-xs text-muted-foreground underline-offset-4 hover:underline disabled:opacity-60"
+            >
+              {verificandoPagamento ? "Verificando…" : "Já paguei — verificar de novo"}
+            </button>
+            {pagamentoAindaNao && !verificandoPagamento && (
+              <p className="max-w-xs text-xs text-muted-foreground">
+                Ainda não recebemos a confirmação. Pelo Pix leva alguns minutos —
+                tente de novo daqui a pouco.
+              </p>
+            )}
+          </div>
+        )}
         <button
           type="button"
           onClick={signOut}

@@ -91,9 +91,17 @@ export function dueStep(c: ReminderCandidate, now: Date): ReminderStep | null {
   const dias = daysUntil(c.dueAt, now)
   if (Number.isNaN(dias)) return null
 
-  // -5 → faltam exatamente 5 dias. 0 → vence hoje. 3 → venceu há 3 dias.
+  // -5 → faltam exatamente 5 dias. 0 → vence hoje.
+  //
+  // 3 → venceu há 3, 4 ou 5 dias. É o ÚNICO degrau com folga, e por um motivo:
+  // ele é o último aviso antes da suspensão por atraso (6º dia, ver
+  // suspension.ts). No dia exato ele morria quando caía em fim de semana —
+  // vencimento numa quinta põe o +3 no domingo, e a conta seria suspensa sem
+  // ter recebido um único aviso de atraso. Três dias seguidos sempre contêm um
+  // dia útil, então o aviso sai antes da trava. Os outros degraus continuam no
+  // dia exato: lá não há consequência esperando atrás deles.
   const step: ReminderStep | null =
-    dias === 5 ? -5 : dias === 0 ? 0 : dias === -3 ? 3 : null
+    dias === 5 ? -5 : dias === 0 ? 0 : dias <= -3 && dias >= -5 ? 3 : null
   if (step === null) return null
   return c.sentSteps.includes(step) ? null : step
 }

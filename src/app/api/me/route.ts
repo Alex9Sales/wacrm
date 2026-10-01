@@ -71,6 +71,9 @@ export async function GET() {
   // Phase 8: true when the active org's billing is 'suspended'. The
   // dashboard uses this to render a friendly full-page suspended screen.
   let suspended = false;
+  // Por que está suspensa e o link da fatura vencida (trava de inadimplência).
+  let suspendReason: string | null = null;
+  let suspendInvoiceUrl: string | null = null;
   // Fase 2 (trial): expired → tela "teste acabou"; active → banner de dias.
   let trialExpired = false;
   let trialActive = false;
@@ -109,6 +112,8 @@ export async function GET() {
       // Authenticated but the org is suspended — flag it so the client
       // shows the "conta suspensa" screen. Account fields stay null.
       suspended = true;
+      suspendReason = err.detalhe.reason;
+      suspendInvoiceUrl = err.detalhe.invoiceUrl;
     } else if (err instanceof TrialExpiredError) {
       // Trial acabou — flag pra tela "teste acabou" + checkout.
       trialExpired = true;
@@ -137,6 +142,9 @@ export async function GET() {
     is_platform_admin: isPlatformAdmin(userRow.email),
     // Phase 8 suspension: drives the dashboard's suspended screen.
     suspended,
+    // Trava de inadimplência: a tela mostra o motivo e o botão "Pagar agora".
+    suspend_reason: suspendReason,
+    suspend_invoice_url: suspendInvoiceUrl,
     // Fase 2 trial: banner de dias (active) e tela de bloqueio (expired).
     trial_active: trialActive,
     trial_ends_at: trialEndsAt,

@@ -49,6 +49,9 @@ interface Profile {
   /** Phase 8: true when the active org's billing is 'suspended'. The
    *  dashboard renders a "conta suspensa" screen when this is set. */
   suspended: boolean;
+  /** Trava de inadimplência: por que suspendeu e o link da fatura vencida. */
+  suspend_reason?: string | null;
+  suspend_invoice_url?: string | null;
   /** Fase 2: trial em andamento (não expirado) + quando termina. */
   trial_active: boolean;
   trial_ends_at: string | null;
@@ -143,6 +146,9 @@ interface AuthContextValue {
   /** Phase 8: active org's billing is 'suspended'. Drives the
    *  dashboard's full-page suspended screen. */
   suspended: boolean;
+  /** Link da fatura vencida — o botão "Pagar agora" da tela de suspensão. */
+  suspendInvoiceUrl: string | null;
+  suspendReason: string | null;
   /** Fase 2: trial ativo + quando termina (banner de dias). */
   trialActive: boolean;
   trialEndsAt: string | null;
@@ -249,6 +255,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           account_role: string | null;
           is_platform_admin?: boolean;
           suspended?: boolean;
+          suspend_reason?: string | null;
+          suspend_invoice_url?: string | null;
           trial_active?: boolean;
           trial_ends_at?: string | null;
           trial_expired?: boolean;
@@ -281,6 +289,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         account_role: accountRole,
         is_platform_admin: body.profile.is_platform_admin ?? false,
         suspended: body.profile.suspended ?? false,
+        suspend_reason: body.profile.suspend_reason ?? null,
+        suspend_invoice_url: body.profile.suspend_invoice_url ?? null,
         trial_active: body.profile.trial_active ?? false,
         trial_ends_at: body.profile.trial_ends_at ?? null,
         trial_expired: body.profile.trial_expired ?? false,
@@ -387,6 +397,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         defaultCurrency: account?.default_currency ?? DEFAULT_CURRENCY,
         isPlatformAdmin: profile?.is_platform_admin ?? false,
         suspended: profile?.suspended ?? false,
+        suspendInvoiceUrl: profile?.suspend_invoice_url ?? null,
+        suspendReason: profile?.suspend_reason ?? null,
         trialActive: profile?.trial_active ?? false,
         trialEndsAt: profile?.trial_ends_at ?? null,
         trialExpired: profile?.trial_expired ?? false,
@@ -438,6 +450,8 @@ export function useAuth(): AuthContextValue {
       canSeeAllConversations: false,
       isPlatformAdmin: false,
       suspended: false,
+      suspendInvoiceUrl: null,
+      suspendReason: null,
       trialActive: false,
       trialEndsAt: null,
       trialExpired: false,

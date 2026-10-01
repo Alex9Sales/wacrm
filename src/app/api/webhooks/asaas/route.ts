@@ -12,7 +12,7 @@
 import { NextResponse, after } from 'next/server'
 import { and, eq, isNull, ne, or } from 'drizzle-orm'
 
-import { db, organization, organizationBilling } from '@/db'
+import { db, billingEvents, organization, organizationBilling } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { logBillingEvent } from '@/lib/admin/billing-events'
 import {
@@ -198,7 +198,11 @@ async function activateFromPayment(payment: unknown): Promise<void> {
     // em outubro um contrato pago até março.
     const atual = firstOrNull(
       await db
-        .select({ cycle: organizationBilling.billingCycle })
+        .select({
+          cycle: organizationBilling.billingCycle,
+          status: organizationBilling.status,
+          suspendReason: organizationBilling.suspendReason,
+        })
         .from(organizationBilling)
         .where(eq(organizationBilling.organizationId, orgId))
         .limit(1),
@@ -214,6 +218,11 @@ async function activateFromPayment(payment: unknown): Promise<void> {
       // (ex.: cliente cancelado que reassinou). deleted_at NÃO é mexido aqui
       // (exclusão é decisão do admin; o gate bloqueia por deleted_at de todo jeito).
       cancelAt: null,
+      // Pagou → sai da trava. As três colunas da suspensão (0200) somem junto,
+      // senão a próxima suspensão nasceria com o link da fatura antiga.
+      suspendedAt: null,
+      suspendReason: null,
+      suspendInvoiceUrl: null,
       updatedAt: new Date().toISOString(),
     }
     if (subscriptionId) set.asaasSubscriptionId = subscriptionId
@@ -222,6 +231,27 @@ async function activateFromPayment(payment: unknown): Promise<void> {
       .set(set)
       .where(eq(organizationBilling.organizationId, orgId))
     console.log('[webhooks/asaas] conta ativada:', orgId)
+
+    // Estava suspensa? Deixa rastro: sem isso, a reativação pelo pagamento era
+    // invisível no histórico — só se via o status mudar, sem saber por quê.
+    if (atual?.status === 'suspended') {
+      await db
+        .insert(billingEvents)
+        .values({
+          organizationId: orgId,
+          event: 'reactivated',
+          fromStatus: 'suspended',
+          toStatus: 'active',
+          actorType: 'system',
+          actorLabel: 'pagamento confirmado (Asaas)',
+          reason: atual.suspendReason
+            ? `pagamento confirmado — estava suspensa por ${atual.suspendReason}`
+            : 'pagamento confirmado',
+          metadata: { paymentId: p.id ?? null, value: p.value ?? null },
+        })
+        .catch((err) => console.error('[webhooks/asaas] evento de reativação não gravou:', err))
+      console.log('[webhooks/asaas] conta REATIVADA pelo pagamento:', orgId)
+    }
 
     // 📣 Obrigado pelo pagamento (29/09). Até aqui, quem pagava não ouvia nada:
     // o webhook ativava a conta e ia embora. Roda DEPOIS da ativação — o aviso

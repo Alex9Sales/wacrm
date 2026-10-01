@@ -8,6 +8,7 @@
 // Excluir = soft-delete (deleted_at); mantém o registro + histórico.
 // ============================================================
 
+import { camposAoMudarStatus } from "@/lib/billing/suspension";
 import { eq } from "drizzle-orm";
 
 import { db, organizationBilling } from "@/db";
@@ -44,6 +45,7 @@ interface BillingSnap {
   deletedAt: string | null;
   asaasSubscriptionId: string | null;
   asaasPaymentId: string | null;
+  suspendReason: string | null;
 }
 
 async function loadBilling(orgId: string): Promise<BillingSnap | null> {
@@ -56,6 +58,7 @@ async function loadBilling(orgId: string): Promise<BillingSnap | null> {
         deletedAt: organizationBilling.deletedAt,
         asaasSubscriptionId: organizationBilling.asaasSubscriptionId,
         asaasPaymentId: organizationBilling.asaasPaymentId,
+        suspendReason: organizationBilling.suspendReason,
       })
       .from(organizationBilling)
       .where(eq(organizationBilling.organizationId, orgId))
@@ -222,6 +225,13 @@ export async function reactivateClient(
     cancelAt: null,
     deletedAt: null,
     updatedAt: nowIso,
+    // Religar quem a trava suspendeu deixa a marca da liberação, para ela não
+    // suspender de novo na próxima hora pela mesma fatura (ver suspension.ts).
+    ...camposAoMudarStatus(
+      { status: b?.status ?? null, suspendReason: b?.suspendReason ?? null },
+      "active",
+      new Date(nowIso),
+    ),
   });
 
   await logBillingEvent({

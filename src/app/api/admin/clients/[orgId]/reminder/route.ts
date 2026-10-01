@@ -77,6 +77,8 @@ export async function POST(
           monthlyValue: organizationBilling.monthlyValue,
           billingCycle: organizationBilling.billingCycle,
           asaasCustomerId: organizationBilling.asaasCustomerId,
+          asaasSubscriptionId: organizationBilling.asaasSubscriptionId,
+          asaasPaymentId: organizationBilling.asaasPaymentId,
         })
         .from(organization)
         .leftJoin(
@@ -151,10 +153,18 @@ export async function POST(
     // Cobrança em aberto → botão "Pagar agora". Sem ela o lembrete sai igual.
     let invoiceUrl: string | null = null;
     let chargeValue: number | null = null;
-    if (client.asaasCustomerId) {
+    if (client.asaasSubscriptionId || client.asaasPaymentId || client.asaasCustomerId) {
       try {
-        const { nextOpenCharge } = await import("@/lib/billing/asaas");
-        const cobranca = await nextOpenCharge(client.asaasCustomerId);
+        // Pela assinatura, não pelo cliente — ver openChargeForBilling.
+        const { openChargeForBilling } = await import("@/lib/billing/asaas");
+        const cobranca = await openChargeForBilling(
+          {
+            subscriptionId: client.asaasSubscriptionId,
+            paymentId: client.asaasPaymentId,
+            customerId: client.asaasCustomerId,
+          },
+          { includeOverdue: step > 0 },
+        );
         invoiceUrl = cobranca?.invoiceUrl ?? null;
         chargeValue = cobranca ? Number(cobranca.value) : null;
       } catch (err) {

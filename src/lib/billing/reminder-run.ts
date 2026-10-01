@@ -30,11 +30,11 @@ export interface ReminderRunResult {
 }
 
 /** A chave do vencimento dentro de reminders_sent: 'AAAA-MM-DD'. */
-function dueKey(dueAt: string): string {
+export function dueKey(dueAt: string): string {
   return new Date(dueAt).toISOString().slice(0, 10)
 }
 
-function stepsFor(raw: unknown, key: string): number[] {
+export function stepsFor(raw: unknown, key: string): number[] {
   if (!raw || typeof raw !== 'object') return []
   const v = (raw as Record<string, unknown>)[key]
   return Array.isArray(v) ? v.filter((n): n is number => typeof n === 'number') : []
@@ -61,6 +61,8 @@ export async function runBillingReminders(now = new Date()): Promise<ReminderRun
     name: string
     billingPhone: string | null
     asaasCustomerId: string | null
+    asaasSubscriptionId: string | null
+    asaasPaymentId: string | null
     plan: string | null
     monthlyValue: string | null
     billingCycle: string | null
@@ -75,6 +77,8 @@ export async function runBillingReminders(now = new Date()): Promise<ReminderRun
         name: organization.name,
         billingPhone: organizationBilling.billingPhone,
         asaasCustomerId: organizationBilling.asaasCustomerId,
+        asaasSubscriptionId: organizationBilling.asaasSubscriptionId,
+        asaasPaymentId: organizationBilling.asaasPaymentId,
         plan: organizationBilling.plan,
         monthlyValue: organizationBilling.monthlyValue,
         billingCycle: organizationBilling.billingCycle,
@@ -120,13 +124,36 @@ export async function runBillingReminders(now = new Date()): Promise<ReminderRun
       // link ele sai igual, só sem botão.
       let invoiceUrl: string | null = null
       let chargeValue: number | null = null
-      if (row.asaasCustomerId) {
+      if (row.asaasSubscriptionId || row.asaasPaymentId || row.asaasCustomerId) {
         try {
-          const { nextOpenCharge } = await import('./asaas')
-          const cobranca = await nextOpenCharge(row.asaasCustomerId)
+          // Pela ASSINATURA, não pelo cliente: o mesmo cliente no Asaas pode
+          // ter cobranças de outro produto (ver openChargeForBilling). No degrau
+          // de "em aberto" a mensalidade já venceu, então a vencida conta.
+          const { openChargeForBilling } = await import('./asaas')
+          const cobranca = await openChargeForBilling(
+            {
+              subscriptionId: row.asaasSubscriptionId,
+              paymentId: row.asaasPaymentId,
+              customerId: row.asaasCustomerId,
+            },
+            { includeOverdue: step > 0 },
+          )
           invoiceUrl = cobranca?.invoiceUrl ?? null
           // O valor do BOLETO, não o mensal — ver valorDoLembrete.
           chargeValue = cobranca ? Number(cobranca.value) : null
+          // "Em aberto" de quem tem assinatura e NADA vencido no Asaas: a
+          // fatura foi paga e o webhook não avançou o vencimento. Mandar
+          // "sua mensalidade está em aberto" a quem pagou é o pior lembrete
+          // possível. Não manda e não carimba — a trava também não vai agir
+          // (ela confere o mesmo no Asaas).
+          if (step === 3 && !cobranca && (row.asaasSubscriptionId || row.asaasPaymentId)) {
+            console.error(
+              `[billing-reminders] "${row.name}": nada vencido no Asaas para o vencimento ${key} — ` +
+                `pago e o webhook não avançou? Não mandei o "em aberto".`,
+            )
+            result.skipped++
+            continue
+          }
         } catch (err) {
           console.warn(`[billing-reminders] cobrança de "${row.name}" não veio:`, err)
         }
@@ -145,6 +172,14 @@ export async function runBillingReminders(now = new Date()): Promise<ReminderRun
           candidate.dueAt ? diaBr(candidate.dueAt) : '',
         ],
       })
+      // "não enviado (sem template aprovado…)" volta como string, não como
+      // erro. Carimbar isso como enviado mentiria duas vezes: o lembrete não
+      // sairia de novo, e a trava acharia que o cliente foi avisado.
+      if (via.startsWith('não enviado')) {
+        result.failed++
+        console.error(`[billing-reminders] "${row.name}" degrau ${step} NÃO saiu: ${via}`)
+        continue
+      }
       await markSent(row.orgId, row.remindersSent, key, step, now)
       result.sent++
       console.log(

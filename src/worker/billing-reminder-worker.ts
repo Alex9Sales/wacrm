@@ -10,6 +10,7 @@ import { Queue, Worker } from 'bullmq';
 
 import { bullConnection } from '@/lib/queue/connection';
 import { runBillingReminders } from '@/lib/billing/reminder-run';
+import { runBillingSuspensions } from '@/lib/billing/suspension-run';
 
 const QUEUE = 'billing-reminders';
 const EVERY_MS = Number(process.env.BILLING_REMINDER_EVERY_MS) || 60 * 60_000;
@@ -24,7 +25,22 @@ export function startBillingReminderWorker(): Worker {
       console.error('[billing-reminders] schedule failed:', err);
     }
   })();
-  const worker = new Worker(QUEUE, async () => runBillingReminders(), {
+  // Duas rodadas no mesmo tick, cada uma blindada da outra: um erro no
+  // lembrete não pode impedir a trava, e vice-versa. O lembrete vem antes —
+  // no 6º dia ele já não tem degrau, então os dois nunca falam com a mesma
+  // conta no mesmo tick.
+  const worker = new Worker(QUEUE, async () => {
+    try {
+      await runBillingReminders();
+    } catch (err) {
+      console.error('[billing-reminders] rodada de lembretes falhou:', err);
+    }
+    try {
+      await runBillingSuspensions();
+    } catch (err) {
+      console.error('[billing-suspensions] rodada da trava falhou:', err);
+    }
+  }, {
     connection: bullConnection(),
     concurrency: 1,
   });

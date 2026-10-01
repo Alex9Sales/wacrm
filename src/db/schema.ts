@@ -187,6 +187,11 @@ export const organizationBilling = pgTable("organization_billing", {
 	// segundo evento reconhecer que já agradeceu AQUELE pagamento, e deixa o do
 	// mês seguinte passar.
 	thankedPaymentId: text("thanked_payment_id"),
+	// Suspensão (migração 0200): quando, por quê, e o link da fatura vencida que
+	// a tela de conta suspensa mostra. O pagamento limpa as três.
+	suspendedAt: timestamp("suspended_at", { withTimezone: true, mode: 'string' }),
+	suspendReason: text("suspend_reason"),
+	suspendInvoiceUrl: text("suspend_invoice_url"),
 	// Documento do cliente (migr 0191): o formulário do site já pedia e
 	// validava, mas mandava direto pro Asaas sem guardar — sem ele não dava
 	// pra achar o cliente lá a partir do CRM.

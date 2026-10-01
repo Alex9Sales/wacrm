@@ -368,6 +368,114 @@ export async function listReceivedPayments(
   return out
 }
 
+type OpenCharge = {
+  id: string
+  value: number
+  dueDate: string
+  invoiceUrl?: string
+  status?: string
+  /** Cobrança removida no Asaas: o GET por id ainda a devolve, com o último status. */
+  deleted?: boolean | null
+}
+
+/**
+ * A cobrança em aberto DESTA assinatura — a que o lembrete e a trava cobram.
+ *
+ * ⚠️ 30/09/2026 (GoLink): `nextOpenCharge` busca a próxima cobrança do CLIENTE.
+ * O cliente do João no Asaas tem 11 parcelas pendentes de OUTRO produto (o
+ * "Agente de Cobrança", 12× R$ 249,75). No dia do vencimento a ordem das datas
+ * salvava; do dia seguinte em diante a mensalidade vencida virava OVERDUE, saía
+ * do filtro PENDING, e o lembrete passava a mostrar R$ 249,75 com o botão
+ * "Pagar agora" apontando para a parcela errada.
+ *
+ * Ordem de preferência: a assinatura → a cobrança avulsa (semestral/anual) →
+ * só então o cliente, para quem ainda não tem vínculo gravado.
+ *
+ * `includeOverdue`: depois do vencimento, a que importa é a VENCIDA mais antiga
+ * — é ela que o cliente precisa pagar para destravar.
+ */
+export async function openChargeForBilling(
+  link: { subscriptionId?: string | null; paymentId?: string | null; customerId?: string | null },
+  opts: { includeOverdue?: boolean } = {},
+): Promise<OpenCharge | null> {
+  if (link.subscriptionId) {
+    const sub = encodeURIComponent(link.subscriptionId)
+    if (opts.includeOverdue) {
+      const vencidas = await asaasFetch<{ data?: OpenCharge[] }>(
+        `/payments?subscription=${sub}&status=OVERDUE&limit=1&order=asc&sort=dueDate`,
+      )
+      // Nada vencido = a fatura do aviso de "em aberto" já foi paga. Cair na
+      // PENDING aqui seria cobrar como "em aberto" a mensalidade do mês
+      // SEGUINTE, que nem venceu. Melhor nenhuma do que a errada.
+      return vencidas.data?.[0] ?? null
+    }
+    const abertas = await asaasFetch<{ data?: OpenCharge[] }>(
+      `/payments?subscription=${sub}&status=PENDING&limit=1&order=asc&sort=dueDate`,
+    )
+    return abertas.data?.[0] ?? null
+  }
+  if (link.paymentId) {
+    const p = await asaasFetch<OpenCharge>(`/payments/${encodeURIComponent(link.paymentId)}`)
+    if (!p?.status || p.deleted) return null
+    if (p.status === 'PENDING' || (opts.includeOverdue && p.status === 'OVERDUE')) return p
+    return null // paga, estornada ou cancelada: não há o que cobrar
+  }
+  // Só o cliente, sem assinatura nem cobrança vinculada: no "em aberto" não dá
+  // para saber qual das cobranças dele é a mensalidade (a GoLink tem parcelas de
+  // outro produto no mesmo cliente). Sem botão é melhor que botão errado.
+  if (link.customerId) return opts.includeOverdue ? null : nextOpenCharge(link.customerId)
+  return null
+}
+
+/**
+ * A situação, no Asaas, da cobrança que a trava de inadimplência quer suspender.
+ *
+ * O banco pode estar atrasado em relação ao Asaas (webhook perdido, boleto
+ * compensando), então a trava nunca suspende pelo banco: pergunta aqui antes.
+ *
+ * - `vencida`: existe cobrança OVERDUE nesse vínculo — a mais antiga.
+ * - `paga`: a cobrança do vencimento que o banco conhece está paga. É o sinal
+ *   de webhook perdido: o cliente pagou e o banco não soube.
+ * - `nada_em_aberto`: nem vencida, nem paga naquela data.
+ */
+export async function situacaoDaCobranca(
+  link: { subscriptionId?: string | null; paymentId?: string | null },
+  dueDateYmd: string | null,
+): Promise<
+  | { tipo: 'vencida'; dueDate: string; invoiceUrl: string | null; paymentId: string }
+  | { tipo: 'paga' }
+  | { tipo: 'nada_em_aberto' }
+> {
+  const PAGA = new Set(['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'])
+  if (link.subscriptionId) {
+    const sub = encodeURIComponent(link.subscriptionId)
+    const vencidas = await asaasFetch<{ data?: OpenCharge[] }>(
+      `/payments?subscription=${sub}&status=OVERDUE&limit=1&order=asc&sort=dueDate`,
+    )
+    const v = vencidas.data?.[0]
+    if (v) return { tipo: 'vencida', dueDate: v.dueDate, invoiceUrl: v.invoiceUrl ?? null, paymentId: v.id }
+    if (dueDateYmd) {
+      const naData = await asaasFetch<{ data?: OpenCharge[] }>(
+        `/payments?subscription=${sub}&dueDate%5Bge%5D=${dueDateYmd}&dueDate%5Ble%5D=${dueDateYmd}&limit=5`,
+      )
+      if ((naData.data ?? []).some((p) => p.status && PAGA.has(p.status))) return { tipo: 'paga' }
+    }
+    return { tipo: 'nada_em_aberto' }
+  }
+  if (link.paymentId) {
+    const p = await asaasFetch<OpenCharge>(`/payments/${encodeURIComponent(link.paymentId)}`)
+    // Removida no Asaas (cancelamento pelo /admin): não é dívida, mesmo que o
+    // GET ainda mostre OVERDUE.
+    if (!p || p.deleted) return { tipo: 'nada_em_aberto' }
+    if (p.status === 'OVERDUE') {
+      return { tipo: 'vencida', dueDate: p.dueDate, invoiceUrl: p.invoiceUrl ?? null, paymentId: p.id }
+    }
+    if (p.status && PAGA.has(p.status)) return { tipo: 'paga' }
+    return { tipo: 'nada_em_aberto' }
+  }
+  return { tipo: 'nada_em_aberto' }
+}
+
 /** Próxima cobrança em aberto do cliente (pro painel dizer quando vence). */
 export async function nextOpenCharge(
   customerId: string,
