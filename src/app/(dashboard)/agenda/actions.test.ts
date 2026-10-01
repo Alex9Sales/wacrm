@@ -354,17 +354,58 @@ describe('confirmação ao paciente ao salvar (01/10)', () => {
     expect(h.confirmar).toHaveBeenCalledWith(expect.objectContaining({ tipo: 'marcacao' }))
   })
 
-  it('trocar de agenda (outro profissional): remarcação', async () => {
-    h.state.results.push([ANTES_COM_PACIENTE], AGENDA_LOCAL, [{ id: 'c-1' }])
+  describe('trocar de agenda no MESMO horário (01/10, revisão)', () => {
+    const ANTES_DRA = { ...ANTES_COM_PACIENTE, calName: 'Dra. Fulana Exemplo' }
+    const agendaLocal = (name: string) => [{ googleCalendarId: null, connectionId: null, name }]
+    const trocarPara = () =>
+      updateEvent('ev-1', {
+        ...INPUT,
+        startsAt: '2026-10-05T14:00:00.000Z',
+        calendarId: 'cal-b',
+        contactId: 'c-1',
+        notifyPatient: true,
+      })
 
-    await updateEvent('ev-1', {
-      ...INPUT,
-      calendarId: 'cal-b',
-      contactId: 'c-1',
-      notifyPatient: true,
+    it('agenda de outro profissional: tipo "profissional", nunca "remarcação"', async () => {
+      h.state.results.push([ANTES_DRA], agendaLocal('Dr. Beltrano Teste'), [{ id: 'c-1' }])
+
+      await trocarPara()
+
+      expect(h.confirmar).toHaveBeenCalledTimes(1)
+      expect(h.confirmar).toHaveBeenCalledWith(expect.objectContaining({ tipo: 'profissional' }))
     })
 
-    expect(h.confirmar).toHaveBeenCalledWith(expect.objectContaining({ tipo: 'remarcacao' }))
+    it('agenda nova genérica: nada sai (não há o que dizer ao paciente)', async () => {
+      h.state.results.push([ANTES_DRA], agendaLocal('Minha agenda'), [{ id: 'c-1' }])
+
+      const res = await trocarPara()
+
+      expect(res.confirmacao).toBeNull()
+      expect(h.confirmar).not.toHaveBeenCalled()
+    })
+
+    it('o mesmo profissional em outra agenda: nada sai', async () => {
+      h.state.results.push([ANTES_DRA], agendaLocal('Agenda da Dra. Fulana Exemplo'), [{ id: 'c-1' }])
+
+      await trocarPara()
+
+      expect(h.confirmar).not.toHaveBeenCalled()
+    })
+
+    it('trocou a agenda E o horário: remarcação', async () => {
+      h.state.results.push([ANTES_DRA], agendaLocal('Dr. Beltrano Teste'), [{ id: 'c-1' }])
+
+      await updateEvent('ev-1', {
+        ...INPUT,
+        startsAt: '2026-10-06T17:00:00.000Z',
+        endsAt: '2026-10-06T18:00:00.000Z',
+        calendarId: 'cal-b',
+        contactId: 'c-1',
+        notifyPatient: true,
+      })
+
+      expect(h.confirmar).toHaveBeenCalledWith(expect.objectContaining({ tipo: 'remarcacao' }))
+    })
   })
 
   it('o salvar falhou: nenhuma confirmação sai', async () => {

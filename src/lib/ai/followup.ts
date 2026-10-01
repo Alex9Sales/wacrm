@@ -533,6 +533,41 @@ function reminderSignedMinutes(r: MeetingReminder): number {
   return r.when === 'before' ? -mins : mins
 }
 
+/**
+ * Quantos degraus "antes da consulta" já venceram em `agora` — o valor que
+ * `reminders_sent` precisa ter para a varredura não mandar nenhum deles.
+ *
+ * 01/10, revisão da confirmação ao agendar: a recepção marca (ou remarca) para
+ * amanhã cedo, o paciente recebe "Sua consulta está confirmada…" e, um minuto
+ * depois, o lembrete de 24h da IA dizendo a mesma coisa — o degrau já tinha
+ * vencido quando o compromisso nasceu. Quem acabou de receber a confirmação
+ * já foi avisado daquele degrau.
+ *
+ * Mesma ordem e mesma conta da varredura (runMeetingReminderSweep): degraus
+ * ordenados pelo offset com sinal, vencido = `agora >= início + offset`. Os
+ * "antes" vêm primeiro na ordem, então os vencidos formam o começo da lista e
+ * a contagem É o índice. Só conta "antes": o "depois da consulta" (como foi?)
+ * nunca venceu numa consulta futura, e não é coberto por uma confirmação.
+ * Degrau que ainda não venceu (o "no dia" de uma consulta marcada 3 dias
+ * antes) fica de fora e sai normalmente.
+ */
+export function degrausJaVencidos(
+  steps: MeetingReminder[],
+  startsAt: string | Date,
+  agora: Date,
+): number {
+  const startMs = new Date(startsAt).getTime()
+  if (!Number.isFinite(startMs)) return 0
+  const ordenados = [...steps].sort((a, b) => reminderSignedMinutes(a) - reminderSignedMinutes(b))
+  let n = 0
+  for (const r of ordenados) {
+    if (r.when !== 'before') break
+    if (agora.getTime() < startMs + reminderSignedMinutes(r) * 60_000) break
+    n++
+  }
+  return n
+}
+
 function readStageTrigger(raw: unknown): StageTrigger | null {
   if (!raw || typeof raw !== 'object') return null
   const bag = raw as Record<string, unknown>
@@ -1651,6 +1686,82 @@ interface ConvMeta {
 }
 
 /**
+ * Este agente responde por esta conversa? Cobertura multiagente — mesma regra
+ * de agentCoverageCond: conversa com dono só do dono; sem dono, a lista de
+ * canais do agente, ou o padrão/único quando a lista é vazia (o especialista
+ * catch-all só pega conversa transferida para ele).
+ *
+ * Saiu de dentro de loadConvMeta (01/10) para a confirmação ao agendar achar
+ * o MESMO agente que a varredura de lembretes usaria (lembretesDoCompromisso).
+ */
+export function agenteCobreAConversa(
+  agent: Pick<AgentRow, 'id' | 'auto_reply_channel_ids' | 'is_default' | 'sole_active'>,
+  conv: { aiAgentId: string | null; channelId: string | null },
+): boolean {
+  if (conv.aiAgentId === agent.id) return true
+  if (conv.aiAgentId) return false // conversa de OUTRO agente
+  const channels = agent.auto_reply_channel_ids ?? []
+  if (channels.length > 0) return !!conv.channelId && channels.includes(conv.channelId)
+  return !!(agent.is_default || agent.sole_active)
+}
+
+/**
+ * Entre os agentes que cobrem a conversa, o que responde pelos lembretes.
+ * A varredura passa por todos, sem ordem; aqui a escolha é determinística:
+ * o dono da conversa, depois quem tem a conversa na lista de canais, depois o
+ * padrão/único. Só conta agente com lembretes de consulta configurados.
+ */
+export function escolherAgenteDosLembretes<
+  A extends Pick<AgentRow, 'id' | 'auto_reply_channel_ids' | 'is_default' | 'sole_active' | 'follow_up'>,
+>(agents: A[], conv: { aiAgentId: string | null; channelId: string | null }): A | null {
+  const peso = (a: A) =>
+    conv.aiAgentId === a.id ? 0 : (a.auto_reply_channel_ids ?? []).length > 0 ? 1 : 2
+  const candidatos = agents
+    .filter((a) => {
+      const cfg = readFollowUpConfig(a.follow_up)
+      return cfg.enabled && cfg.meetingReminders.length > 0 && agenteCobreAConversa(a, conv)
+    })
+    .sort((a, b) => peso(a) - peso(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  return candidatos[0] ?? null
+}
+
+/**
+ * Os degraus de lembrete que a varredura usaria para ESTE compromisso: a
+ * conversa resolvida como ela resolve (a do negócio ligado, senão a mais
+ * recente do contato) e o agente que cobre essa conversa. [] = nenhum agente
+ * mandaria lembrete para ele.
+ *
+ * Para a confirmação ao agendar (lib/agenda/confirmacao-envio.ts) saber quais
+ * degraus a confirmação acabou de cobrir — ver `degrausJaVencidos`.
+ */
+export async function lembretesDoCompromisso(
+  accountId: string,
+  eventId: string,
+): Promise<MeetingReminder[]> {
+  const convRes = await db.execute(sql`
+    SELECT cv.ai_agent_id, cv.channel_id
+      FROM calendar_events e
+      JOIN conversations cv ON cv.id = COALESCE(
+        (SELECT dl.conversation_id FROM deals dl WHERE dl.id = e.deal_id),
+        (SELECT cv2.id FROM conversations cv2
+          WHERE cv2.contact_id = e.contact_id AND cv2.account_id = e.account_id
+          ORDER BY cv2.last_message_at DESC NULLS LAST LIMIT 1))
+     WHERE e.id = ${eventId} AND e.account_id = ${accountId}
+     LIMIT 1
+  `)
+  const conv = convRes.rows[0] as { ai_agent_id: string | null; channel_id: string | null } | undefined
+  if (!conv) return []
+  const agentsRes = await db.execute(
+    sql`SELECT * FROM (${AGENT_SWEEP_SELECT}) a WHERE a.account_id = ${accountId}`,
+  )
+  const agente = escolherAgenteDosLembretes(agentsRes.rows as unknown as AgentRow[], {
+    aiAgentId: conv.ai_agent_id,
+    channelId: conv.channel_id,
+  })
+  return agente ? readFollowUpConfig(agente.follow_up).meetingReminders : []
+}
+
+/**
  * Meta da conversa (canal/último inbound/contato).
  *
  * `operacional: true` ignora "atribuída a alguém" e "conversa fechada".
@@ -1699,15 +1810,7 @@ async function loadConvMeta(
     | undefined
   if (!row) return null
   // Cobertura multiagente — mesma regra de agentCoverageCond.
-  if (row.ai_agent_id !== agent.id) {
-    if (row.ai_agent_id) return null // conversa de OUTRO agente
-    const channels = agent.auto_reply_channel_ids ?? []
-    if (channels.length > 0) {
-      if (!row.channel_id || !channels.includes(row.channel_id)) return null
-    } else if (!(agent.is_default || agent.sole_active)) {
-      return null // especialista catch-all: só conversas transferidas pra ele
-    }
-  }
+  if (!agenteCobreAConversa(agent, { aiAgentId: row.ai_agent_id, channelId: row.channel_id })) return null
   return {
     provider: row.provider,
     lastInboundAt: row.last_inbound_at,

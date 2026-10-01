@@ -76,7 +76,8 @@ export type EventInput = {
   /**
    * A caixa "Enviar confirmação ao paciente pelo WhatsApp" do modal (01/10).
    * Só `true` manda; sem ela (qualquer outro caminho) nada sai. Na edição, só
-   * vale se mudou dia/hora, agenda ou paciente — a action confere.
+   * vale se mudou dia/hora, o profissional (agenda de outra pessoa) ou o
+   * paciente — a action confere.
    */
   notifyPatient?: boolean
   /** Conversa de onde a recepção clicou "Agendar": a confirmação sai por ela. */
@@ -157,15 +158,23 @@ async function ensureDefaultCalendar(
 // o nome dele aqui.
 
 /** A agenda é desta conta? Devolve se ela sincroniza com o Google; null = não é. */
-async function agendaDaConta(accountId: string, calendarId: string): Promise<{ google: boolean } | null> {
+async function agendaDaConta(
+  accountId: string,
+  calendarId: string,
+): Promise<{ google: boolean; nome: string | null } | null> {
   const c = firstOrNull(
     await db
-      .select({ googleCalendarId: calendars.googleCalendarId, connectionId: calendars.connectionId })
+      .select({
+        googleCalendarId: calendars.googleCalendarId,
+        connectionId: calendars.connectionId,
+        // O nome diz se a troca de agenda trocou o PROFISSIONAL (confirmação, 01/10).
+        name: calendars.name,
+      })
       .from(calendars)
       .where(and(eq(calendars.id, calendarId), eq(calendars.accountId, accountId)))
       .limit(1),
   )
-  return c ? { google: Boolean(c.googleCalendarId && c.connectionId) } : null
+  return c ? { google: Boolean(c.googleCalendarId && c.connectionId), nome: c.name ?? null } : null
 }
 
 async function contatoDaConta(accountId: string, contactId: string): Promise<boolean> {
@@ -369,6 +378,8 @@ export async function updateEvent(
           googleEventId: calendarEvents.googleEventId,
           calGoogleId: calendars.googleCalendarId,
           connectionId: calendars.connectionId,
+          // Para a confirmação: trocar de agenda só avisa se trocou o profissional.
+          calName: calendars.name,
         })
         .from(calendarEvents)
         .leftJoin(calendars, and(eq(calendars.id, calendarEvents.calendarId), eq(calendars.accountId, ctx.accountId)))
@@ -378,11 +389,11 @@ export async function updateEvent(
     if (!antes) return { error: 'Compromisso não encontrado.' }
 
     // Agenda vazia/null não é troca (a coluna é NOT NULL): fica onde está.
-    let novaAgenda: { calendarId: string; google: boolean } | null = null
+    let novaAgenda: { calendarId: string; google: boolean; nome: string | null } | null = null
     if (patch.calendarId) {
       const agenda = await agendaDaConta(ctx.accountId, patch.calendarId)
       if (!agenda) return { error: 'Agenda não encontrada.' }
-      novaAgenda = { calendarId: patch.calendarId, google: agenda.google }
+      novaAgenda = { calendarId: patch.calendarId, google: agenda.google, nome: agenda.nome }
     }
     if (patch.contactId && !(await contatoDaConta(ctx.accountId, patch.contactId))) {
       return { error: 'Contato não encontrado.' }
@@ -470,21 +481,25 @@ export async function updateEvent(
     }
 
     // ✅ Confirmação ao paciente (01/10): só com a caixa marcada E se a edição
-    // mudou o que o paciente precisa saber — dia/hora, agenda (profissional)
-    // ou o próprio paciente. Corrigir o título não manda nada. Cancelado e
-    // horário passado são barrados lá dentro (decidirConfirmacao).
+    // mudou o que o paciente precisa saber — dia/hora, o profissional (agenda
+    // de OUTRA pessoa, no mesmo horário: tipo 'profissional') ou o próprio
+    // paciente. Corrigir o título não manda nada. Cancelado e horário passado
+    // são barrados lá dentro (decidirConfirmacao).
     let confirmacao: ConfirmacaoNaTela = null
     if (patch.notifyPatient === true) {
+      const agendaNova = plano.trocou ? novaAgenda : null
       const tipo = tipoDaConfirmacaoNaEdicao({
         antes: {
           startsAt: antes.startsAt,
           calendarId: antes.calendarId,
           contactId: antes.contactId ?? null,
+          nomeAgenda: antes.calName ?? null,
         },
         depois: {
           startsAt: patch.startsAt ?? antes.startsAt,
-          calendarId: plano.trocou && novaAgenda ? novaAgenda.calendarId : antes.calendarId,
+          calendarId: agendaNova ? agendaNova.calendarId : antes.calendarId,
           contactId: patch.contactId !== undefined ? patch.contactId || null : (antes.contactId ?? null),
+          nomeAgenda: agendaNova ? agendaNova.nome : (antes.calName ?? null),
         },
       })
       if (tipo) {

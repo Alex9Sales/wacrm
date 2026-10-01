@@ -37,9 +37,11 @@ import {
 } from '@/app/(dashboard)/agenda/actions'
 import {
   fraseDaConsulta,
+  impedimentoDaConfirmacao,
   tipoDaConfirmacaoNaEdicao,
   type TipoConfirmacao,
 } from '@/lib/agenda/confirmacao-agendamento'
+import { getPickerContact } from '@/components/contacts/contact-picker-actions'
 import { inkOn } from '@/lib/ui/ink-on'
 import { cn } from '@/lib/utils'
 import {
@@ -84,14 +86,23 @@ type Draft = {
   reminderBlock: MeetingReminderBlock | null
   /**
    * Caixa "Enviar confirmação ao paciente pelo WhatsApp" (01/10, pedido da
-   * Dra. Joyce). Nasce marcada; só aparece quando a conta ligou a opção e o
-   * salvamento muda algo que o paciente precisa saber.
+   * Dra. Joyce). Só aparece quando a conta ligou a opção e o salvamento muda
+   * algo que o paciente precisa saber. null = ninguém mexeu: vale o padrão do
+   * tipo (marcada; DESMARCADA quando só trocou o profissional — ver
+   * `caixaMarcada`).
    */
-  notifyPatient: boolean
+  notifyPatient: boolean | null
   /** Conversa de onde a recepção clicou "Agendar": a confirmação sai por ela. */
   conversationId: string | null
   /** Como o compromisso estava ao abrir (edição). null = compromisso novo. */
   original: { startsAt: string; calendarId: string; contactId: string | null } | null
+  /** Status do compromisso: cancelado não recebe confirmação (a caixa não promete). */
+  status: 'confirmed' | 'cancelled'
+  /**
+   * Grupo / "não perturbe" do paciente escolhido, para a caixa não prometer o
+   * que o servidor recusa (01/10, revisão). null = ainda não carregado.
+   */
+  contatoFlags: { optedOut: boolean; isGroup: boolean } | null
 }
 
 /** Preferências da conta para o modal (getAgendaPrefs). */
@@ -108,18 +119,34 @@ function draftIso(d: Pick<Draft, 'allDay' | 'start' | 'end'>): { startsAt: strin
 /**
  * Salvar este rascunho pede confirmação ao paciente? Mesma regra da action
  * (tipoDaConfirmacaoNaEdicao): novo com paciente → marcação; edição só se
- * mudou dia/hora, agenda ou paciente. Horário que já passou não oferece.
+ * mudou dia/hora, o profissional (agenda de outra pessoa) ou o paciente.
+ * Horário que já passou não oferece.
  */
-function confirmacaoDoRascunho(d: Draft): TipoConfirmacao | null {
+function confirmacaoDoRascunho(d: Draft, calendars: CalendarRow[]): TipoConfirmacao | null {
   if (!d.contactId) return null
   const iso = draftIso(d)
   if (!iso) return null
   if (new Date(d.allDay ? iso.endsAt : iso.startsAt).getTime() <= Date.now()) return null
   if (!d.original) return 'marcacao'
+  const nomeDe = (id: string) => calendars.find((c) => c.id === id)?.name ?? null
   return tipoDaConfirmacaoNaEdicao({
-    antes: d.original,
-    depois: { startsAt: iso.startsAt, calendarId: d.calendarId, contactId: d.contactId },
+    antes: { ...d.original, nomeAgenda: nomeDe(d.original.calendarId) },
+    depois: {
+      startsAt: iso.startsAt,
+      calendarId: d.calendarId,
+      contactId: d.contactId,
+      nomeAgenda: nomeDe(d.calendarId),
+    },
   })
+}
+
+/**
+ * A caixa está marcada? Quem mexeu manda; senão o padrão do tipo: marcada,
+ * menos quando só trocou o profissional (mesmo dia e hora) — aí o aviso é
+ * opcional e nasce desmarcado (01/10, revisão).
+ */
+function caixaMarcada(d: Draft, tipo: TipoConfirmacao | null): boolean {
+  return d.notifyPatient ?? tipo !== 'profissional'
 }
 
 /**
@@ -137,6 +164,15 @@ function avisarConfirmacao(c: ConfirmacaoNaTela | undefined): void {
   if (!c) return
   if (c === 'enviada') {
     toast.success('Confirmação enviada ao paciente.')
+    return
+  }
+  // Resultado incerto (o WhatsApp demorou): NÃO diz "não enviada" — pode ter
+  // chegado, e a recepção mandaria de novo (01/10, revisão).
+  if ('incerta' in c) {
+    toast.warning(`Confirmação ao paciente: ${c.incerta}.`, {
+      description: 'O compromisso foi salvo.',
+      duration: 12_000,
+    })
     return
   }
   toast.warning(`Confirmação não enviada: ${c.naoEnviada}.`, {
@@ -295,6 +331,26 @@ export function AgendaClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [calendars])
 
+  // Grupo / "não perturbe" do paciente do rascunho (01/10, revisão): a caixa
+  // da confirmação não pode prometer "Sai ao salvar" para quem o servidor
+  // recusa. O ContactPicker já traz as flags; aqui chegam as do paciente que
+  // veio só pelo id (link da conversa, compromisso aberto para editar).
+  const contatoSemFlags = draft?.contactId && !draft.contatoFlags ? draft.contactId : null
+  useEffect(() => {
+    if (!contatoSemFlags) return
+    let vivo = true
+    getPickerContact(contatoSemFlags)
+      .then((c) => {
+        if (!vivo || !c) return
+        const flags = { optedOut: c.optedOut === true, isGroup: c.isGroup === true }
+        setDraft((d) => (d && d.contactId === c.id && !d.contatoFlags ? { ...d, contatoFlags: flags } : d))
+      })
+      .catch(() => {})
+    return () => {
+      vivo = false
+    }
+  }, [contatoSemFlags])
+
   const onSyncGoogle = async () => {
     setSyncing(true)
     try {
@@ -378,9 +434,12 @@ export function AgendaClient() {
       description: '',
       contactId,
       reminderBlock: null,
-      notifyPatient: true,
+      notifyPatient: null,
       conversationId,
       original: null,
+      status: 'confirmed',
+      // Vindo da conversa, só o id: as flags chegam pelo efeito abaixo.
+      contatoFlags: null,
     })
   }
 
@@ -400,9 +459,11 @@ export function AgendaClient() {
       description: ev.description ?? '',
       contactId: ev.contactId ?? '',
       reminderBlock: ev.reminderBlock,
-      // Marcada: se a edição mudar dia/hora, a caixa já aparece ligada.
-      notifyPatient: true,
+      // Padrão do tipo: se a edição mudar dia/hora, a caixa já aparece ligada.
+      notifyPatient: null,
       conversationId: null,
+      status: ev.status,
+      contatoFlags: null,
       // O início "de antes" passa pelo MESMO caminho do salvar (campo da tela →
       // ISO): abrir e salvar sem mexer dá o mesmo valor, mesmo com segundos
       // vindos do Google ou dia inteiro gravado no fuso da conta. Comparar com
@@ -437,8 +498,12 @@ export function AgendaClient() {
     try {
       const { startsAt, endsAt } = iso
       // Só manda pedir a confirmação quando a caixa está NA TELA e marcada.
+      const tipo = confirmacaoDoRascunho(draft, calendars)
       const confirmar =
-        prefs?.confirmacaoAoAgendar === true && confirmacaoDoRascunho(draft) !== null && draft.notifyPatient
+        prefs?.confirmacaoAoAgendar === true &&
+        tipo !== null &&
+        impedimentoDaConfirmacao({ status: draft.status, contato: draft.contatoFlags }) === null &&
+        caixaMarcada(draft, tipo)
       const payload = {
         title: draft.title,
         calendarId: draft.calendarId || null,
@@ -1120,10 +1185,16 @@ function EventModal({
   // muda algo para o paciente. A prévia mostra o miolo da mensagem, no fuso
   // da conta, com o profissional da agenda escolhida.
   const tipoConfirmacao =
-    prefs?.confirmacaoAoAgendar && !timeError ? confirmacaoDoRascunho(draft) : null
+    prefs?.confirmacaoAoAgendar && !timeError ? confirmacaoDoRascunho(draft, calendars) : null
+  // Cancelado, grupo, "não perturbe": no lugar da caixa, o porquê (01/10,
+  // revisão) — antes a caixa prometia "Sai ao salvar" e o aviso desmentia.
+  const semConfirmacao = tipoConfirmacao
+    ? impedimentoDaConfirmacao({ status: draft.status, contato: draft.contatoFlags })
+    : null
+  const marcada = caixaMarcada(draft, tipoConfirmacao)
   const isoRascunho = tipoConfirmacao ? draftIso(draft) : null
   const previaConfirmacao =
-    tipoConfirmacao && isoRascunho && prefs
+    tipoConfirmacao && !semConfirmacao && isoRascunho && prefs
       ? fraseDaConsulta({
           tipo: tipoConfirmacao,
           nomeAgenda: calendars.find((c) => c.id === draft.calendarId)?.name,
@@ -1132,6 +1203,10 @@ function EventModal({
           tz: prefs.timezone,
         })
       : null
+  const rotuloCaixa =
+    tipoConfirmacao === 'profissional'
+      ? 'Avisar o paciente da troca de profissional pelo WhatsApp'
+      : 'Enviar confirmação ao paciente pelo WhatsApp'
 
   return (
     <div
@@ -1162,8 +1237,10 @@ function EventModal({
             <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
               <div className="min-w-0 text-xs">
+                {/* 01/10: "o lembrete", não "a confirmação" — confirmação é a
+                    mensagem da caixa no fim do formulário, que sai ao salvar. */}
                 <p className="font-medium text-foreground">
-                  Este contato não recebeu a confirmação —{' '}
+                  Este contato não recebeu o lembrete —{' '}
                   {rotuloDoBloqueio(draft.reminderBlock).curto}.
                 </p>
                 <p className="mt-0.5 text-muted-foreground">
@@ -1200,6 +1277,12 @@ function EventModal({
                   // Título em branco ganha o nome de quem é — o atendente digita
                   // o mínimo e o compromisso já fica reconhecível na agenda.
                   title: draft.title || (contact?.name ? contact.name : draft.title),
+                  // Grupo / "não perturbe" de quem foi escolhido (a caixa da
+                  // confirmação depende disso). Sem o contato, o efeito busca.
+                  contatoFlags:
+                    contact && contact.id === contactId
+                      ? { optedOut: contact.optedOut === true, isGroup: contact.isGroup === true }
+                      : null,
                 })
               }
               placeholder="Buscar por nome ou telefone..."
@@ -1313,18 +1396,16 @@ function EventModal({
           {previaConfirmacao && (
             <label className="flex items-start gap-3 rounded-lg border border-border px-3 py-2.5">
               <Checkbox
-                checked={draft.notifyPatient}
+                checked={marcada}
                 onCheckedChange={(v) => setDraft({ ...draft, notifyPatient: v === true })}
-                aria-label="Enviar confirmação ao paciente pelo WhatsApp"
+                aria-label={rotuloCaixa}
                 className="mt-0.5"
               />
               <span className="min-w-0">
-                <span className="block text-sm text-foreground">
-                  Enviar confirmação ao paciente pelo WhatsApp
-                </span>
+                <span className="block text-sm text-foreground">{rotuloCaixa}</span>
                 <span className="block text-[11px] text-muted-foreground">
-                  {draft.notifyPatient ? 'Sai ao salvar' : 'Não vai nada ao salvar'}
-                  {draft.notifyPatient && (
+                  {marcada ? 'Sai ao salvar' : 'Não vai nada ao salvar'}
+                  {marcada && (
                     <>
                       , na conversa do paciente: “{previaConfirmacao}”
                     </>
@@ -1332,6 +1413,13 @@ function EventModal({
                 </span>
               </span>
             </label>
+          )}
+          {/* Cancelado, grupo, "não perturbe": diz por que não vai, em vez de
+              uma caixa que o servidor recusaria (01/10, revisão). */}
+          {semConfirmacao && (
+            <p className="rounded-lg border border-border px-3 py-2.5 text-[11px] text-muted-foreground">
+              Nenhuma confirmação vai ao paciente ao salvar: {semConfirmacao}.
+            </p>
           )}
         </div>
 

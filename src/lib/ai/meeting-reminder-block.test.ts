@@ -92,8 +92,17 @@ describe('o texto que a pessoa lê', () => {
     // followup" não diz nada a uma recepcionista.
     for (const m of TODOS) {
       const aviso = avisoNaAgenda(m)
-      expect(aviso).toContain('não vai receber a confirmação')
+      // 01/10: "lembrete", não "confirmação" — confirmação agora é a mensagem
+      // que sai na hora de agendar, e os dois avisos se contradiziam.
+      expect(aviso).toContain('não vai receber o lembrete')
       expect(aviso).not.toMatch(/null|undefined|error|Error/)
+    }
+  })
+
+  it('nenhum texto do lembrete chama o lembrete de "confirmação"', () => {
+    for (const m of TODOS) {
+      const r = rotuloDoBloqueio(m)
+      expect(`${avisoNaAgenda(m)} ${r.curto} ${r.explicacao} ${r.comoResolver}`).not.toMatch(/confirmação/i)
     }
   })
 

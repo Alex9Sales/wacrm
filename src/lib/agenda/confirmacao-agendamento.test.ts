@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
   decidirConfirmacao,
   fraseDaConsulta,
+  impedimentoDaConfirmacao,
+  nomeParaSaudacao,
   profissionalDaAgenda,
   quandoDaConsulta,
   textoDaConfirmacao,
@@ -30,8 +32,52 @@ describe('quando a edição pede confirmação', () => {
     ).toBe('remarcacao')
   })
 
-  it('mudou a agenda (o profissional): remarcação', () => {
-    expect(tipoDaConfirmacaoNaEdicao({ antes, depois: { ...antes, calendarId: 'cal-b' } })).toBe('remarcacao')
+  describe('mudou SÓ a agenda (mesmo dia e hora) — 01/10, revisão', () => {
+    const comNomes = { ...antes, nomeAgenda: 'Dra. Fulana Exemplo' }
+
+    it('agenda de outro profissional: "profissional", nunca "remarcação"', () => {
+      expect(
+        tipoDaConfirmacaoNaEdicao({
+          antes: comNomes,
+          depois: { ...comNomes, calendarId: 'cal-b', nomeAgenda: 'Dr. Beltrano Teste' },
+        }),
+      ).toBe('profissional')
+    })
+
+    it('agenda nova genérica (Minha agenda, e-mail, sala): nada a dizer ao paciente', () => {
+      for (const nomeAgenda of ['Minha agenda', 'clinica.exemplo@gmail.com', 'Radiologia', 'Implantes', null]) {
+        expect(
+          tipoDaConfirmacaoNaEdicao({ antes: comNomes, depois: { ...comNomes, calendarId: 'cal-b', nomeAgenda } }),
+        ).toBeNull()
+      }
+    })
+
+    it('o mesmo profissional em outra agenda ("Agenda da Dra. X" → "Dra. X"): nada', () => {
+      expect(
+        tipoDaConfirmacaoNaEdicao({
+          antes: comNomes,
+          depois: { ...comNomes, calendarId: 'cal-b', nomeAgenda: 'Agenda da Dra. Fulana Exemplo' },
+        }),
+      ).toBeNull()
+    })
+
+    it('da agenda genérica para a do profissional: avisa quem é', () => {
+      expect(
+        tipoDaConfirmacaoNaEdicao({
+          antes: { ...antes, nomeAgenda: 'Minha agenda' },
+          depois: { ...antes, calendarId: 'cal-b', nomeAgenda: 'Dr. Beltrano Teste' },
+        }),
+      ).toBe('profissional')
+    })
+
+    it('mudou o dia E a agenda: é remarcação', () => {
+      expect(
+        tipoDaConfirmacaoNaEdicao({
+          antes: comNomes,
+          depois: { ...comNomes, calendarId: 'cal-b', nomeAgenda: 'Dr. Beltrano Teste', startsAt: '2026-10-09T17:00:00.000Z' },
+        }),
+      ).toBe('remarcacao')
+    })
   })
 
   it('ligou o paciente agora: para ele é marcação', () => {
@@ -113,16 +159,44 @@ describe('se o compromisso pode receber a confirmação', () => {
   })
 })
 
+describe('o modal sabe, antes de salvar, que não vai confirmação (01/10, revisão)', () => {
+  const contato = { isGroup: false, optedOut: false }
+
+  it('cancelado, grupo e "não perturbe": diz o porquê (mesmo texto do servidor)', () => {
+    expect(impedimentoDaConfirmacao({ status: 'cancelled', contato })).toBe('o compromisso está cancelado')
+    expect(impedimentoDaConfirmacao({ status: 'confirmed', contato: { ...contato, isGroup: true } })).toBe(
+      'o contato é um grupo, não uma pessoa',
+    )
+    expect(impedimentoDaConfirmacao({ status: 'confirmed', contato: { ...contato, optedOut: true } })).toBe(
+      'o paciente pediu para não receber mensagens (não perturbe)',
+    )
+  })
+
+  it('nada impede: null', () => {
+    expect(impedimentoDaConfirmacao({ status: 'confirmed', contato })).toBeNull()
+  })
+
+  it('contato ainda carregando (null) não esconde a caixa: o servidor confere', () => {
+    expect(impedimentoDaConfirmacao({ status: 'confirmed', contato: null })).toBeNull()
+  })
+})
+
 describe('o nome da agenda vira "com {profissional}"?', () => {
-  it('nome de profissional: vai como está (espaços arrumados)', () => {
-    expect(profissionalDaAgenda('Dra. Fulana  Exemplo')).toBe('Dra. Fulana Exemplo')
+  it('Dr./Dra. na frente (com ou sem ponto): com o artigo certo', () => {
+    expect(profissionalDaAgenda('Dra. Fulana  Exemplo')).toBe('a Dra. Fulana Exemplo')
+    expect(profissionalDaAgenda('Dr. Beltrano Teste')).toBe('o Dr. Beltrano Teste')
+    expect(profissionalDaAgenda('Dra Fulana')).toBe('a Dra. Fulana')
+    expect(profissionalDaAgenda('Dr Beltrano')).toBe('o Dr. Beltrano')
+  })
+
+  it('nome e sobrenome de gente, sem título: vai como está, sem artigo', () => {
     expect(profissionalDaAgenda('Beltrano Teste')).toBe('Beltrano Teste')
   })
 
   it('"Agenda do/da/-" na frente: fica só o nome', () => {
-    expect(profissionalDaAgenda('Agenda do Dr. Exemplo')).toBe('Dr. Exemplo')
-    expect(profissionalDaAgenda('Agenda - Fulana')).toBe('Fulana')
-    expect(profissionalDaAgenda('Agenda Dr. Exemplo')).toBe('Dr. Exemplo')
+    expect(profissionalDaAgenda('Agenda do Dr. Exemplo')).toBe('o Dr. Exemplo')
+    expect(profissionalDaAgenda('Agenda - Fulana Teste')).toBe('Fulana Teste')
+    expect(profissionalDaAgenda('Agenda Dr. Exemplo')).toBe('o Dr. Exemplo')
   })
 
   it('genérico (e-mail, Minha agenda, Google, vazio, sala/serviço): sem profissional', () => {
@@ -141,6 +215,29 @@ describe('o nome da agenda vira "com {profissional}"?', () => {
       'Avaliação',
       'Feriados no Brasil',
       '12345',
+      'Dr.',
+    ]) {
+      expect(profissionalDaAgenda(nome)).toBeNull()
+    }
+  })
+
+  it('serviço não é gente — nem com uma palavra, nem com duas (01/10, revisão)', () => {
+    // Regra positiva: só cita Dr./Dra. ou nome e sobrenome de pessoa.
+    for (const nome of [
+      'Implantes',
+      'Limpeza',
+      'Ortodontia',
+      'Clareamento',
+      'Retorno',
+      'Encaixe',
+      'Contatos',
+      'Família',
+      'Estética Facial',
+      'Clareamento Dental',
+      'Implantes Dentários',
+      'Ortodontia - Dra. Fulana',
+      // Uma palavra só: muito mais vezes serviço do que gente. Na dúvida, sem.
+      'Fulana',
     ]) {
       expect(profissionalDaAgenda(nome)).toBeNull()
     }
@@ -195,22 +292,63 @@ describe('o texto que o paciente recebe', () => {
 
   it('marcação', () => {
     expect(textoDaConfirmacao({ ...base, tipo: 'marcacao' })).toBe(
-      'Olá, Maria! Sua consulta com Dr. Exemplo está confirmada para quinta-feira, 08/10/2026, às 14h. Qualquer dúvida, é só responder por aqui.',
+      'Olá, Maria! Sua consulta com o Dr. Exemplo está confirmada para quinta-feira, 08/10/2026, às 14h. Qualquer dúvida, é só responder por aqui.',
     )
   })
 
   it('remarcação', () => {
     expect(textoDaConfirmacao({ ...base, tipo: 'remarcacao' })).toBe(
-      'Olá, Maria! Sua consulta com Dr. Exemplo foi remarcada para quinta-feira, 08/10/2026, às 14h. Qualquer dúvida, é só responder por aqui.',
+      'Olá, Maria! Sua consulta com o Dr. Exemplo foi remarcada para quinta-feira, 08/10/2026, às 14h. Qualquer dúvida, é só responder por aqui.',
     )
+  })
+
+  it('a Dra. leva "a"', () => {
+    expect(textoDaConfirmacao({ ...base, tipo: 'marcacao', nomeAgenda: 'Dra. Fulana Exemplo' })).toContain(
+      'Sua consulta com a Dra. Fulana Exemplo está confirmada',
+    )
+  })
+
+  it('só trocou o profissional: o mesmo horário como referência e quem atende agora — nunca "remarcada"', () => {
+    const t = textoDaConfirmacao({ ...base, tipo: 'profissional', nomeAgenda: 'Dra. Fulana Exemplo' })
+    expect(t).toBe(
+      'Olá, Maria! Sua consulta de quinta-feira, 08/10/2026, às 14h, agora é com a Dra. Fulana Exemplo. Qualquer dúvida, é só responder por aqui.',
+    )
+    expect(t).not.toMatch(/remarcada/)
+  })
+
+  it('serviço no nome da agenda não vira "com Implantes"', () => {
+    for (const nomeAgenda of ['Implantes', 'Limpeza', 'Ortodontia']) {
+      expect(textoDaConfirmacao({ ...base, tipo: 'marcacao', nomeAgenda })).toBe(
+        'Olá, Maria! Sua consulta está confirmada para quinta-feira, 08/10/2026, às 14h. Qualquer dúvida, é só responder por aqui.',
+      )
+    }
   })
 
   it('dia inteiro: sem "às"', () => {
     expect(
       textoDaConfirmacao({ ...base, tipo: 'marcacao', startsAt: '2026-10-08T03:00:00.000Z', allDay: true }),
     ).toBe(
-      'Olá, Maria! Sua consulta com Dr. Exemplo está confirmada para quinta-feira, 08/10/2026. Qualquer dúvida, é só responder por aqui.',
+      'Olá, Maria! Sua consulta com o Dr. Exemplo está confirmada para quinta-feira, 08/10/2026. Qualquer dúvida, é só responder por aqui.',
     )
+  })
+
+  it('nome do PERFIL do WhatsApp que é apelido ("Mãe", "Deus é fiel") vira "Olá!"', () => {
+    for (const nomeContato of ['Mãe', 'Amor ❤️', 'Deus é fiel 🙏', 'Jesus', 'Bebê', 'Princesa', 'Eu', 'Família Exemplo']) {
+      expect(textoDaConfirmacao({ ...base, tipo: 'marcacao', nomeContato, nameSource: 'whatsapp' })).toMatch(
+        /^Olá! Sua consulta/,
+      )
+    }
+  })
+
+  it('perfil do WhatsApp com nome de gente: chama pelo nome', () => {
+    expect(textoDaConfirmacao({ ...base, tipo: 'marcacao', nameSource: 'whatsapp' })).toMatch(/^Olá, Maria! /)
+  })
+
+  it('nome digitado no CRM manda, mesmo se parecer apelido', () => {
+    // Quem cadastrou escolheu o nome; a lista de apelidos é só para o perfil.
+    expect(nomeParaSaudacao('Jesus Exemplo', 'crm')).toBe('Jesus')
+    expect(nomeParaSaudacao('Jesus Exemplo', null)).toBe('Jesus')
+    expect(nomeParaSaudacao('Jesus Exemplo', 'whatsapp')).toBe('')
   })
 
   it('agenda genérica: tira o "com {profissional}"', () => {
@@ -232,7 +370,7 @@ describe('o texto que o paciente recebe', () => {
   })
 
   it('sem travessão em nenhum caso', () => {
-    for (const tipo of ['marcacao', 'remarcacao'] as const) {
+    for (const tipo of ['marcacao', 'remarcacao', 'profissional'] as const) {
       for (const allDay of [false, true]) {
         expect(textoDaConfirmacao({ ...base, tipo, allDay })).not.toMatch(/[—–]/)
       }

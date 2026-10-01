@@ -84,7 +84,7 @@ export function rotuloDoBloqueio(motivo: MeetingReminderBlock): {
       return {
         curto: 'sem WhatsApp',
         explicacao:
-          'Este contato não tem nenhuma conversa aberta, então não há por onde mandar a confirmação.',
+          'Este contato não tem nenhuma conversa aberta, então não há por onde mandar o lembrete.',
         comoResolver: 'Mande uma mensagem para ele uma vez — a partir daí o lembrete sai sozinho.',
       }
     case 'ia_pausada':
@@ -92,7 +92,7 @@ export function rotuloDoBloqueio(motivo: MeetingReminderBlock): {
         curto: 'IA pausada nesta conversa',
         explicacao:
           'A assistente foi desligada na conversa deste contato, e lembrete não sai onde alguém desligou a IA de propósito.',
-        comoResolver: 'Reative a IA na conversa, se quiser que ele receba a confirmação.',
+        comoResolver: 'Reative a IA na conversa, se quiser que ele receba o lembrete.',
       }
     case 'sem_template':
       return {
@@ -212,7 +212,12 @@ export function recomecoDoLembrete(
  *
  * Nunca diz só "erro": diz que o PACIENTE não será avisado, que é a
  * consequência que importa para quem está olhando.
+ *
+ * 01/10: dizia "a confirmação". Agora "confirmação" é a mensagem que sai NA
+ * HORA de agendar (lib/agenda/confirmacao-agendamento.ts), e os dois avisos se
+ * contradiziam ("Confirmação enviada" ao salvar, "não vai receber a
+ * confirmação" no compromisso). Isto aqui é do LEMBRETE.
  */
 export function avisoNaAgenda(motivo: MeetingReminderBlock): string {
-  return `Este contato não vai receber a confirmação — ${rotuloDoBloqueio(motivo).curto}.`
+  return `Este contato não vai receber o lembrete — ${rotuloDoBloqueio(motivo).curto}.`
 }

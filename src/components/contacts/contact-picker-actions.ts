@@ -21,6 +21,10 @@ export interface PickerContact {
   phone: string | null
   email: string | null
   code: string | null
+  /** "Não perturbe" — a Agenda não oferece a confirmação ao paciente (01/10). */
+  optedOut?: boolean
+  /** Contato de grupo — idem: não há uma pessoa para confirmar. */
+  isGroup?: boolean
 }
 
 const pickerCols = {
@@ -29,6 +33,8 @@ const pickerCols = {
   phone: contacts.phone,
   email: contacts.email,
   code: sql<string | null>`NULLIF((${contacts.customerCodes})[1], '')`,
+  optedOut: contacts.optedOut,
+  isGroup: contacts.isGroup,
 }
 
 /**

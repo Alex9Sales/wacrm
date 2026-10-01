@@ -836,14 +836,26 @@ export async function sendMessageToConversation(
     }
   }
 
-  await db
-    .update(conversations)
-    .set({
-      lastMessageText: storedText || `[${messageType}]`,
-      lastMessageAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    })
-    .where(eq(conversations.id, conversationId));
+  // 01/10 (revisão da confirmação ao agendar): daqui para baixo a mensagem JÁ
+  // SAIU e JÁ ESTÁ gravada. Um UPDATE que falhasse lançava Error cru, e quem
+  // chamou lia "o envio falhou" com o cliente já tendo recebido — e mandava de
+  // novo. A prévia da lista fica desatualizada até a próxima mensagem; o log é
+  // o rastro.
+  try {
+    await db
+      .update(conversations)
+      .set({
+        lastMessageText: storedText || `[${messageType}]`,
+        lastMessageAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(conversations.id, conversationId));
+  } catch (err) {
+    console.error(
+      '[send-message] mensagem enviada e gravada, mas atualizar a conversa falhou:',
+      err instanceof Error ? err.message : err
+    );
+  }
 
   // Pause any active Flow run for this contact — the agent stepping in
   // is the strongest "yield, human is here" signal. Best-effort.
