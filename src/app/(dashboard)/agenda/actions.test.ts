@@ -108,10 +108,13 @@ describe('trocar o compromisso de agenda', () => {
     const res = await updateEvent('ev-1', { ...INPUT, calendarId: 'cal-b' })
 
     expect(res).toEqual({ error: null })
-    expect(passos()).toEqual(['update', 'google:apagar-na-antiga', 'google:create'])
+    // O 2º update cancela a cópia que o import pode ter trazido da agenda antiga.
+    expect(passos()).toEqual(['update', 'google:apagar-na-antiga', 'update', 'google:create'])
     expect(gravado()).toMatchObject({ calendarId: 'cal-b', googleEventId: null, source: 'local' })
     // Apaga pela agenda e pelo id que ESTAVAM gravados.
     expect(h.apagar).toHaveBeenCalledWith('acc-1', 'cal-a', 'g-a')
+    const updates = h.state.calls.filter((c) => c.op === 'update')
+    expect(updates[1]?.set).toMatchObject({ status: 'cancelled' })
   })
 
   it('Google → local: só apaga na antiga', async () => {
@@ -119,7 +122,7 @@ describe('trocar o compromisso de agenda', () => {
 
     await updateEvent('ev-1', { ...INPUT, calendarId: 'cal-local' })
 
-    expect(passos()).toEqual(['update', 'google:apagar-na-antiga'])
+    expect(passos()).toEqual(['update', 'google:apagar-na-antiga', 'update'])
     expect(gravado()).toMatchObject({ calendarId: 'cal-local', googleEventId: null })
   })
 

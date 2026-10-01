@@ -76,6 +76,16 @@ type Draft = {
   reminderBlock: MeetingReminderBlock | null
 }
 
+/**
+ * A mensagem que a action devolveu, se for de gente ("Agenda não encontrada.");
+ * erro técnico (SQL do Drizzle, stack) vira o texto padrão.
+ */
+function erroLegivel(msg: string, padrao: string): string {
+  return /failed query|insert into|update "|select |error:|\bat\s/i.test(msg) || msg.length > 160
+    ? padrao
+    : msg
+}
+
 export function AgendaClient() {
   const [anchor, setAnchor] = useState(() => new Date())
   const [calendars, setCalendars] = useState<CalendarRow[]>([])
@@ -225,7 +235,8 @@ export function AgendaClient() {
       if (r.error) toast.error(r.error)
       else {
         toast.success(`Sincronizado (${r.imported} novo(s) evento(s))`)
-        await load()
+        // loadRef: o sync leva segundos e a pessoa pode ter trocado de mês.
+        await loadRef.current()
       }
     } finally {
       setSyncing(false)
@@ -251,7 +262,7 @@ export function AgendaClient() {
     else {
       toast.success('Google desconectado')
       setGoogle((g) => (g ? { ...g, connected: false, email: null } : g))
-      await load()
+      await loadRef.current()
     }
   }
 
@@ -359,7 +370,7 @@ export function AgendaClient() {
         // ignorado — o modal fechava com "Evento criado." e nada tinha sido
         // gravado. Agora o erro aparece e o modal fica aberto, com o que foi
         // digitado, para tentar de novo.
-        toast.error(r.error)
+        toast.error(erroLegivel(r.error, 'Não foi possível salvar o evento. Tente de novo.'))
         return
       }
       setDraft(null)
@@ -390,7 +401,11 @@ export function AgendaClient() {
     if (!window.confirm(`Excluir o evento "${draft.title || 'sem título'}"? Não dá pra desfazer.`)) return
     setSaving(true)
     try {
-      await deleteEvent(draft.id)
+      const r = await deleteEvent(draft.id)
+      if (r?.error) {
+        toast.error(erroLegivel(r.error, 'Não foi possível excluir o evento.'))
+        return
+      }
       setDraft(null)
       await load()
       toast.success('Evento excluído.')
@@ -769,7 +784,7 @@ function TimeGrid({
       {/* Altura da tela (01/10): presa em 560px, a grade mostrava só até ~15h–17h
           e a clínica atende até 20h. O que sobra (~16rem) é o cabeçalho do
           CRM, o título da página, a barra e o filtro de agendas. */}
-      <div ref={scrollRef} className="h-[calc(100dvh-16rem)] min-h-[420px] overflow-auto bg-card">
+      <div ref={scrollRef} className="h-[max(560px,calc(100dvh-16rem))] overflow-auto bg-card">
         <div className={isWeek ? 'min-w-[728px]' : undefined}>
           {(isWeek || hasAllDay) && (
             <div className="sticky top-0 z-20 border-b border-border bg-card">

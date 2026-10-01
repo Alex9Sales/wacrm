@@ -6,7 +6,7 @@
 // v1: escopo por conta (time vê a agenda da conta); owner_user_id marca o dono.
 // ============================================================
 
-import { and, asc, eq, gte, lte, sql } from 'drizzle-orm'
+import { and, asc, eq, gte, lte, ne, sql } from 'drizzle-orm'
 import { db, calendars, calendarEvents, calendarConnections, contacts, deals, user } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
@@ -371,6 +371,22 @@ export async function updateEvent(
     if (plano.apagarNaAntiga && antes.googleEventId) {
       try {
         await apagarEventoNoGoogle(ctx.accountId, antes.calendarId, antes.googleEventId)
+        // Corrida com o import: se ele leu a agenda antiga antes do UPDATE, o
+        // evento voltou como compromisso NOVO (ligado ao paciente pelo telefone
+        // do bloco) e mandaria lembrete do horário antigo. Já não existe no
+        // Google: cancela a cópia.
+        await db
+          .update(calendarEvents)
+          .set({ status: 'cancelled', updatedAt: sql`now()` })
+          .where(
+            and(
+              eq(calendarEvents.accountId, ctx.accountId),
+              eq(calendarEvents.calendarId, antes.calendarId),
+              eq(calendarEvents.googleEventId, antes.googleEventId),
+              ne(calendarEvents.id, id),
+              eq(calendarEvents.status, 'confirmed'),
+            ),
+          )
       } catch (err) {
         // Best-effort, como todo push: a troca no CRM fica. O evento antigo
         // pode ficar no Google — o log é o rastro.

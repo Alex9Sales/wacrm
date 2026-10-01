@@ -266,7 +266,10 @@ export async function importGoogleEvents(
         const values = {
           title: ev.summary?.trim() || '(sem título)',
           description: ev.description ?? null,
-          location: ev.location ?? null,
+          // O link do Meet mora no hangoutLink, não no location: sem isso o import
+          // apagava a sala que o CRM tinha guardado (e com ela o sinal de que é
+          // reunião com convidados — event-patient.ts não enriquece essas).
+          location: ev.location ?? ev.hangoutLink ?? null,
           startsAt: times.startsAt,
           endsAt: times.endsAt,
           allDay: times.allDay,
