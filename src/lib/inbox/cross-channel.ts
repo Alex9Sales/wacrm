@@ -17,6 +17,7 @@ import { and, desc, eq, ne, sql } from 'drizzle-orm'
 
 import { db, channels, contacts, conversations, messages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
+import { publishEvent } from '@/lib/events/publish'
 
 /** Uma conversa desse mesmo contato em OUTRO canal. */
 export interface OtherChannelTouch {
@@ -186,6 +187,13 @@ export async function noteCrossChannelActivity(args: {
       contentText: texto,
       isInternal: true,
       status: 'sent',
+    })
+    // A nota nasce DEPOIS do aviso da mensagem do cliente — sem um aviso
+    // próprio, só aparecia na tela com F5 (01/10, GoLink).
+    await publishEvent(args.accountId, {
+      type: 'message.received',
+      conversationId: args.conversationId,
+      fromMe: true,
     })
     return true
   } catch (err) {
