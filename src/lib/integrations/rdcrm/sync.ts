@@ -20,11 +20,18 @@
 //   • negociação do lead que já ANDOU no RD (fora da etapa de entrada) nunca é
 //     puxada de volta pro pré-vendas: registra e não mexe;
 //   • negócio FECHADO no RD não reabre pela API — registra a divergência.
+// E em 01/10 (Zelo):
+//   • card COPIADO entre funis espera o card de origem se ligar, e o negócio
+//     novo herda campanha, fonte e campos personalizados do negócio de origem;
+//   • 1ª ligação com negócio que já estava ADIANTE no RD traz o card daqui pra
+//     frente, em vez de puxar o RD de volta;
+//   • comentário da perda vai na nota da perda;
+//   • tarefas concluídas (toques de cadência) vão pela fila `crm_task_outbox`.
 // Sem 'server-only' — roda no worker.
 // ============================================================
 
 import { randomBytes } from 'crypto'
-import { and, asc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 
 import {
   calendarEvents,
@@ -32,7 +39,9 @@ import {
   crmDealLinks,
   crmIntegrations,
   crmSyncOutbox,
+  customFields,
   db,
+  dealCustomValues,
   dealEvents,
   deals,
   leadAdSources,
@@ -45,25 +54,35 @@ import { decrypt, encrypt } from '@/lib/whatsapp/encryption'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { formatMeetingWhen } from '@/lib/ai/schedule-actions'
 import { claimOnce, kvDel } from '@/lib/ai/reply-marker'
-import { rdCrm, rid, type RdContact, type RdCrmClient, type RdDeal } from './client'
+import { factForFieldName, isGenericOrigin } from '@/lib/leads/lead-facts'
+import { isRdRejection, RdCrmError, rdCrm, rid, type RdContact, type RdCrmClient, type RdDeal } from './client'
 import {
+  buildRdDealBody,
   canonName,
   indexRdStages,
+  inheritFromRdDeal,
   localStageFor,
   localStatusOf,
   lostReasonIdFor,
   phoneVariants,
   planRdUpdate,
+  rdLostNote,
+  rdOriginNote,
   rdStageFor,
   rdStatusOf,
   type LocalFunnel,
+  type RdInherited,
   type RdStageRef,
 } from './mapping'
+import { pushTaskToRd, rdTaskDateHour } from './task-outbox'
 
 export const RD_CRM_PROVIDER = 'rdstation_crm'
 const CONTEXT_TTL_MS = 5 * 60_000
 /** Lead que veio do RD Marketing: espera o negócio que o RD cria sozinho. */
 const WAIT_FOR_RD_DEAL_MS = 10 * 60_000
+/** Card COPIADO de outro espera o de origem se ligar no máximo isto (ver
+ *  originStillLinking) — 3× a espera do RD Marketing, folga pras tentativas. */
+const ORIGIN_WAIT_CAP_MS = 3 * WAIT_FOR_RD_DEAL_MS
 /** Negócio de entrada do RD "é deste lead" se nasceu até 3 dias do card daqui. */
 const LINK_WINDOW_MS = 3 * 86_400_000
 /** Junta mudanças seguidas do mesmo card (IA move + abre card novo). */
@@ -74,6 +93,13 @@ const TICK_LOCK_KEY = 'crm-sync:tick-lock'
 const TICK_LOCK_TTL_S = 240
 /** Rodada para de pegar card novo depois disso (bem antes da trava vencer). */
 const TICK_BUDGET_MS = 60_000
+/** Fila de tarefas (drainTaskOutbox): por rodada, no máximo isto… */
+const TASK_BATCH = 5
+/** …e pelo menos esta fatia de tempo, mesmo que a fila de cards tenha gasto
+ *  o orçamento todo (senão tarefa nunca sairia num dia de muito card). */
+const TASK_MIN_SLICE_MS = 15_000
+const TASK_MAX_ATTEMPTS = 10
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export interface RdIntegration {
   id: string
@@ -205,6 +231,8 @@ type LocalDeal = {
   assignedTo: string | null
   contactId: string | null
   origin: string | null
+  /** "Fonte" do card (texto livre) — vai na anotação de origem do negócio novo. */
+  source: string | null
   createdAt: string | null
   pipelineName: string
   stageName: string
@@ -223,6 +251,7 @@ async function loadLocalDeal(accountId: string, dealId: string): Promise<LocalDe
         assignedTo: deals.assignedTo,
         contactId: deals.contactId,
         origin: deals.origin,
+        source: deals.source,
         createdAt: deals.createdAt,
         pipelineName: pipelines.name,
         stageName: pipelineStages.name,
@@ -343,6 +372,114 @@ async function rdOwnerFor(integ: RdIntegration, ctx: Ctx, assignedTo: string | n
   return integ.config.defaultOwnerExternalId ?? null
 }
 
+// ------------------------------------------------------------
+// Card nascido de OUTRO card (cópia entre funis: a IA ganha o pré-vendas e
+// abre o card do comercial — cross-funnel.ts grava `created` com fromDealId).
+// ------------------------------------------------------------
+
+/** Id do card de ORIGEM, quando este card é cópia de outro; senão null. */
+async function originDealIdOf(accountId: string, dealId: string): Promise<string | null> {
+  const ev = firstOrNull(
+    await db
+      .select({ fromDealId: sql<string | null>`${dealEvents.data}->>'fromDealId'` })
+      .from(dealEvents)
+      .where(
+        and(
+          eq(dealEvents.accountId, accountId),
+          eq(dealEvents.dealId, dealId),
+          eq(dealEvents.type, 'created'),
+          sql`(${dealEvents.data}->>'fromDealId') IS NOT NULL`,
+        ),
+      )
+      .orderBy(desc(dealEvents.createdAt))
+      .limit(1),
+  )
+  const id = ev?.fromDealId ?? null
+  return id && UUID_RE.test(id) && id !== dealId ? id : null
+}
+
+/**
+ * O card de ORIGEM ainda não terminou a própria ida pro RD (sem vínculo e com
+ * mudança na fila)? Então ESTE card espera — o de origem tem que se ligar
+ * primeiro.
+ *
+ * Zelo 01/10: lead do RD Marketing chega no pré-vendas e o espelho espera até
+ * 10 min (WAIT_FOR_RD_DEAL_MS) pelo negócio que o próprio RD cria. Se a IA
+ * qualifica rápido e abre o card do comercial nesse meio-tempo, o card NOVO
+ * sincronizava antes: achava o negócio do RD Marketing (etapa de entrada,
+ * nascido agora) e o levava pro comercial; o card de origem, sem negócio livre,
+ * criava OUTRO no pré-vendas — pré-vendas duplicado no RD.
+ *
+ * "Ainda na fila" cobre a espera do RD Marketing (enquanto espera, as linhas do
+ * card de origem ficam pendentes) e também o debounce e as novas tentativas
+ * depois de erro; acaba sozinho, porque a fila do card de origem sempre termina
+ * (liga, pula ou desiste em MAX_ATTEMPTS). Card de origem que já foi processado
+ * sem se ligar (funil sem par no RD, negócio "do time") não segura ninguém.
+ */
+async function originStillLinking(accountId: string, originDealId: string): Promise<boolean> {
+  const linked = firstOrNull(
+    await db
+      .select({ id: crmDealLinks.id })
+      .from(crmDealLinks)
+      .where(and(eq(crmDealLinks.provider, RD_CRM_PROVIDER), eq(crmDealLinks.dealId, originDealId)))
+      .limit(1),
+  )
+  if (linked) return false
+  const pending = firstOrNull(
+    await db
+      .select({ id: crmSyncOutbox.id })
+      .from(crmSyncOutbox)
+      .where(
+        and(
+          eq(crmSyncOutbox.accountId, accountId),
+          eq(crmSyncOutbox.dealId, originDealId),
+          isNull(crmSyncOutbox.processedAt),
+        ),
+      )
+      .limit(1),
+  )
+  return !!pending
+}
+
+/**
+ * Campanha, fonte e campos personalizados do negócio RD do card de ORIGEM.
+ * Sem vínculo, ou o negócio de lá sumiu (404) / RD fora do ar: nada a herdar —
+ * o negócio novo nasce como sempre nasceu, nunca deixa de nascer por isso.
+ */
+async function inheritFromOrigin(api: RdCrmClient, originDealId: string): Promise<RdInherited | null> {
+  const link = firstOrNull(
+    await db
+      .select({ externalId: crmDealLinks.externalId })
+      .from(crmDealLinks)
+      .where(and(eq(crmDealLinks.provider, RD_CRM_PROVIDER), eq(crmDealLinks.dealId, originDealId)))
+      .limit(1),
+  )
+  if (!link) return null
+  const rd = await api.getDeal(link.externalId).catch((err) => {
+    console.warn(
+      `[rd-crm] negócio de origem ${link.externalId} não lido — card novo nasce sem herdar campanha/fonte:`,
+      err instanceof Error ? err.message : err,
+    )
+    return null
+  })
+  const inherit = inheritFromRdDeal(rd)
+  return inherit.campaignId || inherit.dealSourceId || inherit.customFields.length ? inherit : null
+}
+
+/** Valor ÚTIL do campo personalizado "Campanha" do card (genérico = nada). */
+async function campaignFieldOf(dealId: string): Promise<string | null> {
+  const rows = await db
+    .select({ fieldName: customFields.fieldName, value: dealCustomValues.value })
+    .from(dealCustomValues)
+    .innerJoin(customFields, eq(customFields.id, dealCustomValues.customFieldId))
+    .where(eq(dealCustomValues.dealId, dealId))
+  for (const r of rows) {
+    const v = (r.value ?? '').trim()
+    if (v && factForFieldName(r.fieldName) === 'campanha' && !isGenericOrigin(v)) return v
+  }
+  return null
+}
+
 async function createRdDeal(
   api: RdCrmClient,
   integ: RdIntegration,
@@ -350,7 +487,8 @@ async function createRdDeal(
   deal: LocalDeal,
   target: RdStageRef,
   rdContact: RdContact | null,
-): Promise<RdDeal> {
+  originDealId: string | null,
+): Promise<{ deal: RdDeal; note: string }> {
   const c = deal.contactId
     ? firstOrNull(
         await db
@@ -362,21 +500,49 @@ async function createRdDeal(
     : null
   const name = (c?.name || deal.title.replace(/^Lead\s+—\s+/i, '') || 'Lead').trim().slice(0, 200)
   const owner = await rdOwnerFor(integ, ctx, deal.assignedTo)
-  const body: Record<string, unknown> = {
-    deal: { name: name.length >= 2 ? name : `Lead ${name}`, deal_stage_id: target.stageId, ...(owner ? { user_id: owner } : {}) },
+  const inherit = originDealId ? await inheritFromOrigin(api, originDealId) : null
+  const base = {
+    name,
+    stageId: target.stageId,
+    ownerId: owner,
+    // Contato: o que JÁ existe no RD entra pelo PUT (não duplica); sem contato
+    // lá, cria junto com o negócio.
+    newContact: !rdContact && c ? { email: c.email, phone: c.phone } : null,
+    inherit,
   }
-  // Contato: o que JÁ existe no RD entra pelo PUT (não duplica); sem contato
-  // lá, cria junto com o negócio.
-  if (!rdContact && c && (c.email || c.phone)) {
-    body.contacts = [
-      {
-        name: name.length >= 2 ? name : `Lead ${name}`,
-        ...(c.email ? { emails: [{ email: c.email }] } : {}),
-        ...(c.phone ? { phones: [{ phone: `+${c.phone.replace(/\D/g, '')}`, type: 'cellphone' }] } : {}),
-      },
-    ]
+  // Tentativas, da mais completa pra mais simples. 4xx = o RD RECUSOU e nada
+  // foi criado, então tentar de novo não duplica; erro de rede/tempo/5xx NÃO
+  // tenta aqui (o negócio pode ter sido criado) — sobe e a fila conta a
+  // tentativa, como sempre. Campo personalizado é o suspeito nº 1 (obrigatório
+  // em outro funil, opção que não existe mais); campanha/fonte apagadas, o 2º.
+  const tries: { withCustomFields: boolean; withCampaign: boolean; dropped: string | null }[] = [
+    { withCustomFields: true, withCampaign: true, dropped: null },
+  ]
+  if (inherit?.customFields.length) {
+    tries.push({ withCustomFields: false, withCampaign: true, dropped: 'campos personalizados' })
   }
-  const created = await api.createDeal(body)
+  if (inherit && (inherit.campaignId || inherit.dealSourceId)) {
+    tries.push({
+      withCustomFields: false,
+      withCampaign: false,
+      dropped: inherit.customFields.length ? 'campos personalizados, campanha e fonte' : 'campanha e fonte',
+    })
+  }
+  let created: RdDeal | null = null
+  let dropped: string | null = null
+  let refusal = ''
+  for (const [i, t] of tries.entries()) {
+    try {
+      created = await api.createDeal(buildRdDealBody({ ...base, ...t }))
+      dropped = t.dropped
+      break
+    } catch (err) {
+      if (i === tries.length - 1 || !isRdRejection(err)) throw err
+      refusal = err instanceof Error ? err.message.slice(0, 200) : String(err)
+      console.warn(`[rd-crm] card ${deal.id}: RD recusou o negócio com o que veio da origem — tento sem. ${refusal}`)
+    }
+  }
+  if (!created) throw new Error('RD não criou o negócio')
   const createdId = rid(created)
   if (!createdId) throw new Error('RD não devolveu o id do negócio criado')
   const contactId = rid(rdContact)
@@ -385,7 +551,24 @@ async function createRdDeal(
     const ids = [...new Set([...(full?.deal_ids ?? []), createdId])]
     await api.setContactDeals(contactId, ids)
   }
-  return created
+  const notes = ['negócio criado no RD']
+  if (inherit && !dropped) notes.push('com campanha/fonte/campos do negócio de origem')
+  if (dropped) notes.push(`SEM ${dropped} do negócio de origem (RD recusou: ${refusal})`)
+  // De onde o lead veio, UMA vez, na criação: o RD não tem campo que o time
+  // veja no negócio do comercial, e a campanha do card daqui (RD Marketing /
+  // anúncio) se perderia na passagem. Best-effort — mas o motivo da falha fica
+  // na fila (last_error), não só no log.
+  try {
+    const text = rdOriginNote(await campaignFieldOf(deal.id), deal.source)
+    const author = owner ?? rid(created.user) ?? integ.config.defaultOwnerExternalId ?? null
+    if (text && author) await api.createActivity(createdId, author, text)
+    else if (text) notes.push('anotação da origem não gravada: negócio sem dono no RD')
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[rd-crm] anotação da origem falhou:', msg)
+    notes.push(`anotação da origem falhou: ${msg.slice(0, 120)}`)
+  }
+  return { deal: created, note: notes.join('; ') }
 }
 
 async function saveLink(
@@ -445,6 +628,98 @@ async function wonNoteFor(accountId: string, deal: LocalDeal): Promise<string> {
   return 'Ganho via FluxiaCRM.'
 }
 
+/**
+ * Comentário da ÚLTIMA perda do card ([[PERDER:motivo | comentário]] da IA, ou
+ * o que a pessoa escreveu ao perder) — `markDealLostInPlace` grava em
+ * `deal_events.data.note`. Falha na leitura = sem comentário: a perda vai pro
+ * RD do mesmo jeito.
+ */
+async function lostCommentOf(accountId: string, dealId: string): Promise<string | null> {
+  try {
+    const ev = firstOrNull(
+      await db
+        .select({ note: sql<string | null>`${dealEvents.data}->>'note'` })
+        .from(dealEvents)
+        .where(
+          and(
+            eq(dealEvents.accountId, accountId),
+            eq(dealEvents.dealId, dealId),
+            eq(dealEvents.type, 'status_changed'),
+            sql`${dealEvents.data}->>'to' = 'lost'`,
+          ),
+        )
+        .orderBy(desc(dealEvents.createdAt))
+        .limit(1),
+    )
+    return ev?.note?.trim() || null
+  } catch (err) {
+    console.error('[rd-crm] comentário da perda não lido:', err instanceof Error ? err.message : err)
+    return null
+  }
+}
+
+/**
+ * Card daqui → etapa que veio do RD, registrado como mudança DO RD (evento
+ * `stage_changed` com by:'rd' + tarefas da etapa). Um caminho só pros dois
+ * casos: o webhook (o time arrastou lá) e a 1ª ligação com um negócio que já
+ * estava ADIANTE no RD. Devolve false quando outro caminho mudou a etapa do
+ * card entre a leitura e a escrita (nada é gravado).
+ */
+async function moveLocalStageFromRd(
+  accountId: string,
+  deal: LocalDeal,
+  local: { pipelineId: string; stageId: string; pipelineName: string; stageName: string },
+  createStageTasks: boolean,
+): Promise<boolean> {
+  // ⚠️ 29/09: o UPDATE exige que a etapa AINDA seja a que acabamos de ler.
+  //
+  // O RD dispara mais de uma notificação para a mesma mudança, com
+  // `transaction_uuid` diferente — então o dedupe do webhook não pega. As três
+  // chegaram em 0,3 s no card da Aline, leram a etapa antiga antes de qualquer
+  // uma escrever, e as três acharam que precisavam mover: 3 eventos
+  // `stage_changed` idênticos no histórico e `autoCreateStageTasks` rodando
+  // três vezes. Ler-comparar-escrever sem trava sempre acaba assim quando o
+  // mesmo fato chega duas vezes junto.
+  //
+  // Com a etapa lida no WHERE, quem chega depois não atualiza nada, não grava
+  // evento e não cria tarefa — o banco arbitra, que é o único árbitro que
+  // enxerga as três ao mesmo tempo.
+  const moved = await db
+    .update(deals)
+    .set({ pipelineId: local.pipelineId, stageId: local.stageId, stageChangedAt: sql`now()` })
+    .where(
+      and(
+        eq(deals.id, deal.id),
+        eq(deals.accountId, accountId),
+        deal.stageId ? eq(deals.stageId, deal.stageId) : isNull(deals.stageId),
+      ),
+    )
+    .returning({ id: deals.id })
+  if (!moved.length) return false
+  await db.insert(dealEvents).values({
+    accountId,
+    dealId: deal.id,
+    actorUserId: null,
+    type: 'stage_changed',
+    data: {
+      from: `${deal.pipelineName} › ${deal.stageName}`,
+      to: `${local.pipelineName} › ${local.stageName}`,
+      fromId: deal.stageId,
+      toId: local.stageId,
+      by: 'rd',
+    },
+  })
+  if (createStageTasks) {
+    try {
+      const { autoCreateStageTasks } = await import('@/lib/pipelines/stage-tasks')
+      await autoCreateStageTasks({ accountId, userId: null }, deal.id, local.stageId)
+    } catch (err) {
+      console.error('[rd-crm] tarefas da etapa (volta):', err)
+    }
+  }
+  return true
+}
+
 export type SyncOutcome =
   | { kind: 'ok'; note?: string }
   | { kind: 'skip'; why: string }
@@ -469,8 +744,24 @@ export async function syncDealToRd(accountId: string, dealId: string): Promise<S
       .where(and(eq(crmDealLinks.provider, RD_CRM_PROVIDER), eq(crmDealLinks.dealId, dealId)))
       .limit(1),
   )
+  // Cópia de outro card: o de origem se liga primeiro (ver originStillLinking).
+  // Antes de qualquer chamada ao RD — esperar não gasta requisição. Teto de
+  // ORIGIN_WAIT_CAP_MS desde que ESTE card nasceu: a fila do de origem sempre
+  // termina bem antes; se não terminou, algo saiu do previsto e esperar mais
+  // só deixaria o card fora do RD sem ninguém saber.
+  const originDealId = link ? null : await originDealIdOf(accountId, dealId)
+  const bornMs = deal.createdAt ? Date.parse(deal.createdAt) : Date.now()
+  if (
+    originDealId &&
+    Date.now() - bornMs < ORIGIN_WAIT_CAP_MS &&
+    (await originStillLinking(accountId, originDealId))
+  ) {
+    return { kind: 'wait' }
+  }
+
   let rdDeal: RdDeal | null = link ? await api.getDeal(link.externalId) : null
   let note: string | undefined
+  let firstLink = false
   if (!rdDeal) {
     const found = await findRdDealFor(api, ctx, integ, deal, target)
     if (found.kind === 'wait') return { kind: 'wait' }
@@ -478,16 +769,57 @@ export async function syncDealToRd(accountId: string, dealId: string): Promise<S
     if (found.kind === 'found') {
       rdDeal = found.deal
       note = 'ligado ao negócio que já existia no RD'
+      firstLink = true
     } else {
-      rdDeal = await createRdDeal(api, integ, ctx, deal, target, found.contact)
-      note = 'negócio criado no RD'
+      const made = await createRdDeal(api, integ, ctx, deal, target, found.contact, originDealId)
+      rdDeal = made.deal
+      note = made.note
     }
   }
   const externalId = rid(rdDeal)
   if (!externalId) throw new Error('negócio do RD sem id')
   const have = { stageId: rid(rdDeal.deal_stage), status: rdStatusOf(rdDeal) }
+  let wantStage = target
+  // 1ª ligação com negócio que JÁ estava ADIANTE no RD, no mesmo funil: o time
+  // andou com ele lá (ou o RD criou já na frente). Puxar o RD de volta pra
+  // etapa do card desfaz trabalho do time e redispara a automação daquela
+  // etapa no RD — então o card daqui é que vai pra etapa de lá, registrado
+  // como mudança do RD (o mesmo caminho do webhook). RD atrás: move o RD,
+  // como sempre.
+  //
+  // Não é só na 1ª ligação (revisão de 01/10): com o vínculo já existente,
+  // qualquer mudança daqui (até o rodízio trocando o responsável) passava a
+  // puxar o RD de volta. Regras, com o RD ADIANTE no mesmo funil:
+  //   • etapa do RD SEM par aqui → o RD nunca volta (não há como representá-la);
+  //   • 1ª ligação, ou o RD mudou desde a última sincronização (o time andou lá
+  //     e o webhook ainda não chegou / se perdeu) → o card daqui vai pra etapa
+  //     de lá;
+  //   • o RD está onde o deixamos e o card daqui é que está atrás → foi uma
+  //     pessoa voltando o card aqui: move o RD, como sempre.
+  if (have.stageId) {
+    const rdRef = ctx.rdIndex.byStageId.get(have.stageId)
+    if (rdRef && rdRef.pipelineId === target.pipelineId && rdRef.position > target.position) {
+      const local = localStageFor(ctx.funnels, rdRef.pipelineName, rdRef.stageName)
+      const rdChangedSinceSync = !!link?.externalStageId && link.externalStageId !== have.stageId
+      if (!local) {
+        wantStage = rdRef
+        if (firstLink || rdChangedSinceSync) {
+          note = `${note ? `${note}; ` : ''}RD já em "${rdRef.stageName}", sem etapa igual aqui — RD não volta`
+        }
+      } else if (firstLink || rdChangedSinceSync) {
+        wantStage = rdRef
+        if (local.stageId !== deal.stageId) {
+          const moved = await moveLocalStageFromRd(accountId, deal, local, status === 'open')
+          const prefix = note ? `${note}; ` : ''
+          note = moved
+            ? `${prefix}card trazido para "${local.stageName}" (o RD já estava adiante)`
+            : `${prefix}card mudou ao mesmo tempo — RD fica em "${rdRef.stageName}" até a próxima rodada`
+        }
+      }
+    }
+  }
   const lostReasonId = status === 'lost' ? lostReasonIdFor(ctx.lostReasons, deal.lostReason) : null
-  const plan = planRdUpdate({ want: { stageId: target.stageId, status, lostReasonId }, have })
+  const plan = planRdUpdate({ want: { stageId: wantStage.stageId, status, lostReasonId }, have })
   if (plan.blocked) {
     await saveLink(accountId, dealId, externalId, { stageId: have.stageId, status: have.status, error: plan.blocked })
     return { kind: 'ok', note: plan.blocked }
@@ -517,8 +849,14 @@ export async function syncDealToRd(accountId: string, dealId: string): Promise<S
       deal: {
         win: false,
         ...(exact ? { deal_lost_reason_id: exact } : {}),
-        // Motivo que o RD não tem (caiu em "Outros") vai por escrito na nota.
-        deal_lost_note: exactMatches || !reasonText ? 'Via FluxiaCRM' : `Via FluxiaCRM — ${reasonText.slice(0, 200)}`,
+        // Motivo que o RD não tem (caiu em "Outros") vai por escrito na nota,
+        // junto do comentário de quem perdeu (01/10: o "porquê" da IA —
+        // "disse que só volta a pensar em março" — ficava só aqui dentro).
+        deal_lost_note: rdLostNote({
+          reason: reasonText,
+          reasonMatchedExactly: exactMatches,
+          note: await lostCommentOf(accountId, dealId),
+        }),
       },
     })
     statusNow = 'lost'
@@ -535,18 +873,42 @@ export async function syncDealToRd(accountId: string, dealId: string): Promise<S
  * Uma rodada por vez (trava no Redis): no deploy o worker velho e o novo rodam
  * juntos por alguns segundos e os dois pegaram o mesmo card (18/09). Redis
  * fora do ar segue sem trava, como antes.
+ *
+ * Depois dos cards, na MESMA trava, as tarefas concluídas (`drainTaskOutbox`):
+ * card primeiro porque a tarefa precisa do vínculo que a ida do card cria.
  */
-export async function processCrmSyncOutbox(limit = 40): Promise<{ ok: number; failed: number; waiting: number }> {
-  if ((await claimOnce(TICK_LOCK_KEY, TICK_LOCK_TTL_S)) === false) return { ok: 0, failed: 0, waiting: 0 }
+export async function processCrmSyncOutbox(limit = 40): Promise<{
+  ok: number
+  failed: number
+  waiting: number
+  tasksSent: number
+  tasksFailed: number
+}> {
+  if ((await claimOnce(TICK_LOCK_KEY, TICK_LOCK_TTL_S)) === false) {
+    return { ok: 0, failed: 0, waiting: 0, tasksSent: 0, tasksFailed: 0 }
+  }
   try {
-    return await drainOutbox(limit)
+    const started = Date.now()
+    const cards = await drainOutbox(limit, started)
+    let tasks = { sent: 0, failed: 0 }
+    try {
+      tasks = await drainTaskOutbox(Math.max(started + TICK_BUDGET_MS, Date.now() + TASK_MIN_SLICE_MS))
+    } catch (err) {
+      // Fila de tarefas fora (ex.: migração 0202 ainda não aplicada) não pode
+      // derrubar a ida dos cards — mas aparece no log a cada rodada.
+      console.error('[rd-crm] fila de tarefas falhou:', err instanceof Error ? err.message : err)
+      tasks = { sent: 0, failed: 1 }
+    }
+    return { ...cards, tasksSent: tasks.sent, tasksFailed: tasks.failed }
   } finally {
     await kvDel(TICK_LOCK_KEY)
   }
 }
 
-async function drainOutbox(limit: number): Promise<{ ok: number; failed: number; waiting: number }> {
-  const started = Date.now()
+async function drainOutbox(
+  limit: number,
+  started = Date.now(),
+): Promise<{ ok: number; failed: number; waiting: number }> {
   const rows = await db
     .select()
     .from(crmSyncOutbox)
@@ -605,6 +967,123 @@ async function drainOutbox(limit: number): Promise<{ ok: number; failed: number;
   return { ok, failed, waiting }
 }
 
+type TaskOutboxRow = {
+  id: string
+  account_id: string
+  deal_id: string
+  kind: string
+  subject: string
+  notes: string | null
+  done_at: string | Date
+  attempts: number
+  rd_deal_id: string
+}
+
+/**
+ * Leva pro RD as tarefas concluídas da fila `crm_task_outbox` (migração 0202;
+ * quem enfileira é `enqueueRdTask`). Até TASK_BATCH por rodada, até `deadline`.
+ *   • card sem negócio ligado no RD: espera (a ida do card cria o vínculo);
+ *     24 h sem vínculo = desiste e diz por quê;
+ *   • com vínculo: dono do negócio lá (ou o dono padrão da integração) vira o
+ *     responsável da tarefa; data/hora no fuso da conta; `pushTaskToRd` confere
+ *     se a tarefa já existe antes de criar (POST que estourou o tempo).
+ *   • erro: conta a tentativa; desiste em TASK_MAX_ATTEMPTS (ou na hora, se o
+ *     negócio do RD não existe mais — 404 não melhora tentando).
+ */
+async function drainTaskOutbox(deadline: number): Promise<{ sent: number; failed: number }> {
+  await db.execute(sql`
+    UPDATE crm_task_outbox o
+    SET processed_at = now(),
+        last_error = 'card sem negócio ligado no RD em 24 h — tarefa não enviada'
+    WHERE o.processed_at IS NULL
+      AND o.created_at < now() - interval '24 hours'
+      AND NOT EXISTS (
+        SELECT 1 FROM crm_deal_links l
+        WHERE l.deal_id = o.deal_id AND l.provider = 'rdstation_crm'
+      )
+  `)
+  const res = await db.execute(sql`
+    SELECT o.id, o.account_id, o.deal_id, o.kind, o.subject, o.notes, o.done_at, o.attempts,
+           l.external_id AS rd_deal_id
+    FROM crm_task_outbox o
+    INNER JOIN crm_deal_links l ON l.deal_id = o.deal_id AND l.provider = 'rdstation_crm'
+    WHERE o.processed_at IS NULL
+    -- Menos tentativas primeiro: a que falha não monopoliza o lote.
+    ORDER BY o.attempts, o.created_at
+    LIMIT ${TASK_BATCH}::int
+  `)
+  const rows = res.rows as TaskOutboxRow[]
+  const finish = (id: string, out: { externalId?: string; error?: string }) =>
+    db.execute(sql`
+      UPDATE crm_task_outbox
+      SET processed_at = now(),
+          external_id = ${out.externalId ?? null}::text,
+          last_error = ${out.error ?? null}::text
+      WHERE id = ${id}::uuid
+    `)
+  const accounts = new Map<string, { integ: RdIntegration | null; tz: string }>()
+  // Dono do negócio no RD, uma consulta por negócio por rodada (o limite é
+  // 120 req/min e a fila de cards divide a mesma cota).
+  const owners = new Map<string, string | null>()
+  let sent = 0
+  let failed = 0
+  for (const r of rows) {
+    if (Date.now() > deadline) break
+    try {
+      let acc = accounts.get(r.account_id)
+      if (!acc) {
+        const integ = await loadRdIntegration(r.account_id)
+        const tz = integ ? (await getAccountSettings(r.account_id)).businessTimezone || 'America/Sao_Paulo' : ''
+        acc = { integ, tz }
+        accounts.set(r.account_id, acc)
+      }
+      if (!acc.integ) {
+        await finish(r.id, { error: 'integração com o RD desligada — tarefa não enviada' })
+        continue
+      }
+      const api = rdCrm(acc.integ.token)
+      if (!owners.has(r.rd_deal_id)) owners.set(r.rd_deal_id, rid((await api.getDeal(r.rd_deal_id)).user) ?? null)
+      const userId = owners.get(r.rd_deal_id) ?? acc.integ.config.defaultOwnerExternalId ?? null
+      if (!userId) {
+        await finish(r.id, { error: 'negócio do RD sem dono e integração sem dono padrão — tarefa não enviada' })
+        continue
+      }
+      const { date, hour } = rdTaskDateHour(new Date(r.done_at), acc.tz)
+      const out = await pushTaskToRd(api, {
+        rdDealId: r.rd_deal_id,
+        userId,
+        kind: r.kind === 'email' ? 'email' : 'whatsapp',
+        subject: r.subject,
+        notes: r.notes,
+        date,
+        hour,
+      })
+      await finish(r.id, { externalId: out.id, error: out.reused ? 'já estava no RD (tentativa anterior)' : undefined })
+      sent += 1
+    } catch (err) {
+      failed += 1
+      const msg = err instanceof Error ? err.message : String(err)
+      const attempts = (Number(r.attempts) || 0) + 1
+      // 429 = cota do minuto: não é culpa da tarefa — não conta tentativa e
+      // para o lote (insistir tiraria cota da fila de cards). 4xx definitivo
+      // (corpo recusado, 404) desiste na hora: repetir não melhora e gastaria
+      // ~4 requisições por tentativa (revisão de 01/10).
+      const rateLimited = err instanceof RdCrmError && err.status === 429
+      const giveUp = !rateLimited && (attempts >= TASK_MAX_ATTEMPTS || isRdRejection(err) || (err instanceof RdCrmError && err.status === 404))
+      console.error(`[rd-crm] tarefa ${r.id} do card ${r.deal_id} (tentativa ${attempts}):`, msg)
+      await db.execute(sql`
+        UPDATE crm_task_outbox
+        SET attempts = ${rateLimited ? attempts - 1 : attempts}::int,
+            last_error = ${msg.slice(0, 500)}::text,
+            processed_at = ${giveUp ? sql`now()` : sql`NULL`}
+        WHERE id = ${r.id}::uuid
+      `)
+      if (rateLimited) break
+    }
+  }
+  return { sent, failed }
+}
+
 /**
  * VOLTA: evento do RD (webhook) → card daqui. Só negócio já ligado a um card.
  * O que o time arrasta no RD (No-show, Envio da COF…) move o card aqui —
@@ -651,61 +1130,18 @@ export async function applyRdWebhook(integ: RdIntegration, payload: unknown): Pr
   let movedStage = true
 
   if (local && local.stageId !== deal.stageId) {
-    // ⚠️ 29/09: o UPDATE exige que a etapa AINDA seja a que acabamos de ler.
-    //
-    // O RD dispara mais de uma notificação para a mesma mudança, com
-    // `transaction_uuid` diferente — então o dedupe do webhook não pega. As três
-    // chegaram em 0,3 s no card da Aline, leram a etapa antiga antes de qualquer
-    // uma escrever, e as três acharam que precisavam mover: 3 eventos
-    // `stage_changed` idênticos no histórico e `autoCreateStageTasks` rodando
-    // três vezes. Ler-comparar-escrever sem trava sempre acaba assim quando o
-    // mesmo fato chega duas vezes junto.
-    //
-    // Com a etapa lida no WHERE, quem chega depois não atualiza nada, não grava
-    // evento e não cria tarefa — o banco arbitra, que é o único árbitro que
-    // enxerga as três ao mesmo tempo.
-    const moved = await db
-      .update(deals)
-      .set({ pipelineId: local.pipelineId, stageId: local.stageId, stageChangedAt: sql`now()` })
-      .where(
-        and(
-          eq(deals.id, deal.id),
-          eq(deals.accountId, integ.accountId),
-          deal.stageId ? eq(deals.stageId, deal.stageId) : isNull(deals.stageId),
-        ),
-      )
-      .returning({ id: deals.id })
+    // Compare-and-swap da etapa (29/09, notificação tripla do RD) — ver
+    // moveLocalStageFromRd.
+    movedStage = await moveLocalStageFromRd(integ.accountId, deal, local, rdStatus === 'open')
     // Perdeu a corrida: outro webhook já moveu. Não grava evento nem cria
     // tarefa — mas SEGUE, porque a mesma carga pode trazer um status novo que
     // ninguém aplicou ainda. Sair aqui perderia um "ganho" chegando junto.
-    if (!moved.length) {
-      movedStage = false
+    if (!movedStage) {
       console.log(
         `[rd-crm] etapa já aplicada por outra notificação simultânea (card ${deal.id}) — sem evento duplicado`,
       )
     } else {
-    await db.insert(dealEvents).values({
-      accountId: integ.accountId,
-      dealId: deal.id,
-      actorUserId: null,
-      type: 'stage_changed',
-      data: {
-        from: `${deal.pipelineName} › ${deal.stageName}`,
-        to: `${local.pipelineName} › ${local.stageName}`,
-        fromId: deal.stageId,
-        toId: local.stageId,
-        by: 'rd',
-      },
-    })
-    if (rdStatus === 'open') {
-      try {
-        const { autoCreateStageTasks } = await import('@/lib/pipelines/stage-tasks')
-        await autoCreateStageTasks({ accountId: integ.accountId, userId: null }, deal.id, local.stageId)
-      } catch (err) {
-        console.error('[rd-crm] tarefas da etapa (volta):', err)
-      }
-    }
-    changes.push(`etapa → ${local.pipelineName} › ${local.stageName}`)
+      changes.push(`etapa → ${local.pipelineName} › ${local.stageName}`)
     }
   }
   if (rdStatus !== ourStatus) {

@@ -37,6 +37,15 @@ export interface RdStage extends Ref {
 export interface RdPipeline extends Ref {
   deal_stages?: RdStage[]
 }
+/**
+ * Campo personalizado de um negócio, como o GET /deals/:id devolve (visto ao
+ * vivo em 01/10): o valor + a definição do campo (rótulo e slug).
+ */
+export interface RdDealCustomField {
+  custom_field_id?: string
+  value?: unknown
+  custom_field?: { _id?: string; id?: string; label?: string; slug?: string; type?: string }
+}
 export interface RdDeal extends Ref {
   win?: boolean | null
   hold?: boolean | null
@@ -46,6 +55,27 @@ export interface RdDeal extends Ref {
   deal_pipeline?: Ref
   user?: Ref & { email?: string }
   deal_lost_reason?: Ref | null
+  /** Campanha e fonte vêm em DOIS formatos no GET (objeto e id solto). No
+   *  POST /deals vão no TOPO do corpo, irmãos de "deal" — ver buildRdDealBody. */
+  campaign?: Ref | null
+  campaign_id?: string | null
+  deal_source?: Ref | null
+  deal_source_id?: string | null
+  deal_custom_fields?: RdDealCustomField[]
+}
+/** Tarefa do RD (GET /tasks?deal_id= → {total, has_more, tasks[]}, visto ao vivo). */
+export interface RdTask extends Ref {
+  subject?: string
+  type?: string
+  /** "YYYY-MM-DD" (pode vir com hora/fuso — compare só os 10 primeiros). */
+  date?: string
+  /** "HH:MM". */
+  hour?: string
+  done?: boolean | null
+  done_date?: string | null
+  notes?: string | null
+  deal_id?: string
+  user_ids?: string[]
 }
 export interface RdContact extends Ref {
   emails?: { email?: string }[]
@@ -65,6 +95,16 @@ export function rid(x: Ref | null | undefined): string | null {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/** Resposta de POST/PUT /tasks: a tarefa solta ou embrulhada em "task". */
+function unwrapTask(r: RdTask & { task?: RdTask }): RdTask {
+  return r.task && typeof r.task === 'object' ? r.task : r
+}
+
+/** Recusa do RD por conteúdo (4xx que não é limite de requisições). */
+export function isRdRejection(err: unknown): boolean {
+  return err instanceof RdCrmError && err.status >= 400 && err.status < 500 && err.status !== 429
+}
+
 /**
  * Texto de ANOTAÇÃO (POST /activities) sem acento. Esse endpoint do RD grava
  * acento torto ("reuniÃ£o", "â€”") — até com o JSON todo em ASCII (ã) e
@@ -74,6 +114,12 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 export function rdActivityText(text: string): string {
   return text
     .replace(/[‒-―]/g, '-')
+    // Separadores e aspas tipográficas que a régua usa nos títulos ("Cadência
+    // «X» — toque 2", "campanha · fonte"): sem trocar, sumiriam e colariam as
+    // palavras ("Cadencia X  - toque", "campanha  fonte").
+    .replace(/[·•]/g, '-')
+    .replace(/[«»“”„]/g, '"')
+    .replace(/[‘’‚]/g, "'")
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
     .replace(/[^\t\n\r\x20-\x7e]/g, '')
@@ -134,6 +180,15 @@ export function rdCrm(token: string) {
       call<Ref>('POST', '/activities', {
         body: { activity: { deal_id: dealId, user_id: userId, text: rdActivityText(text) } },
       }),
+    // Tarefas (01/10). A LISTA foi vista ao vivo; o POST/PUT seguem a
+    // especificação ({"task":{…}}) e NÃO foram testados ao vivo — por isso a
+    // resposta é lida nos dois formatos (a tarefa solta ou dentro de "task") e
+    // quem chama (pushTaskToRd) confere `done` e completa com PUT se precisar.
+    listDealTasks: async (dealId: string) =>
+      (await call<{ tasks?: RdTask[] }>('GET', '/tasks', { query: { deal_id: dealId, limit: '200' } })).tasks ?? [],
+    createTask: async (body: unknown) => unwrapTask(await call<RdTask & { task?: RdTask }>('POST', '/tasks', { body })),
+    updateTask: async (id: string, body: unknown) =>
+      unwrapTask(await call<RdTask & { task?: RdTask }>('PUT', `/tasks/${encodeURIComponent(id)}`, { body })),
     listWebhooks: async () =>
       (await call<{ webhooks?: { uuid: string; event_type: string; url: string; status?: string }[] }>('GET', '/webhooks'))
         .webhooks ?? [],

@@ -106,18 +106,123 @@ export function parseNoteLines(notes: string | null | undefined): Array<[string,
 }
 
 /**
- * Conversão que o PRÓPRIO RD gera, não o lead: a cada mudança de negócio no RD
- * CRM (criado, atualizado, ganho, perdido — inclusive pelo espelho do Fluxia)
- * o RD Marketing registra "Negociação <algo> no RD Station CRM". Zelo 18/09:
+ * Conversão que o PRÓPRIO RD gera, não o lead: toda vez que um negócio ou uma
+ * tarefa muda no RD CRM (inclusive pelo espelho do Fluxia) o RD Marketing
+ * registra uma "conversão" com o nome do CRM — "Negociação criada/atualizada/
+ * ganha no RD Station CRM", "Tarefa criada no RD Station CRM", "Tarefa
+ * atualizada no RD Station CRM" e até só "RD Station CRM". Zelo 18/09:
  * "criada" fez um lead chegar 3x em 2 min; "atualizada" RECRIOU o card de um
- * lead logo depois de ele ser dado como perdido. Não é campanha nem lead novo.
+ * lead logo depois de ele ser dado como perdido. Zelo 01/10: as de TAREFA e a
+ * "RD Station CRM" pura passavam pelo filtro antigo (que só via "Negociação…"),
+ * trocaram a campanha boa do lead por "unknown" e abriram 2 cards indevidos.
+ * A regra casa o RÓTULO INTEIRO nos formatos que o RD gera ("RD Station CRM",
+ * "<Negociação|Tarefa> <algo> no RD Station CRM") — não qualquer texto que
+ * CITE o RD: uma landing "lp-comparativo-rd-station-crm" ou a campanha
+ * "Alternativa ao RD Station CRM" são leads de verdade, e a conversão
+ * sintética descarta o lead inteiro no webhook (revisão de 01/10).
+ * Não é campanha nem lead novo.
  */
 export function isSyntheticConversion(label: string | null | undefined): boolean {
-  const s = label ?? ''
-  return /negocia[cç][aã]o\s+criada/i.test(s) || /negocia[cç][aã]o\b.*\brd\s*station\s*crm\b/i.test(s)
+  // canon tira acento/caixa/"_"; o "-" vira espaço pra pegar o slug
+  // ("tarefa-criada-no-rd-station-crm") e "rdstation crm" sem espaço.
+  const c = canon(label ?? '').replace(/[-\s]+/g, ' ').trim()
+  return (
+    /^(?:(?:negociacao|tarefa)\b.*\b(?:no|na|em) )?rd ?station ?crm$/.test(c) ||
+    /\bnegociacao criada\b/.test(c) ||
+    /^negociacao\b.*\brd ?station ?crm$/.test(c)
+  )
 }
 
-/** Primeiro valor não vazio de cada fato. `campanha` cai na conversão. */
+/**
+ * Um pedaço de origem que não diz nada (já em `canon`): "unknown",
+ * "(not set)", "(none)", "desconhecido", "não informado", "n/a", "-"…
+ * "(direct)" fica de fora de propósito: é o GA dizendo "acesso direto", que é
+ * informação de canal, não ausência dela. O parêntese é UM só ocupando o
+ * pedaço inteiro ([^()]*): com ".*" a campanha "(ABO) Leads Botox (Novo)"
+ * virava genérica e sumia do card e do prompt (revisão de 01/10).
+ */
+const GENERIC_ORIGIN_PIECE =
+  /^(?:\((?!direct\))[^()]*\)|unknown|desconhecid[oa]|nao informad[oa]|nao definid[oa]|sem origem|none|null|undefined|not set|n\/?a|-+)$/
+
+/**
+ * Separador de partes de uma origem: " / " (com espaço — sem espaço é data,
+ * "11/09/26", ou URL) e "|" com ou sem espaço. Capturado pra devolver a origem
+ * com os separadores ORIGINAIS quando só um pedaço cai.
+ */
+const ORIGIN_SEP = /(\s+\/\s+|\s*\|\s*)/
+
+/** Um pedaço sem nada genérico volta INTACTO; com "x/unknown" colado, limpa. */
+function cleanOriginPiece(piece: string): string {
+  const p = piece.trim()
+  if (!p || GENERIC_ORIGIN_PIECE.test(canon(p))) return ''
+  // URL fica como está: cortar "/unknown" do caminho a quebraria.
+  if (!p.includes('/') || p.includes('://')) return p
+  const subs = p.split('/')
+  const generic = subs.map((s) => !!s.trim() && GENERIC_ORIGIN_PIECE.test(canon(s)))
+  if (!generic.some(Boolean)) return p // "11/09/26": nada a tirar
+  return subs
+    .filter((s, i) => !generic[i] && s.trim())
+    .map((s) => s.trim())
+    .join('/')
+}
+
+/**
+ * Origem (campanha, canal, fonte/meio) só com o que diz algo, parte a parte:
+ * "Facebook Ads / unknown" → "Facebook Ads", "unknown | Instant Forms" →
+ * "Instant Forms", "unknown / unknown" → "". O RD Marketing grava "unknown"
+ * em cada pedaço que não rastreou (lead sem UTM) — Zelo 01/10: o marketing via
+ * na nota "Campanha: unknown / Canal da conversão: unknown / unknown" e a
+ * Zélia recebia o mesmo no prompt. Sem nada genérico, devolve o texto como
+ * veio (com os separadores originais).
+ */
+export function cleanOrigin(value: string | null | undefined): string {
+  const tokens = (value ?? '').trim().split(ORIGIN_SEP)
+  let out = ''
+  // Índices pares = pedaços; ímpares = o separador que veio antes do seguinte.
+  for (let i = 0; i < tokens.length; i += 2) {
+    const piece = cleanOriginPiece(tokens[i] ?? '')
+    if (!piece) continue
+    out = out ? `${out}${tokens[i - 1] ?? ' / '}${piece}` : piece
+  }
+  return out.trim()
+}
+
+/**
+ * Origem que NÃO diz nada: "unknown", "(none)", "(not set)", "desconhecido",
+ * "unknown / unknown"… É o que o RD Marketing grava quando não rastreou a
+ * origem (lead sem UTM) — e virava "Campanha: unknown" no card (Zelo 01/10,
+ * pergunta do Jordan). Vazio também conta como genérico. Mesma régua do
+ * `cleanOrigin`: genérico = não sobra nada depois de limpar.
+ */
+export function isGenericOrigin(value: string | null | undefined): boolean {
+  return cleanOrigin(value) === ''
+}
+
+/**
+ * Origem/campanha que SERVE: limpa parte a parte (cleanOrigin) e nunca um
+ * rótulo do próprio RD CRM. Antes de 01/10, sem "Campanha" no pacote, o
+ * fallback pro identificador da conversão podia gravar "Tarefa criada no RD
+ * Station CRM" como Campanha do card — e ela passaria por "campanha boa" no
+ * primeiro toque. '' = não serve.
+ */
+export function usefulOrigin(value: string | null | undefined): string {
+  return isSyntheticConversion(value) ? '' : cleanOrigin(value)
+}
+
+/** Chaves das observações que falam de ORIGEM (o que o RD gravou). */
+const ORIGIN_KEYS = new Set([
+  'primeira conversao',
+  'ultima conversao',
+  'campanha',
+  'campaign',
+  'canal da conversao',
+])
+
+/**
+ * Primeiro valor não vazio de cada fato. `campanha` genérica ("unknown") não
+ * conta — Zelo 01/10: ela ocupava o lugar e o fallback nunca rodava — e cai no
+ * identificador da conversão REAL (última, senão primeira; nunca a do RD CRM).
+ */
 export function extractLeadFacts(pairs: Array<[string, string]>): LeadFacts {
   const facts: LeadFacts = {
     cidade: null,
@@ -129,14 +234,16 @@ export function extractLeadFacts(pairs: Array<[string, string]>): LeadFacts {
   }
   for (const [key, value] of pairs) {
     const f = factForKey(key)
-    const v = prettyFormValue(value)
-    if (f && v && !facts[f]) facts[f] = v
+    if (!f || facts[f]) continue
+    const pretty = prettyFormValue(value)
+    const v = f === 'campanha' ? usefulOrigin(pretty) : pretty
+    if (v) facts[f] = v
   }
   if (!facts.campanha) {
     const byKey = new Map(pairs.map(([k, v]) => [canon(k), v]))
     const conv = [byKey.get('ultima conversao'), byKey.get('primeira conversao')]
-      .map((c) => (c ?? '').trim())
-      .find((c) => c && !isSyntheticConversion(c))
+      .map((c) => usefulOrigin(c))
+      .find(Boolean)
     if (conv) facts.campanha = conv
   }
   return facts
@@ -171,6 +278,12 @@ export function factForFieldName(fieldName: string): FactKey | null {
 /**
  * Linhas pro prompt da IA: pergunta legível + resposta legível, sem as linhas
  * técnicas e sem repetir fato que já veio do campo personalizado (`skip`).
+ *
+ * Linhas de ORIGEM (Campanha, Canal da conversão, Primeira/Última conversão)
+ * só com o que diz algo: Zelo 01/10 — a Zélia recebia "Campanha: unknown" e
+ * "Canal da conversão: unknown / unknown". Observação gravada antes do
+ * conserto ainda pode trazer a conversão do PRÓPRIO RD CRM ("Tarefa criada no
+ * RD Station CRM") como se fosse do lead: essa linha também fica de fora.
  */
 export function leadLinesForPrompt(
   pairs: Array<[string, string]>,
@@ -179,9 +292,12 @@ export function leadLinesForPrompt(
   const out: string[] = []
   const seen = new Set<string>()
   for (const [key, value] of pairs) {
-    const v = prettyFormValue(value)
+    const ck = key ? canon(key) : ''
+    let v = prettyFormValue(value)
+    // Origem: sem pedaço genérico e nunca o rótulo do próprio RD CRM.
+    if (ORIGIN_KEYS.has(ck)) v = usefulOrigin(v)
     if (!v) continue
-    if (key && TECHNICAL_KEYS.has(canon(key))) continue
+    if (key && TECHNICAL_KEYS.has(ck)) continue
     const f = key ? factForKey(key) : null
     if (f && skip.has(f)) continue
     const line = key ? `${prettyFormKey(key)}: ${v}` : v

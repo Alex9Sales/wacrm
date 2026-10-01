@@ -116,6 +116,8 @@ export async function getConversationWithContact(
         last_message_at: conversations.lastMessageAt,
         unread_count: conversations.unreadCount,
         ai_autoreply_disabled: conversations.aiAutoreplyDisabled,
+        // 🙋 Pausa pós-transferência (migr 0201): o botão diz "IA pausada até".
+        ai_paused_until: conversations.aiPausedUntil,
         ai_reply_count: conversations.aiReplyCount,
         // Só pra decidir se a IA responde aqui (agente dono); não vai pro cliente.
         ai_agent_id: conversations.aiAgentId,
@@ -264,6 +266,7 @@ export async function getConversationWithContact(
     aiActiveChannel,
     aiAutoreplyDisabled: conv.ai_autoreply_disabled,
     assignedAgentId: conv.assigned_agent_id,
+    aiPausedUntil: conv.ai_paused_until,
   })
   let aiAssigneeName: string | null = null
   if (aiActiveChannel && conv.assigned_agent_id && !readBlocked) {
@@ -363,7 +366,9 @@ export async function setConversationAiPaused(
         // ▶️ Ligar a IA de novo = novo "episódio": zera o limite de respostas
         // por conversa (Rafael 01/09: "desativei e ativei e não voltou" — o
         // contador ai_reply_count nunca zerava, só crescia).
-        ...(paused ? {} : { aiReplyCount: 0 }),
+        // 🙋 …e encerra a pausa pós-transferência (migr 0201): quem religa à
+        // mão quer a IA respondendo já, não no fim da pausa.
+        ...(paused ? {} : { aiReplyCount: 0, aiPausedUntil: null }),
         updatedAt: new Date().toISOString(),
       })
       .where(
@@ -533,6 +538,8 @@ export async function handConversationToAiAgent(
         aiAgentId: agent.id,
         aiAutoreplyDisabled: false,
         aiReplyCount: 0,
+        // 🙋 Entregar pra IA à mão também encerra a pausa pós-transferência.
+        aiPausedUntil: null,
         updatedAt: new Date().toISOString(),
       })
       .where(and(eq(conversations.id, conversationId), eq(conversations.accountId, ctx.accountId)))

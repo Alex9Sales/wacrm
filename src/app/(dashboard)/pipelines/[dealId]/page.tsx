@@ -210,11 +210,15 @@ function describeEvent(e: DealEvent): { icon: React.ReactNode; text: string } {
         };
       if (to === "lost") {
         const reason = d.reason ? String(d.reason).trim() : "";
+        // Comentário da perda ([[PERDER:motivo | comentário]], 01/10): o motivo
+        // fica limpo pro relatório e o detalhe (cidade, capital…) vem depois.
+        const note = d.note ? String(d.note).trim() : "";
+        const base = reason
+          ? `marcou como perdido · motivo: ${reason}`
+          : "marcou como perdido";
         return {
           icon: <XCircle className="h-4 w-4 text-red-600" />,
-          text: reason
-            ? `marcou como perdido · motivo: ${reason}`
-            : "marcou como perdido",
+          text: note ? `${base} · comentário: ${note}` : base,
         };
       }
       return {

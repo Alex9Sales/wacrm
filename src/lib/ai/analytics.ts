@@ -136,6 +136,7 @@ export type UsageSource = 'real' | 'playground' | 'all'
 export const USAGE_SOURCE_LABELS: Record<string, string> = {
   inbox: 'Atendimento',
   collections: 'Cobrança',
+  followup: 'Follow-up e lembretes',
   transcribe: 'Transcrição de áudio',
   vision: 'Leitura de imagem',
   draft: 'Rascunho sugerido',

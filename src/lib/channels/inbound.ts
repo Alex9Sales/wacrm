@@ -39,6 +39,7 @@ import { publishEvent } from '@/lib/events/publish';
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver';
 import { runAutomationsForTrigger } from '@/lib/automations/engine';
 import { maybePauseCadenceOnReply } from '@/lib/cadences/cadence';
+import { maybeWinOnReply } from '@/lib/pipelines/reply-win';
 import { noteCrossChannelActivity } from '@/lib/inbox/cross-channel';
 import { dispatchInboundToFlows } from '@/lib/flows/engine';
 import {
@@ -563,6 +564,29 @@ export async function dispatchInboundMessage(
         }
       } catch (err) {
         console.error('[inbound] keyword reroute failed:', err);
+      }
+    }
+    // 🏆 "Respondeu = ganho" (Zelo, reunião de 29/09): o card ABERTO do
+    // contato no funil de origem (pré-vendas) é ganho NA ETAPA EM QUE ESTÁ e
+    // nasce o card no destino (comercial) ligado a esta conversa. Tem que vir
+    // ANTES da pausa da cadência logo abaixo: ela empurra o card de "Sem
+    // contato" para a "1ª Tentativa" e o relatório perderia ONDE o lead
+    // respondeu. Vai o texto já gravado (áudio/foto chegam como "[audio]" e
+    // contam) + o id do botão clicado (botão de modelo conta como resposta).
+    // Conta sem regra = não faz nada. Grupo nunca chega aqui (desvia no topo),
+    // a guarda só deixa isso explícito. Nunca derruba a entrada.
+    if (!ev.group) {
+      try {
+        await maybeWinOnReply({
+          accountId,
+          contactId,
+          conversationId: conversation.id,
+          actorUserId: contactOutcome.contact.userId,
+          contentText,
+          interactiveReplyId: ev.interactiveReplyId ?? null,
+        });
+      } catch (err) {
+        console.error('[inbound] reply-win failed:', err);
       }
     }
     // Cadência: o lead respondeu → pausa a cadência ativa que pede "pausar ao

@@ -40,7 +40,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { otherPersonNumber as numberOfOtherPerson } from "@/lib/channels/other-person-number";
 import { useCrmCallingEnabled } from "@/hooks/use-crm-calling";
 import { hasMinRole } from "@/lib/auth/roles";
-import { aiState, aiWaitingHint } from "@/lib/ai/conversation-ai-state";
+import { aiHandoffPauseHint, aiState, aiWaitingHint } from "@/lib/ai/conversation-ai-state";
 import { usePresence } from "@/hooks/use-presence";
 import { PresenceDot } from "@/components/presence/presence-dot";
 import { presenceLabel } from "@/lib/presence";
@@ -498,6 +498,24 @@ export function MessageThread({
   useEffect(() => {
     setAiPaused(!!conversation?.ai_autoreply_disabled);
   }, [conversation?.id, conversation?.ai_autoreply_disabled]);
+  // 🙋 Pausa pós-transferência (migr 0201): a IA pediu um humano e fica calada
+  // até `ai_paused_until`, depois volta sozinha. Sem isto o botão dizia "IA on"
+  // com a IA calada (queixa de 15/09, por outro caminho). Cópia local porque
+  // religar a IA limpa a pausa no servidor e aqui na hora (otimista); o timer
+  // tira o rótulo quando a pausa acaba, sem precisar recarregar a conversa.
+  const [aiPausedUntil, setAiPausedUntil] = useState<string | null>(null);
+  useEffect(() => {
+    setAiPausedUntil(conversation?.ai_paused_until ?? null);
+  }, [conversation?.id, conversation?.ai_paused_until]);
+  const [aiPauseOn, setAiPauseOn] = useState(false);
+  useEffect(() => {
+    const ms = aiPausedUntil ? new Date(aiPausedUntil).getTime() - Date.now() : NaN;
+    setAiPauseOn(ms > 0);
+    if (!(ms > 0)) return;
+    // setTimeout estoura acima de ~24,8 dias; a pausa tem teto de 24h.
+    const t = setTimeout(() => setAiPauseOn(false), Math.min(ms + 500, 2_000_000_000));
+    return () => clearTimeout(t);
+  }, [aiPausedUntil]);
   // ⏳ Estado honesto (15/09, GoLink — Dra. Helena Teste): IA ligada com responsável
   // humano NÃO responde. Recalcula aqui com o toggle otimista e a atribuição
   // trocada na hora (o ai_state do servidor só muda ao recarregar a conversa).
@@ -505,7 +523,13 @@ export function MessageThread({
     aiActiveChannel: conversation?.ai_active_channel,
     aiAutoreplyDisabled: aiPaused,
     assignedAgentId: conversation?.assigned_agent_id,
+    aiPausedUntil: aiPauseOn ? aiPausedUntil : null,
   });
+  // "HH:MM" no fuso de quem olha (o mesmo do resto dos horários da tela).
+  const aiPauseClock =
+    aiUiState === "handoff_pause" && aiPausedUntil
+      ? format(new Date(aiPausedUntil), "HH:mm")
+      : null;
   const aiAssigneeName =
     profiles.find((p) => p.user_id === conversation?.assigned_agent_id)
       ?.full_name ??
@@ -546,7 +570,14 @@ export function MessageThread({
   const handleToggleAi = useCallback(async () => {
     if (!conversation) return;
     const next = !aiPaused;
+    // Religar encerra a pausa pós-transferência no servidor; aqui também.
+    const pausedUntilBefore = aiPausedUntil;
+    const revert = () => {
+      setAiPaused(!next);
+      if (!next) setAiPausedUntil(pausedUntilBefore);
+    };
     setAiPaused(next); // otimista
+    if (!next) setAiPausedUntil(null);
     try {
       const { error, warning, assignee } = await setConversationAiPaused(
         conversation.id,
@@ -554,7 +585,7 @@ export function MessageThread({
       );
       if (error) {
         toast.error(error);
-        setAiPaused(!next);
+        revert();
         return;
       }
       if (!next && warning) {
@@ -593,14 +624,14 @@ export function MessageThread({
       // 08/09 (GoLink): a chamada LANÇOU (aba com build antigo após deploy,
       // rede) e o botão ficava em "off" na tela com a IA ligada no servidor.
       // Erro lançado também reverte e avisa.
-      setAiPaused(!next);
+      revert();
       toast.error(
         next
           ? "Não consegui pausar a IA. Recarregue a página e tente de novo."
           : "Não consegui religar a IA. Recarregue a página e tente de novo.",
       );
     }
-  }, [conversation, aiPaused, canAssign]);
+  }, [conversation, aiPaused, aiPausedUntil, canAssign]);
 
   // 🤖 "Passar para a IA" — conversa em que nenhuma IA responde (ex.: o dono
   // chamou o lead à mão num número que não é da IA). Zelo 18/09: dois leads
@@ -1989,13 +2020,16 @@ export function MessageThread({
                 ? "IA pausada — clique para reativar (ela continua com o contexto)"
                 : aiUiState === "waiting_assignee"
                   ? `${aiWaitingHint(aiAssigneeName)} Clique para pausar a IA.`
-                  : "IA ativa — clique para pausar e assumir a conversa"
+                  : aiUiState === "handoff_pause" && aiPauseClock
+                    ? `${aiHandoffPauseHint(aiPauseClock)} Clique para desligar a IA e assumir a conversa.`
+                    : "IA ativa — clique para pausar e assumir a conversa"
             }
             className={cn(
               "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors",
               aiPaused
                 ? "text-muted-foreground hover:bg-muted hover:text-foreground"
-                : aiUiState === "waiting_assignee"
+                : aiUiState === "waiting_assignee" ||
+                    aiUiState === "handoff_pause"
                   ? "bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:text-amber-400"
                   : "bg-primary/10 text-primary hover:bg-primary/20",
             )}
@@ -2010,7 +2044,9 @@ export function MessageThread({
                 ? "IA off"
                 : aiUiState === "waiting_assignee"
                   ? "IA em espera"
-                  : "IA on"}
+                  : aiUiState === "handoff_pause" && aiPauseClock
+                    ? `IA pausada até ${aiPauseClock}`
+                    : "IA on"}
             </span>
           </button>
           {/* Confirmação do "Tirar responsável" (ação do aviso ao ligar a IA). */}

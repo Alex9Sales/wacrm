@@ -30,6 +30,65 @@ describe('cadenceStopReason', () => {
       'card avançou além da cadência',
     )
   })
+
+  describe('cadência presa a uma etapa (todo toque leva pra MESMA etapa)', () => {
+    // Sequência da COF: 3 toques, todos "mover para Envio da COF" (posição 3).
+    const cof = [3, 3, 3].map((position) => ({ pipelineId: 'franquia', position }))
+
+    it('card na etapa da cadência segue', () => {
+      expect(cadenceStopReason({ deal: { status: 'open', pipelineId: 'franquia', stagePosition: 3 }, cadenceStages: cof })).toBeNull()
+    })
+
+    it('o time devolveu o card pra trás → para (o próximo toque o puxaria de volta)', () => {
+      expect(cadenceStopReason({ deal: { status: 'open', pipelineId: 'franquia', stagePosition: 2 }, cadenceStages: cof })).toBe(
+        'card voltou de etapa',
+      )
+      expect(cadenceStopReason({ deal: { status: 'open', pipelineId: 'franquia', stagePosition: 0 }, cadenceStages: cof })).toBe(
+        'card voltou de etapa',
+      )
+    })
+
+    it('adiante da etapa continua sendo "avançou"', () => {
+      expect(cadenceStopReason({ deal: { status: 'open', pipelineId: 'franquia', stagePosition: 4 }, cadenceStages: cof })).toBe(
+        'card avançou além da cadência',
+      )
+    })
+
+    // Revisão 01/10: cadência em que só o 1º toque move ("Em contato") e os
+    // outros não — devolver o card depois dela não cancela os toques seguintes.
+    it('um toque só que move NÃO conta como presa', () => {
+      const um = [{ pipelineId: 'franquia', position: 3 }]
+      expect(cadenceStopReason({ deal: { status: 'open', pipelineId: 'franquia', stagePosition: 1 }, cadenceStages: um })).toBeNull()
+    })
+
+    it('nenhum toque que move saiu ainda (movingStepsSent = 0): atrás é "ainda não chegou", segue', () => {
+      expect(
+        cadenceStopReason({
+          deal: { status: 'open', pipelineId: 'franquia', stagePosition: 1 },
+          cadenceStages: cof,
+          movingStepsSent: 0,
+        }),
+      ).toBeNull()
+      expect(
+        cadenceStopReason({
+          deal: { status: 'open', pipelineId: 'franquia', stagePosition: 1 },
+          cadenceStages: cof,
+          movingStepsSent: 1,
+        }),
+      ).toBe('card voltou de etapa')
+    })
+
+    it('fechado, apagado ou em outro funil: os motivos de antes vêm primeiro', () => {
+      expect(cadenceStopReason({ deal: { status: 'lost', pipelineId: 'franquia', stagePosition: 1 }, cadenceStages: cof })).toBe('card perdido')
+      expect(cadenceStopReason({ deal: { status: 'open', pipelineId: 'pre', stagePosition: 1 }, cadenceStages: cof })).toBe('card mudou de funil')
+    })
+
+    it('cadência com etapas DIFERENTES nos toques: card atrás da etapa do toque é o caminho normal', () => {
+      // pré-vendas: 1ª..Definição — card na 2ª com toques que levam à 3ª, 4ª…
+      expect(cadenceStopReason({ deal: { status: 'open', pipelineId: 'pre', stagePosition: 2 }, cadenceStages: pre })).toBeNull()
+      expect(cadenceStopReason({ deal: { status: 'open', pipelineId: 'pre', stagePosition: 0 }, cadenceStages: pre })).toBeNull()
+    })
+  })
 })
 
 const SP = 'America/Sao_Paulo' // UTC−3, sem horário de verão

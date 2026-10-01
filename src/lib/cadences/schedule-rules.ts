@@ -71,12 +71,25 @@ export function shiftOutOfQuietHours(
  *   • card em outro funil (alguém arrastou no RD);
  *   • card ALÉM da etapa mais avançada que a cadência move (o time adiantou:
  *     ex.: lead parado em "Novo lead" que o vendedor levou pra "Reunião
- *     agendada" pelo telefone — a nutrição tem que parar).
- * `cadenceStages` = etapas pra onde os toques movem o card.
+ *     agendada" pelo telefone — a nutrição tem que parar);
+ *   • cadência PRESA A UMA ETAPA (todo toque que move leva pra MESMA etapa X)
+ *     e o card VOLTOU pra trás de X no funil dela. Essa cadência é "enquanto o
+ *     card está em X" (ex.: a sequência da COF, que entra quando o card chega
+ *     em "Envio da COF"). Sem esta regra, o time devolvia o card pra "Reunião
+ *     agendada" e o PRÓXIMO toque o puxava de novo pra X — redisparando o
+ *     gatilho da etapa (01/10). Cadência que leva a etapas DIFERENTES (o
+ *     pré-vendas: 2ª, 3ª, 4ª tentativa…) segue como antes: ali o card atrás
+ *     da etapa do toque é o caminho normal.
+ * `cadenceStages` = etapas pra onde os toques movem o card (uma por toque).
+ * `movingStepsSent` (opcional) = quantos toques que movem o card JÁ saíram
+ *   nesta inscrição. Com 0, o card ainda não foi levado a X pela cadência —
+ *   estar atrás é "ainda não chegou", não "voltou" — e a regra da etapa presa
+ *   não vale. Sem a informação, vale (quem chama hoje não manda).
  */
 export function cadenceStopReason(input: {
   deal: { status: string; pipelineId: string; stagePosition: number } | null
   cadenceStages: { pipelineId: string; position: number }[]
+  movingStepsSent?: number
 }): string | null {
   const { deal, cadenceStages } = input
   if (!cadenceStages.length) return null // cadência que não anda o card: nada muda
@@ -86,6 +99,17 @@ export function cadenceStopReason(input: {
   if (!inFunnel.length) return 'card mudou de funil'
   const furthest = Math.max(...inFunnel.map((s) => s.position))
   if (deal.stagePosition > furthest) return 'card avançou além da cadência'
+  // Etapa presa: todos os toques apontam pra mesma (funil, posição). Já se sabe
+  // que o card está nesse funil (o filtro acima não ficou vazio).
+  // Pelo menos 2 toques: cadência em que só o 1º toque move o card (ex.: pra
+  // "Em contato") e os outros não movem não é "presa a uma etapa" — devolver o
+  // card depois dela não pode cancelar os toques seguintes (revisão de 01/10).
+  const stuck =
+    cadenceStages.length >= 2 &&
+    new Set(cadenceStages.map((s) => `${s.pipelineId}|${s.position}`)).size === 1
+  if (stuck && input.movingStepsSent !== 0 && deal.stagePosition < cadenceStages[0].position) {
+    return 'card voltou de etapa'
+  }
   return null
 }
 

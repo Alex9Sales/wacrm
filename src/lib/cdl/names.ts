@@ -5,6 +5,8 @@
 // Pura (sem server-only) — usada no rascunho da IA (worker) e na UI.
 // ============================================================
 
+import { stripContactExportPrefix } from '@/lib/contacts/name-rule'
+
 // Primeiras palavras comuns em nomes de negócio/contato que NÃO são nome de
 // pessoa. Se o 1º token cair aqui, a saudação sai sem nome ("Oi!").
 const NOT_A_NAME = new Set([
@@ -24,6 +26,9 @@ const NOT_A_NAME = new Set([
   'pizzaria', 'hotel', 'pousada', 'igreja', 'condominio', 'condomínio', 'posto',
   'distribuidora', 'transportadora', 'imobiliaria', 'imobiliária', 'construtora',
   'sta', 'sto', 'santa', 'santo',
+  // Rótulo de agenda exportada (01/10): "Endereço Fulano" sem o "de" — o
+  // rótulo completo ("Endereço pessoal de Fulano") é tirado antes.
+  'endereco', 'endereço',
 ])
 
 // Pronome de tratamento: "Dr. João Silva" vira "Dr. João" — cumprimentar o
@@ -57,8 +62,10 @@ export function firstNameForGreeting(name: string | null | undefined): string {
   // NFC: "João" colado de PDF/Mac vem decomposto (o + til separado) e o til
   // sumia ("Joa"). Fica só com letras, hífen e apóstrofo DENTRO da palavra
   // ("Ana-Clara", "D'Ávila") → descarta emoji, número, símbolo.
-  const words = name
-    .normalize('NFC')
+  // 01/10: "Endereço pessoal de Fulano" (rótulo da agenda do Google que veio
+  // do RD como nome) saía "Oi, Endereço!" — o rótulo inteiro sai antes do
+  // split; "de/da" soltos no meio do nome continuam intocados.
+  const words = stripContactExportPrefix(name.normalize('NFC'))
     .replace(/[^\p{L}\p{M}\s'’-]/gu, ' ')
     .split(/\s+/)
     .map((w) => w.replace(/^['’-]+|['’-]+$/g, ''))

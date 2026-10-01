@@ -57,6 +57,9 @@ export async function POST(
       .update(conversations)
       .set({
         aiAutoreplyDisabled: !enabled,
+        // 🙋 Ligar à mão também encerra a pausa pós-transferência (migr 0201):
+        // quem devolve pra IA quer que ela responda já, não no fim da pausa.
+        ...(enabled ? { aiPausedUntil: null } : {}),
         updatedAt: new Date().toISOString(),
       })
       .where(eq(conversations.id, conversationId))

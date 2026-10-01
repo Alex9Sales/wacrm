@@ -23,11 +23,12 @@ import { loadLeadSourceForWebhook } from '@/lib/leads/sources'
 import { introDelivery, parseRdWebhook, pickIntroForOrigin, rdOriginLabel } from '@/lib/leads/providers/rdstation'
 import { buildLeadNotes } from '@/lib/leads/providers/shared'
 import { ingestLead } from '@/lib/leads/ingest'
-import { extractLeadFacts, isSyntheticConversion } from '@/lib/leads/lead-facts'
+import { extractLeadFacts } from '@/lib/leads/lead-facts'
 import { fillDealFactFields } from '@/lib/leads/deal-fact-fields'
 import { resolveAuditUserId } from '@/lib/api/v1/contacts'
 import { firstNameForGreeting, greeting } from '@/lib/cdl/names'
 import { renderForContact } from '@/lib/whatsapp/message-vars'
+import { stripContactExportPrefix } from '@/lib/contacts/name-rule'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -77,9 +78,13 @@ export async function POST(
       // do Fluxia. Não é lead novo: tratar como conversão criava card repetido
       // e, com o espelho ligado, um CICLO (card → negócio no RD → conversão →
       // card novo…). A conversão real do lead (formulário) já chegou antes.
-      const latest = lead.meta['Última conversão'] || lead.meta['Primeira conversão']
-      if (isSyntheticConversion(latest)) {
-        console.log(`[rd-station] conversão do próprio RD CRM ignorada (fonte ${source.id})`)
+      // Zelo 01/10: vale pra QUALQUER evento do RD CRM ("Tarefa criada/
+      // atualizada no RD Station CRM", "RD Station CRM"), e o rótulo vem de
+      // `selfConversion` — a nota (`meta`) não o carrega mais.
+      if (lead.selfConversion) {
+        console.log(
+          `[rd-station] conversão do próprio RD CRM ignorada ("${lead.selfConversion}", fonte ${source.id})`,
+        )
         continue
       }
       if (!lead.phone) {
@@ -126,10 +131,12 @@ export async function POST(
           // Texto de abertura (canal sem template, ou template recusado): o
           // da regra/fonte com {{primeiro_nome}}, senão o genérico. Linha
           // "---" separa em mensagens curtas.
+          // Nome sem o rótulo de contato exportado ("Endereço pessoal de …"):
+          // {{nome}} não passa por firstNameForGreeting (01/10).
           introText: source.deliverToAi
             ? delivery.text
-              ? renderForContact(delivery.text, { name: lead.name })
-              : introTextOf(lead.name)
+              ? renderForContact(delivery.text, { name: stripContactExportPrefix(lead.name ?? '') || lead.name })
+              : introTextOf(stripContactExportPrefix(lead.name ?? '') || lead.name)
             : null,
           // Número da abertura: o da REGRA desse tipo de lead (ou a reserva
           // dela, enquanto o modelo não é aprovado), senão o da fonte.
@@ -149,7 +156,9 @@ export async function POST(
         })
         // Cidade/Estado/Investimento/Campanha nos CAMPOS do card (só os que a
         // conta criou) — Renato 18/09: "no card não aparece investimento nem
-        // cidade". Conversão nova do mesmo lead atualiza com o dado mais novo.
+        // cidade". Conversão nova do mesmo lead atualiza com o dado mais novo,
+        // MENOS a Campanha: ali o primeiro toque bom vence (ver
+        // fillDealFactFields).
         if (result.dealId) {
           const facts = extractLeadFacts([
             ...Object.entries(lead.meta),

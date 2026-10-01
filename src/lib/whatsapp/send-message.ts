@@ -29,6 +29,7 @@
 
 import { and, desc, eq, isNull, or, sql } from 'drizzle-orm';
 import { stripInstructionMarkers } from './instruction-markers';
+import { looksLikeChannelAuthFailure } from '@/lib/channels/channel-down';
 
 import {
   db,
@@ -94,7 +95,15 @@ export class SendMessageError extends Error {
  * hit 463 mid-shift and saw the raw gRPC dump.
  */
 export function friendlySendError(raw: string): string | null {
-  const m = raw.toLowerCase();
+  // 01/10 (Instagram de um cliente): a Meta invalidou o token (190, senha
+  // trocada) e o atendente só via "erro de envio". Recusa de TOKEN vem antes de
+  // tudo — o código 190 mora justamente no colchete que é cortado abaixo.
+  if (looksLikeChannelAuthFailure(raw)) {
+    return 'A Meta recusou o acesso deste canal (senha trocada ou sessão encerrada por segurança). Um admin precisa reconectar em Configurações → Canais.';
+  }
+  // O adaptador anexa "[code=… subcode=… fbtrace_id=…]" para o LOG; um
+  // fbtrace_id aleatório com "463" ou "rate" caía nos padrões errados abaixo.
+  const m = raw.replace(/\s*\[(?:code|subcode|fbtrace_id)=[^\]]*\]\s*$/i, '').toLowerCase();
   // 15/09 (GoLink): Gmail com a senha de app revogada devolvia "gmail send
   // error: Invalid login: 535-5.7.8 Username and Password not accepted".
   if (/invalid login|eauth|535[- ]5\.7|534[- ]5\.7|username and password not accepted|application-specific password required/.test(m)) {
@@ -717,7 +726,9 @@ export async function sendMessageToConversation(
     // Show the atendente a clean message; keep the raw in the server log above.
     const friendly = friendlySendError(message);
     throw new SendMessageError(
-      'send_error',
+      // Token recusado = canal caído: a rota de envio troca pela frase com o
+      // NOME do canal ("O canal X está desconectado — reconecte…").
+      looksLikeChannelAuthFailure(message) ? 'channel_disconnected' : 'send_error',
       friendly ?? `${provider.id} send error: ${message}`,
       502
     );

@@ -171,6 +171,25 @@ export interface AccountSettings {
    *  Pedido da Dra. Joyce (01/10). Sem tela; liga-se por SQL, como o
    *  googlePatientInfo. Ver lib/agenda/confirmacao-agendamento.ts. */
   bookingConfirmation: boolean
+  /** 🏆 "O lead respondeu" = GANHO no funil de origem + card novo no destino.
+   *  Cada regra: card ABERTO do contato em `fromPipelineId` + qualquer mensagem
+   *  do cliente → ganho na etapa em que está (mede onde a cadência converteu) e
+   *  card em `toPipelineId › toStageId` ligado à mesma conversa. Vazio = nada
+   *  muda. Pedido da Zelo (reunião de 29/09: pré-vendas ganha no "sucesso no
+   *  contato", não no agendamento). Sem tela; liga-se por SQL. Ver
+   *  lib/pipelines/reply-win.ts. */
+  replyWinRules: ReplyWinRule[]
+  /** 📝 Cada toque de CADÊNCIA enviado vira tarefa já concluída no card (e no
+   *  RD CRM, quando a conta tem o espelho ligado) — para ninguém refazer o que
+   *  a régua já fez. OFF por padrão: em conta de muito volume vira ruído na
+   *  lista de tarefas. Pedido da Zelo (29/09). Sem tela; liga-se por SQL. */
+  logCadenceTasks: boolean
+}
+
+export interface ReplyWinRule {
+  fromPipelineId: string
+  toPipelineId: string
+  toStageId: string
 }
 
 /** Mon–Fri 08:00–18:00, weekend closed. Index 0=Sunday … 6=Saturday. */
@@ -255,6 +274,8 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   aiMeetingInvitees: [],
   googlePatientInfo: false,
   bookingConfirmation: false,
+  replyWinRules: [],
+  logCadenceTasks: false,
 }
 
 /** Read an account's settings, merged over the defaults. */

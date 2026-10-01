@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseCloseDirectives, buildSystemPrompt } from './defaults'
+import { parseCloseDirectives, buildSystemPrompt, moveCardInstruction } from './defaults'
 
 describe('parseCloseDirectives', () => {
   it('extrai skip/etiqueta/resolver/funil e limpa o texto', () => {
@@ -158,6 +158,82 @@ describe('parseCloseDirectives', () => {
     expect(d.text).toBe('Até mais!')
   })
 
+  // 01/10 (Zelo): lead fora da área perdido com motivo LIMPO (casa com a lista
+  // da conta e com o RD) + comentário com o detalhe.
+  it('[[PERDER:motivo | comentário]] separa no 1º "|" e limpa o texto', () => {
+    const d = parseCloseDirectives(
+      'Obrigada pelo interesse! Por enquanto não atendemos sua região.\n' +
+        '[[PERDER:Área sem clientes | Lead fora da área — cidade de interesse: Cidade X/UF · capital até R$ 25 mil]]',
+    )
+    expect(d.lose).toEqual({
+      reason: 'Área sem clientes',
+      note: 'Lead fora da área — cidade de interesse: Cidade X/UF · capital até R$ 25 mil',
+    })
+    expect(d.text).toBe('Obrigada pelo interesse! Por enquanto não atendemos sua região.')
+  })
+
+  it('o comentário pode ter outros "|" — só o 1º separa', () => {
+    const d = parseCloseDirectives('[[PERDER:Sem orçamento | capital baixo | volta em 2027]]')
+    expect(d.lose).toEqual({ reason: 'Sem orçamento', note: 'capital baixo | volta em 2027' })
+  })
+
+  it('comentário vazio depois do "|" → sem a chave note (nem undefined)', () => {
+    const d = parseCloseDirectives('[[PERDER:Achou caro | ]]')
+    expect(d.lose).toEqual({ reason: 'Achou caro' })
+    expect(d.lose).not.toHaveProperty('note')
+  })
+
+  it('um "]" dentro do comentário não impede a perda nem vaza o marcador', () => {
+    // Com [^\]] o marcador não casava: perda não acontecia e ele ia cru pro cliente.
+    const d = parseCloseDirectives(
+      'Tudo bem, obrigado!\n[[PERDER:Área sem clientes | interesse em [cidade fora] · capital [até 25 mil]]]',
+    )
+    expect(d.lose).toEqual({
+      reason: 'Área sem clientes',
+      note: 'interesse em [cidade fora] · capital [até 25 mil]',
+    })
+    expect(d.text).toBe('Tudo bem, obrigado!')
+  })
+
+  it('dois marcadores na MESMA linha: o PERDER para no "]]" dele', () => {
+    const d = parseCloseDirectives(
+      'Vou te passar pra equipe. [[PERDER:Fora do perfil | quer serviço avulso]] [[FUNIL:3. Comercial | Serviços > Novo lead]] [[RESOLVER]]',
+    )
+    expect(d.lose).toEqual({ reason: 'Fora do perfil', note: 'quer serviço avulso' })
+    expect(d.funnelStage).toBe('3. Comercial | Serviços > Novo lead')
+    expect(d.resolve).toBe(true)
+    expect(d.text).toBe('Vou te passar pra equipe.')
+  })
+
+  it('[[PERDER]] e [[PERDER:x]] na mesma linha de outro texto', () => {
+    expect(parseCloseDirectives('ok [[PERDER]] [[NOTA:sem retorno]]').lose).toEqual({ reason: '' })
+    const d = parseCloseDirectives('Até! [[PERDER: Achou caro ]] Abraço')
+    expect(d.lose).toEqual({ reason: 'Achou caro' })
+    expect(d.text).toBe('Até!  Abraço')
+  })
+
+  it('marcador fechado errado não engole o marcador seguinte como motivo', () => {
+    const d = parseCloseDirectives('Até! [[PERDER:Achou caro] [[RESOLVER]]')
+    expect(d.lose).toBeNull()
+    expect(d.resolve).toBe(true)
+  })
+
+  it('marcador sem fechamento não engole as linhas seguintes', () => {
+    const d = parseCloseDirectives('[[PERDER:Achou caro\nSegunda linha [[RESOLVER]]')
+    expect(d.lose).toBeNull()
+    expect(d.resolve).toBe(true)
+  })
+
+  it('comentário na linha de baixo ainda perde (o regex antigo aceitava)', () => {
+    const d = parseCloseDirectives('Combinado!\n[[PERDER:Área sem clientes |\ncidade de interesse: Cidade X/UF]]')
+    expect(d.lose).toEqual({ reason: 'Área sem clientes', note: 'cidade de interesse: Cidade X/UF' })
+    expect(d.text).toBe('Combinado!')
+  })
+
+  it('só o comentário (motivo vazio) → reason vazio + note', () => {
+    expect(parseCloseDirectives('[[PERDER: | só detalhe]]').lose).toEqual({ reason: '', note: 'só detalhe' })
+  })
+
   it('sem marcadores = texto intacto', () => {
     const d = parseCloseDirectives('Oi, tudo bem?')
     expect(d).toMatchObject({
@@ -239,5 +315,49 @@ describe('buildSystemPrompt — contato da conversa', () => {
   it('sem priorContactContext, nada de PRIOR CONTEXT no prompt', () => {
     const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })
     expect(p).not.toContain('PRIOR CONTEXT')
+  })
+})
+
+// 01/10 (Zelo): a IA só recebia a LISTA de etapas e as regras do prompt da
+// conta dependem de onde o card está agora.
+describe('moveCardInstruction / buildSystemPrompt — etapa atual do card', () => {
+  const stages = ['Novo lead', 'Qualificado', 'Reunião agendada']
+
+  it('diz em que etapa o card ESTÁ quando conhecida', () => {
+    const t = moveCardInstruction(stages, 'Qualificado')
+    expect(t).toContain('Novo lead → Qualificado → Reunião agendada.')
+    expect(t).toContain('The card is currently at stage: "Qualificado".')
+  })
+
+  it('sem etapa conhecida (null/vazia) a instrução fica como sempre foi', () => {
+    for (const cur of [undefined, null, '', '   ']) {
+      expect(moveCardInstruction(stages, cur)).not.toContain('currently at stage')
+    }
+  })
+
+  it('ensina o comentário depois do "|" no [[PERDER]]', () => {
+    expect(moveCardInstruction(stages)).toContain('[[PERDER:<short reason> | <comment>]]')
+  })
+
+  it('buildSystemPrompt repassa currentStage pra instrução de mover card', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      tools: ['move_card'],
+      pipelineStages: stages,
+      currentStage: 'Reunião agendada',
+    })
+    expect(p).toContain('The card is currently at stage: "Reunião agendada".')
+  })
+
+  it('sem a ferramenta move_card, nem a etapa atual entra', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      tools: [],
+      pipelineStages: stages,
+      currentStage: 'Qualificado',
+    })
+    expect(p).not.toContain('currently at stage')
   })
 })

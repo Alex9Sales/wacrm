@@ -960,6 +960,10 @@ export const conversations = pgTable("conversations", {
 	// DIGITA no inbox. A auto-resposta pula enquanto > now(), mesmo antes dele
 	// enviar — evita a IA atropelar quem começou a responder.
 	humanPresentUntil: timestamp("human_present_until", { withTimezone: true, mode: 'string' }),
+	// 🙋 Pausa pós-transferência (migr 0201): a IA pediu um humano e fica calada
+	// até aqui, depois volta sozinha. NULL/passado = não pausada. Coluna própria
+	// porque human_present_until é sobrescrita a cada tecla (encurtaria a pausa).
+	aiPausedUntil: timestamp("ai_paused_until", { withTimezone: true, mode: 'string' }),
 	// 🔀 Agente de IA "dono" da conversa (roteamento multiagente). NULL = por canal.
 	aiAgentId: uuid("ai_agent_id"),
 	aiReplyCount: integer("ai_reply_count").default(0).notNull(),
@@ -2112,6 +2116,9 @@ export const aiConfigs = pgTable("ai_configs", {
 	autoReplyBufferSeconds: integer("auto_reply_buffer_seconds").default(8).notNull(),
 	// 🤫 Barge-in: humano respondeu → IA muda pra observação por N min (0 = off).
 	bargeInMinutes: integer("barge_in_minutes").default(5).notNull(),
+	// 🙋 Ao pedir um humano ([[HANDOFF]]), pausar a IA por N min em vez de
+	// desligar (migr 0201). 0 = desliga na conversa, como antes.
+	handoffPauseMinutes: integer("handoff_pause_minutes").default(0).notNull(),
 	// 🔊 Responder por áudio (TTS). OFF → entende áudio, responde só texto.
 	audioRepliesEnabled: boolean("audio_replies_enabled").default(true).notNull(),
 	// Voz do áudio da IA (ElevenLabs voice_id). NULL = OpenAI 'nova'. A chave

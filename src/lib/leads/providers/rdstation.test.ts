@@ -117,6 +117,137 @@ describe('mapRdLead', () => {
     expect(m['Campanha']).toBe('franquia-setembro')
     expect(m['Canal da conversão']).toBe('facebook / cpc')
   })
+
+  it('lead de formulário não é conversão do RD CRM', () => {
+    expect(mapRdLead(LEAD)!.selfConversion).toBeNull()
+    expect(parseRdWebhook({ leads: [LEAD] })[0].selfConversion).toBeNull()
+  })
+})
+
+// Zelo 01/10: o marketing via na nota "Campanha: unknown / Canal da conversão:
+// unknown / unknown" — eventos que o PRÓPRIO RD CRM gera (quando o espelho cria
+// ou mexe no negócio) passavam pelo filtro, sobrescreviam a campanha boa e
+// abriam card indevido.
+describe('mapRdLead — conversão do próprio RD CRM e origem genérica', () => {
+  const FIRST_REAL = {
+    created_at: '2026-09-10T10:00:00-03:00',
+    content: { identificador: 'seja-um-franqueado-site' },
+    conversion_origin: { source: 'Facebook Ads', medium: 'unknown', campaign: 'franquia-setembro' },
+  }
+  const synthetic = (label: string) => ({
+    created_at: '2026-09-30T09:00:00-03:00',
+    source: label,
+    conversion_origin: { source: 'unknown', medium: 'unknown', campaign: 'unknown' },
+  })
+
+  for (const label of [
+    'RD Station CRM',
+    'Tarefa criada no RD Station CRM',
+    'Tarefa atualizada no RD Station CRM',
+    'Negociação criada no RD Station CRM',
+  ]) {
+    it(`"${label}" na última: marcada como do RD, fora da nota, origem da primeira`, () => {
+      const lead = mapRdLead({ ...LEAD, first_conversion: FIRST_REAL, last_conversion: synthetic(label) })!
+      expect(lead.selfConversion).toBe(label)
+      expect(lead.meta['Primeira conversão']).toBe('seja-um-franqueado-site')
+      expect(lead.meta['Última conversão']).toBeUndefined()
+      expect(lead.meta['Campanha']).toBe('franquia-setembro')
+      expect(lead.meta['Canal da conversão']).toBe('Facebook Ads')
+      // A data é a da conversão do lead, não a do evento do CRM.
+      expect(lead.meta['Data da conversão']).toBe('2026-09-10')
+      expect(rdOriginLabel(lead)).toBe('seja-um-franqueado-site')
+    })
+  }
+
+  it('olha TODOS os rótulos: o sintético escondido atrás de `source` também conta', () => {
+    const lead = mapRdLead({
+      ...LEAD,
+      first_conversion: FIRST_REAL,
+      last_conversion: {
+        source: 'Formulário Contato',
+        content: { identificador: 'Tarefa atualizada no RD Station CRM' },
+      },
+    })!
+    expect(lead.selfConversion).toBe('Tarefa atualizada no RD Station CRM')
+    expect(lead.meta['Última conversão']).toBeUndefined()
+  })
+
+  it('sem última conversão, vale a primeira (sintética → marcada)', () => {
+    const lead = mapRdLead({ ...LEAD, first_conversion: synthetic('RD Station CRM'), last_conversion: null })!
+    expect(lead.selfConversion).toBe('RD Station CRM')
+    expect(lead.meta['Primeira conversão']).toBeUndefined()
+    expect(lead.meta['Campanha']).toBeUndefined()
+  })
+
+  it('primeira sintética e última real: o lead entra, sem o rótulo do RD na nota', () => {
+    const lead = mapRdLead({
+      ...LEAD,
+      first_conversion: synthetic('Negociação criada no RD Station CRM'),
+      last_conversion: FIRST_REAL,
+    })!
+    expect(lead.selfConversion).toBeNull()
+    expect(lead.meta['Primeira conversão']).toBeUndefined()
+    expect(lead.meta['Última conversão']).toBe('seja-um-franqueado-site')
+    expect(rdOriginLabel(lead)).toBe('seja-um-franqueado-site')
+  })
+
+  it('"unknown" na última conversão real cai na campanha boa da primeira', () => {
+    const m = mapRdLead({
+      ...LEAD,
+      first_conversion: FIRST_REAL,
+      last_conversion: {
+        content: { identificador: 'Formulário Contato' },
+        conversion_origin: { source: 'unknown', medium: 'unknown', campaign: 'unknown' },
+      },
+    })!.meta
+    expect(m['Última conversão']).toBe('Formulário Contato')
+    expect(m['Campanha']).toBe('franquia-setembro')
+    expect(m['Canal da conversão']).toBe('Facebook Ads')
+  })
+
+  it('genérico parte a parte: o que diz algo na última fica, o resto vem da primeira', () => {
+    const m = mapRdLead({
+      ...LEAD,
+      first_conversion: FIRST_REAL,
+      last_conversion: {
+        content: { identificador: 'Formulário Contato' },
+        conversion_origin: { source: 'google', medium: '(not set)', campaign: 'unknown' },
+      },
+    })!.meta
+    expect(m['Canal da conversão']).toBe('google')
+    expect(m['Campanha']).toBe('franquia-setembro')
+  })
+
+  it('tudo "unknown": nenhuma linha de Campanha/Canal na nota', () => {
+    const unknownOrigin = { source: 'unknown', medium: 'unknown', campaign: 'unknown', channel: 'Unknown' }
+    const m = mapRdLead({
+      ...LEAD,
+      first_conversion: { ...LEAD.first_conversion, conversion_origin: unknownOrigin },
+      last_conversion: { ...LEAD.last_conversion, conversion_origin: unknownOrigin },
+    })!.meta
+    expect(m['Campanha']).toBeUndefined()
+    expect(m['Canal da conversão']).toBeUndefined()
+    expect(m['Última conversão']).toBe('Formulário Contato')
+  })
+
+  it('fonte e meio genéricos: usa o canal agrupado do RD quando ele diz algo', () => {
+    const m = mapRdLead({
+      ...LEAD,
+      last_conversion: {
+        ...LEAD.last_conversion,
+        conversion_origin: { source: 'unknown', medium: 'unknown', campaign: 'unknown', channel: 'Paid Search' },
+      },
+    })!.meta
+    expect(m['Canal da conversão']).toBe('Paid Search')
+  })
+
+  it('rótulo "unknown" no `source` não vira nome da conversão', () => {
+    const m = mapRdLead({
+      ...LEAD,
+      last_conversion: { source: 'unknown', content: { identificador: 'Formulário Contato' } },
+    })!.meta
+    expect(m['Última conversão']).toBe('Formulário Contato')
+  })
 })
 
 // Zelo 18/09: uma fonte do RD recebe franquia, pedido de orçamento e vaga — o

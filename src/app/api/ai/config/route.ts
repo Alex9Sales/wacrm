@@ -13,6 +13,7 @@ import { validateAiCredentials } from '@/lib/ai/validate'
 import { embedTexts } from '@/lib/ai/embeddings'
 import { AiError, type AiProvider } from '@/lib/ai/types'
 import { toAiHoursMode } from '@/lib/ai/hours-gate'
+import { HANDOFF_PAUSE_MAX_MINUTES } from '@/lib/ai/handoff-pause'
 import { normalizeAgentSwitches } from '@/lib/ai/switches'
 import { sanitizeTools } from '@/lib/ai/tools'
 import { sanitizeAutonomy } from '@/lib/ai/autonomy'
@@ -57,6 +58,7 @@ export async function GET(request: Request) {
           auto_reply_hours_mode: aiConfigs.autoReplyHoursMode,
           auto_reply_buffer_seconds: aiConfigs.autoReplyBufferSeconds,
           barge_in_minutes: aiConfigs.bargeInMinutes,
+          handoff_pause_minutes: aiConfigs.handoffPauseMinutes,
           audio_replies_enabled: aiConfigs.audioRepliesEnabled,
           voice_id: aiConfigs.voiceId,
           autonomy: aiConfigs.autonomy,
@@ -201,6 +203,19 @@ export async function POST(request: Request) {
     let bargeInMinutes = Number(body.barge_in_minutes)
     if (!Number.isFinite(bargeInMinutes)) bargeInMinutes = 5
     bargeInMinutes = Math.min(120, Math.max(0, Math.floor(bargeInMinutes)))
+
+    // 🙋 Pausa ao pedir um humano (min, 0..1440; 0 = desliga a IA na conversa,
+    // como antes de 29/09). Só grava quando o form MANDOU o campo: aba com
+    // bundle velho (sem o campo) salvando outra coisa não pode zerar a pausa
+    // que alguém configurou. Valor inválido = 400, não um 0 silencioso.
+    let handoffPauseMinutes: number | undefined
+    if (body.handoff_pause_minutes !== undefined && body.handoff_pause_minutes !== null) {
+      const n = Number(body.handoff_pause_minutes)
+      if (!Number.isFinite(n) || n < 0 || n > HANDOFF_PAUSE_MAX_MINUTES) {
+        return bad(`Pausa ao pedir um humano: use de 0 a ${HANDOFF_PAUSE_MAX_MINUTES} minutos.`)
+      }
+      handoffPauseMinutes = Math.floor(n)
+    }
 
     // 🔊 Responder por áudio (master do TTS). Ausente = ligado (compat).
     const audioRepliesEnabled = body.audio_replies_enabled !== false
@@ -447,6 +462,7 @@ export async function POST(request: Request) {
       autoReplyHoursMode: string
       autoReplyBufferSeconds: number
       bargeInMinutes: number
+      handoffPauseMinutes?: number
       audioRepliesEnabled: boolean
       voiceId: string | null
       autonomy?: Record<string, unknown>
@@ -504,6 +520,8 @@ export async function POST(request: Request) {
     // Só grava o nome quando veio um — não apaga o rótulo existente num save
     // que mexeu só num toggle.
     if (agentName) shared.name = agentName
+    // Pausa ao pedir um humano: só quando veio no body (ver parse acima).
+    if (handoffPauseMinutes !== undefined) shared.handoffPauseMinutes = handoffPauseMinutes
 
     try {
       if (existing) {

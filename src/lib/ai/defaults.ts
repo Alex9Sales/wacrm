@@ -80,8 +80,20 @@ export const RESOLVE_DIRECTIVE = /\[\[\s*resolver\s*\]\]/i
 /** Encerramento (opt-in): mover o card do funil pra etapa <nome>. */
 export const FUNNEL_DIRECTIVE = /\[\[\s*funil\s*:\s*([^\]]+?)\s*\]\]/i
 /** Perder EM PÉ: marca o negócio como perdido MANTENDO a etapa (perde-em-pé).
- *  Motivo opcional: [[PERDER:Achou caro]] ou só [[PERDER]]. */
-export const LOSE_DIRECTIVE = /\[\[\s*perder\s*(?::\s*([^\]]+?))?\s*\]\]/i
+ *  Motivo opcional: [[PERDER:Achou caro]] ou só [[PERDER]]. Comentário
+ *  opcional depois do 1º "|": [[PERDER:Área sem clientes | cidade X · capital Y]]
+ *  — o motivo fica LIMPO (casa com a lista de motivos da conta e com o RD) e o
+ *  detalhe vai pro comentário.
+ *  01/10 (Zelo): o argumento vai até o 1º "]]" que NÃO é seguido de outro "]"
+ *  (mesmo cuidado do TRANSFERIR/RESUMO). Com [^\]] um "]" dentro do comentário
+ *  ("[capital até 25 mil]") fazia o marcador não casar: a perda NÃO acontecia,
+ *  em silêncio, e o marcador ia cru pro cliente. Aceita quebra de linha (o
+ *  comentário depois do "|" às vezes vem na linha de baixo — o regex antigo
+ *  aceitava e a perda não pode sumir por isso); o que segura um marcador sem
+ *  fechamento de engolir a resposta é o argumento nunca atravessar um "[[":
+ *  "[[PERDER:Achou caro] [[RESOLVER]]" (fechado errado) não vira o motivo
+ *  "Achou caro] [[RESOLVER". Com dois marcadores o lazy para no "]]" do 1º. */
+export const LOSE_DIRECTIVE = /\[\[\s*perder\s*(?::\s*((?:(?!\[\[)[\s\S])+?))?\s*\]\](?!\])/i
 /** Ganho EM PÉ: o card cumpriu o objetivo DO SEU FUNIL (ex.: pré-vendas que
  *  marcou a reunião). Com [[FUNIL:<funil> > <etapa>]] junto, abre o próximo
  *  card no outro funil (Jordan/Zelo 18/09: "dá o ganho no pré-vendas e duplica
@@ -156,8 +168,9 @@ export interface AgentDirectives {
   resolve: boolean
   /** Encerramento: etapa do funil pedida (nome), ou null. */
   funnelStage: string | null
-  /** Perder EM PÉ: motivo da perda (mantém a etapa), ou null. */
-  lose: { reason: string } | null
+  /** Perder EM PÉ: motivo da perda (mantém a etapa), ou null. `note` = o
+   *  comentário depois do "|" — AUSENTE (não undefined/null) quando vazio. */
+  lose: { reason: string; note?: string } | null
   /** Ganho EM PÉ ([[GANHO]]): o card cumpriu o objetivo do funil dele. */
   win: boolean
   /** Resumo pra quem assume no handoff ([[RESUMO:…]]), ou null. */
@@ -186,6 +199,20 @@ export interface AgentDirectives {
   setPhone: string | null
 }
 
+/**
+ * "motivo | comentário" do [[PERDER:]] → { reason, note }. Separa no PRIMEIRO
+ * "|" (o comentário pode ter outros). Sem comentário a chave `note` nem existe:
+ * quem compara com toEqual({ reason }) e quem grava o evento não precisa
+ * distinguir "vazio" de "ausente".
+ */
+function splitLoseArg(arg: string): { reason: string; note?: string } {
+  const bar = arg.indexOf('|')
+  if (bar < 0) return { reason: arg.trim() }
+  const reason = arg.slice(0, bar).trim()
+  const note = arg.slice(bar + 1).trim()
+  return note ? { reason, note } : { reason }
+}
+
 /** Extrai os marcadores de ação do texto gerado e devolve o texto limpo. */
 export function parseCloseDirectives(raw: string): AgentDirectives {
   const skipReply = SKIP_DIRECTIVE.test(raw)
@@ -193,7 +220,7 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
   const fm = raw.match(FUNNEL_DIRECTIVE)
   const funnelStage = fm ? fm[1].trim() : null
   const pm = raw.match(LOSE_DIRECTIVE)
-  const lose = pm ? { reason: (pm[1] || '').trim() } : null
+  const lose = pm ? splitLoseArg(pm[1] || '') : null
   const win = WIN_DIRECTIVE.test(raw)
   const hsm = raw.match(HANDOFF_SUMMARY_DIRECTIVE)
   const handoffSummary = hsm ? hsm[1].trim() || null : null
@@ -426,12 +453,21 @@ export function tagInstruction(tags: string[]): string {
  * qualificação; agendou → etapa de agendamento) e PARAR aí (etapas seguintes,
  * tipo confirmado/compareceu, são do humano/follow-up). Usa o mesmo marcador
  * [[FUNIL:<etapa>]]. `stages` = etapas do funil ligado, em ordem.
+ *
+ * `currentStage` = etapa em que o card ESTÁ agora (null = desconhecida).
+ * 01/10 (Zelo): a IA só recebia a lista de etapas, e as regras do prompt da
+ * conta dependem de onde o card está ("se já estiver em Reunião agendada, não
+ * remarque") — sem saber, ela chutava. "Move FORWARD" também só faz sentido
+ * sabendo o ponto de partida.
  */
-export function moveCardInstruction(stages: string[]): string {
+export function moveCardInstruction(stages: string[], currentStage?: string | null): string {
+  const here = (currentStage ?? '').trim()
   return (
     'Keeping the deal card in sync with reality: the linked deal sits in a pipeline whose stages, in order, are: ' +
     stages.join(' → ') +
-    '. As the conversation progresses, move the card to the stage that matches where things ACTUALLY are, by emitting "[[FUNIL:<stage>]]" on its own line, choosing EXACTLY one name from that list. Move it FORWARD, one step at a time, only when something real just changed: when the customer shows clear interest or becomes qualified, move to an early "qualified/interested"-type stage; when you agree on and schedule a concrete meeting, move to a "scheduled/appointment"-type stage (emit it together with the [[AGENDAR:...]] marker). Then STOP there — do NOT jump ahead to stages that depend on a human or on the customer showing up (a "confirmed", "attended/compareceu", or "won" stage): those are moved later by a human or by an automated follow-up, not by you now. Do NOT move the card on every message, and do not move it backwards. Do NOT use this marker to mark a deal as lost: when the customer clearly loses interest, drops out, or says no, emit "[[PERDER:<short reason>]]" instead — it marks the deal as lost while KEEPING it on the CURRENT stage (so the funnel report shows exactly WHERE it was lost). This marker is control metadata: never show it to the customer.'
+    '.' +
+    (here ? ` The card is currently at stage: "${here}".` : '') +
+    ' As the conversation progresses, move the card to the stage that matches where things ACTUALLY are, by emitting "[[FUNIL:<stage>]]" on its own line, choosing EXACTLY one name from that list. Move it FORWARD, one step at a time, only when something real just changed: when the customer shows clear interest or becomes qualified, move to an early "qualified/interested"-type stage; when you agree on and schedule a concrete meeting, move to a "scheduled/appointment"-type stage (emit it together with the [[AGENDAR:...]] marker). Then STOP there — do NOT jump ahead to stages that depend on a human or on the customer showing up (a "confirmed", "attended/compareceu", or "won" stage): those are moved later by a human or by an automated follow-up, not by you now. Do NOT move the card on every message, and do not move it backwards. Do NOT use this marker to mark a deal as lost: when the customer clearly loses interest, drops out, or says no, emit "[[PERDER:<short reason>]]" instead — it marks the deal as lost while KEEPING it on the CURRENT stage (so the funnel report shows exactly WHERE it was lost). Keep the reason short and generic (it is grouped in a report); put any detail after a "|" as a comment: "[[PERDER:<short reason> | <comment>]]". This marker is control metadata: never show it to the customer.'
   )
 }
 
@@ -525,6 +561,9 @@ export function buildSystemPrompt(args: {
   bookedForLead?: string | null
   /** Etapas do funil ligado (pra ferramenta move_card escolher pelo nome). */
   pipelineStages?: string[]
+  /** Etapa em que o card aberto ESTÁ agora (loadDealCloseContext →
+   *  currentStageName). Null/undefined = não diz (comportamento antigo). */
+  currentStage?: string | null
   /** OUTROS funis da conta (ferramenta move_funnel): nome + etapas em ordem. */
   otherFunnels?: { name: string; stages: string[] }[]
   /** Etiquetas EXISTENTES da conta (pra ferramenta tag escolher). */
@@ -740,7 +779,7 @@ export function buildSystemPrompt(args: {
     // separada do encerramento. Só quando há etapas do funil ligado.
     const stages = args.pipelineStages ?? []
     if (has('move_card') && stages.length > 0) {
-      parts.push(moveCardInstruction(stages))
+      parts.push(moveCardInstruction(stages, args.currentStage))
     }
     // Trocar de funil (ferramenta move_funnel): só com card ligado e outros funis.
     const otherFunnels = args.otherFunnels ?? []

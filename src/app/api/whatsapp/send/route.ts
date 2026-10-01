@@ -1,7 +1,7 @@
 import { NextResponse, after } from 'next/server'
 import { and, eq, isNull, sql } from 'drizzle-orm'
 
-import { db, contacts, conversations, messages, memberPresence, user } from '@/db'
+import { db, channels, contacts, conversations, messages, memberPresence, user } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { derivePresence, type StoredPresence } from '@/lib/presence'
 import { getAccountSettings } from '@/lib/settings/account-settings'
@@ -26,6 +26,7 @@ import {
   validateSendMessageParams,
   SendMessageError,
 } from '@/lib/whatsapp/send-message'
+import { disconnectedSendMessage } from '@/lib/channels/channel-down'
 
 // The dashboard's outbound-send endpoint. It owns auth, per-user rate
 // limiting, and the two ways the UI targets a thread — an existing
@@ -475,6 +476,20 @@ export async function POST(request: Request) {
         console.error(
           `[send] SendMessageError conv=${conversationId} type=${message_type} media=${media_url ? 'yes' : 'no'} status=${err.status}: ${err.message}`,
         )
+        // 01/10: Instagram com o token invalidado pela Meta (190) — o
+        // atendente lia um erro genérico e não sabia que o remédio era
+        // reconectar. Canal desconectado / sem token vira a frase que diz.
+        const disconnected = await disconnectedChannelError(
+          accountId,
+          conversationId,
+          err,
+        )
+        if (disconnected) {
+          return NextResponse.json(
+            { error: disconnected, code: 'channel_disconnected' },
+            { status: err.status }
+          )
+        }
         return NextResponse.json(
           { error: err.message },
           { status: err.status }
@@ -488,6 +503,69 @@ export async function POST(request: Request) {
       { error: 'Failed to send message' },
       { status: 500 }
     )
+  }
+}
+
+/**
+ * O envio falhou porque o canal da conversa está desconectado / sem token
+ * válido? Devolve a frase para a tela ("O canal X está desconectado —
+ * reconecte em Configurações → Canais.") ou null para manter o erro original.
+ * A decisão é pura (lib/channels/channel-down); aqui só se lê o canal.
+ *
+ * Canal: o da conversa; sem channel_id (conversa legada) é o mesmo padrão do
+ * loadDefaultChannel — o primeiro conectado, senão o oficial, senão qualquer.
+ * Se a leitura falhar, fica o erro original (que já é legível) e o log.
+ */
+async function disconnectedChannelError(
+  accountId: string,
+  conversationId: string,
+  err: SendMessageError,
+): Promise<string | null> {
+  // Barato antes do banco: validação, db_error (a mensagem SAIU) etc. nunca
+  // viram "desconectado".
+  if (err.code !== 'send_error' && err.code !== 'channel_disconnected') return null
+  try {
+    const conv = firstOrNull(
+      await db
+        .select({ channelId: conversations.channelId })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.id, conversationId),
+            eq(conversations.accountId, accountId)
+          )
+        )
+        .limit(1)
+    )
+    const channelId = conv?.channelId ?? null
+    const rows = await db
+      .select({
+        id: channels.id,
+        provider: channels.provider,
+        name: channels.name,
+        status: channels.status,
+        providerMeta: channels.providerMeta,
+      })
+      .from(channels)
+      .where(
+        channelId
+          ? and(eq(channels.id, channelId), eq(channels.accountId, accountId))
+          : eq(channels.accountId, accountId)
+      )
+    const channel = channelId
+      ? (rows[0] ?? null)
+      : (rows.find((r) => r.status === 'connected') ??
+        rows.find((r) => r.provider === 'meta') ??
+        rows[0] ??
+        null)
+    return disconnectedSendMessage({
+      errorCode: err.code,
+      errorMessage: err.message,
+      channel,
+    })
+  } catch (lookupErr) {
+    console.error('[send] leitura do canal para a mensagem de erro falhou:', lookupErr)
+    return null
   }
 }
 

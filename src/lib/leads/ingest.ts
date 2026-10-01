@@ -32,6 +32,7 @@ import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { splitIntroParts } from '@/lib/leads/intro-parts'
+import { stripContactExportPrefix } from '@/lib/contacts/name-rule'
 
 export interface IngestLeadInput {
   /** Telefone cru (será normalizado p/ E.164, ciente do formato BR). */
@@ -119,7 +120,9 @@ export async function ingestLead(
   // 1) Contato — telefone é a chave. Normaliza (corrige o "0 + operadora +
   //    DDD" do BR) antes do find-or-create validar E.164.
   const phone = normalizeInboundPhoneBR(input.rawPhone)
-  const name = input.name?.trim() || undefined
+  // "Endereço pessoal de Fulano" (contato exportado do Google) vira "Fulano"
+  // também no título do card e da tarefa — não só no contato (01/10).
+  const name = stripContactExportPrefix(input.name?.trim() ?? '') || undefined
   const email = input.email?.trim() || undefined
   const company = input.company?.trim() || undefined
 

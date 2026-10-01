@@ -1,11 +1,11 @@
-import { and, asc, desc, eq, gt, inArray, sql, type SQL } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, gte, inArray, or, sql, type SQL } from 'drizzle-orm'
 
-import { db, aiConfigs, conversations, deals, calendarEvents, contacts, messages, tasks } from '@/db'
+import { db, conversations, deals, calendarEvents, contacts, messages, tasks } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { CAPABILITIES, type ProviderId } from '@/lib/channels/provider'
 import { jaFoiEntregue } from '@/lib/channels/delivery-error'
 import { pareceConsultaDeAlguem } from '@/lib/google/event-contact'
-import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
+import { friendlySendError, sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { getProvider } from '@/lib/channels/registry'
 import { listChannels } from '@/lib/channels/channels'
 import { findOrCreateConversation } from '@/lib/channels/inbound'
@@ -20,13 +20,28 @@ import { buildConversationContext, stripLeadingTimestamp } from './context'
 import { generateReply } from './generate'
 import { closeInstruction, currentDateTimeLabel, parseCloseDirectives } from './defaults'
 import { isEchoOfRecent } from './followup-echo'
-import { applyCloseActions, loadDealCloseContext, markDealLostInPlace } from './close-actions'
+import {
+  applyCloseActions,
+  loadDealCloseContext,
+  markDealLostInPlace,
+  postInternalNote,
+} from './close-actions'
 import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-profile'
 import { formatCatalogForPrompt } from './catalog'
-import type { AiConfig } from './types'
+import { HANDOFF_NOTE_PREFIX } from './handoff-pause'
+import {
+  extractMaterialDirectives,
+  findMaterialByName,
+  listMaterialsForAgent,
+  type AgentMaterial,
+} from './materials'
+import type { AiConfig, UsageMeta } from './types'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { isWithinBusinessHours } from '@/lib/settings/business-hours'
-import { engineSendText } from '@/lib/flows/meta-send'
+import { engineSendMedia, engineSendText } from '@/lib/flows/meta-send'
+import { stripInstructionMarkers } from '@/lib/whatsapp/instruction-markers'
+import { renderTemplateText } from '@/lib/whatsapp/template-text'
+import { getTemplateBody } from '@/lib/whatsapp/template-body'
 import { zonedWallToUtc } from './schedule-actions'
 import { gmailSendBlockedReason } from '@/lib/channels/gmail-health-state'
 import { isNoCreditError, warnNoCredit } from './no-credit-alert'
@@ -133,7 +148,11 @@ export interface FollowUpStep {
 }
 /** Gatilho por ETAPA: quando o card entra na etapa <stage>, após <delay> (se o
  *  cliente estiver calado) manda UM toque. Dentro da janela de 24h = texto da IA;
- *  FORA da janela no canal oficial (Meta) = template aprovado (se configurado). */
+ *  FORA da janela no canal oficial (Meta) = template aprovado (se configurado).
+ *
+ *  Com `sendTemplateText` o gatilho vira ENTREGA (01/10, Zelo "Envio da COF"):
+ *  sem IA, o texto aprovado do modelo sai igual dentro e fora da janela — ver
+ *  planStageDelivery. */
 export interface StageTrigger {
   stage: string
   delayValue: number
@@ -144,6 +163,29 @@ export interface StageTrigger {
   templateLanguage: string | null
   /** Parâmetros do corpo do template ({{1}},{{2}}…); aceita tokens {nome} {hora} {data}. */
   templateParams: string[]
+  /**
+   * Modo ENTREGA: manda o TEXTO do modelo (sem IA), também dentro da janela de
+   * 24h. Só vale com modelo escolhido. Padrão false (texto da IA, como antes).
+   *
+   * Zelo, 01/10: o dono aprovou na Meta o texto que acompanha a Circular de
+   * Oferta de Franquia e quer que o lead leia EXATAMENTE aquilo. A IA
+   * parafraseava — e, pior, escreveu o marcador cru em vez de mandar o PDF.
+   */
+  sendTemplateText: boolean
+  /** Nome do material do agente a anexar depois da mensagem (ex.: o PDF da COF). */
+  attachMaterial: string | null
+  /**
+   * Envia mesmo com a IA desligada NAQUELA conversa, com a conversa atribuída a
+   * um atendente, ou já resolvida. Padrão false.
+   *
+   * O gatilho de etapa herdava as travas do reengajamento ("não fale por cima
+   * do humano") — certas para cutucar quem sumiu, erradas para uma ENTREGA que
+   * o próprio responsável pediu ao mover o card. Na Zelo a COF dependia de
+   * alguém lembrar de religar a IA na conversa; quase nunca alguém lembrava.
+   */
+  ignoreAiPause: boolean
+  /** Depois de um envio que saiu, inscreve o contato nesta cadência (cadences.id). */
+  enrollCadenceId: string | null
 }
 export const FOLLOW_UP_MAX_STAGE_TRIGGERS = 6
 export const FOLLOW_UP_MAX_MEETING_REMINDERS = 6
@@ -568,6 +610,9 @@ export function degrausJaVencidos(
   return n
 }
 
+/** id de cadência válido — lixo vindo da tela/API vira null, não erro de SQL no worker. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 function readStageTrigger(raw: unknown): StageTrigger | null {
   if (!raw || typeof raw !== 'object') return null
   const bag = raw as Record<string, unknown>
@@ -596,6 +641,17 @@ function readStageTrigger(raw: unknown): StageTrigger | null {
         .map((p) => p.slice(0, 300))
         .slice(0, 10)
     : []
+  // Lista branca dos campos de 01/10. A tela monta o gatilho campo a campo, e
+  // o PATCH passa por aqui: campo que não for lido aqui some no primeiro
+  // "Salvar" sem ninguém ver (foi o que quase aconteceu com o onlyIfStage).
+  const attachMaterial =
+    typeof bag.attachMaterial === 'string' && bag.attachMaterial.trim()
+      ? bag.attachMaterial.trim().slice(0, 200)
+      : null
+  const enrollCadenceId =
+    typeof bag.enrollCadenceId === 'string' && UUID_RE.test(bag.enrollCadenceId.trim())
+      ? bag.enrollCadenceId.trim().toLowerCase()
+      : null
   return {
     stage,
     delayValue,
@@ -604,6 +660,12 @@ function readStageTrigger(raw: unknown): StageTrigger | null {
     templateName,
     templateLanguage,
     templateParams,
+    // Entrega sem modelo não tem o que entregar: a caixa só vale com modelo
+    // (a tela desabilita, mas a regra mora aqui, onde toda origem passa).
+    sendTemplateText: bag.sendTemplateText === true && templateName !== null,
+    attachMaterial,
+    ignoreAiPause: bag.ignoreAiPause === true,
+    enrollCadenceId,
   }
 }
 
@@ -702,9 +764,293 @@ function agentCoverageCond(agent: AgentRow): ReturnType<typeof sql> {
   }
   return sql`AND c.ai_agent_id = ${agent.id}::uuid`
 }
+
+// ============================================================
+// Texto da IA → o que pode ir ao cliente (as 3 varreduras).
+//
+// 01/10, Zelo: o gatilho de etapa "Envio da COF" mandou QUATRO vezes
+// "[[ENVIAR: Circular de Oferta de Franquia]]" cru para leads de franquia — e
+// nenhuma vez o PDF. O auto-reply sabe trocar o marcador pelo arquivo; as
+// varreduras de follow-up geravam com a mesma IA, mas mandavam o texto como
+// veio. A orientação do gatilho pedia o arquivo, a IA escreveu o marcador, e
+// ninguém do lado de cá sabia o que fazer com ele.
+// ============================================================
+
+/** Tolerante a caixa e espaço — "[[ silent ]]" também é calar. */
+const SILENT_RE = /\[\[\s*SILENT\s*\]\]/i
+
+export interface PreparedFollowUpText {
+  /** O que vai na bolha. Pode ser '' quando a IA só pediu um material. */
+  text: string
+  /** Materiais pedidos com [[ENVIAR:nome]], na ordem, sem repetição. */
+  materials: string[]
+  /** A IA calou ([[SILENT]]) ou não sobrou nada para mandar. */
+  silent: boolean
+  /** Outros marcadores retirados — para o log, nunca para o cliente. */
+  removed: string[]
+}
+
+/**
+ * Prepara o texto gerado pela IA num follow-up/lembrete:
+ *  1. tira os [[ENVIAR:nome]] (os arquivos vão DEPOIS do texto);
+ *  2. checa o [[SILENT]] — ANTES de limpar o resto, porque a limpeza abaixo
+ *     também apagaria o [[SILENT]] e uma resposta "calada" viraria texto;
+ *  3. limpa qualquer outro [[…]] (exceto [[AUDIO]] e [[foto:…]]).
+ *
+ * Sobrou nada E nenhum material → calou. Sobrou nada MAS com material → não é
+ * silêncio: o arquivo sai sozinho. Calar ali jogaria fora justamente o arquivo
+ * que a orientação pediu (o caso da COF), sem rastro nenhum.
+ */
+export function prepareFollowUpText(raw: string | null | undefined): PreparedFollowUpText {
+  const base = (raw ?? '').trim()
+  if (!base) return { text: '', materials: [], silent: true, removed: [] }
+  const ex = extractMaterialDirectives(base)
+  if (SILENT_RE.test(ex.text)) return { text: '', materials: [], silent: true, removed: [] }
+  const limpo = stripInstructionMarkers(ex.text)
+  const text = (limpo.text ?? '').trim()
+  if (!text && ex.names.length === 0) {
+    return { text: '', materials: [], silent: true, removed: limpo.removed }
+  }
+  return { text, materials: ex.names, silent: false, removed: limpo.removed }
+}
+
+/** Sobrou variável sem valor ("{{2}}") depois de preencher o modelo? */
+export function hasUnfilledTemplateVars(text: string | null | undefined): boolean {
+  return /\{\{\s*\d+\s*\}\}/.test(text ?? '')
+}
+
+/** Por que o gatilho de etapa vai (ou não vai) mandar o que manda. */
+export type StageDeliveryReason =
+  /** Modo IA: texto gerado com o contexto da conversa. */
+  | 'ia'
+  /** Modo IA: o cliente escreveu depois de entrar na etapa — o auto-reply cuida. */
+  | 'cliente_respondeu'
+  /** Entrega: o corpo aprovado do modelo, como texto. */
+  | 'texto_do_modelo'
+  /** Canal oficial, janela de 24h fechada: só o modelo passa. */
+  | 'modelo_fora_da_janela'
+  /** Entrega, canal oficial: o texto ficaria com "{{n}}" — vai o modelo. */
+  | 'modelo_variavel_vazia'
+  /** Entrega, canal oficial: o corpo não foi achado localmente — vai o modelo. */
+  | 'modelo_sem_corpo'
+  /** Canal oficial, janela fechada, gatilho sem modelo: nada a fazer. */
+  | 'janela_fechada_sem_modelo'
+  /** Entrega fora do canal oficial com "{{n}}" sobrando: não manda. */
+  | 'variavel_vazia'
+  /** Entrega fora do canal oficial sem o corpo do modelo: não manda. */
+  | 'corpo_nao_encontrado'
+
+export interface StageDeliveryPlan {
+  send: 'ai' | 'text' | 'template' | 'skip'
+  /** Anexar o material do gatilho depois da mensagem (envio livre permitido). */
+  attach: boolean
+  reason: StageDeliveryReason
+}
+
+/**
+ * Decide o que o gatilho de etapa manda. PURA — a varredura só executa.
+ *
+ * Envio LIVRE (texto, arquivo) só existe com a janela de 24h aberta ou em canal
+ * sem templates (WAHA e afins). Fora disso, no canal oficial, só passa modelo
+ * aprovado — e arquivo nenhum.
+ *
+ * Modo ENTREGA (`sendTemplateText` + modelo): não depende do que o cliente
+ * disse. A regra "o cliente respondeu depois da mudança de etapa → não envia"
+ * existe para a IA não falar por cima do auto-reply; uma entrega pedida pelo
+ * responsável ao mover o card não compete com ninguém. Na Zelo, o lead que
+ * respondeu "ok, aguardo" ficava SEM a COF justamente por ter respondido.
+ */
+export function planStageDelivery(input: {
+  sendTemplateText: boolean
+  templateName: string | null
+  officialChannel: boolean
+  windowOpen: boolean
+  customerRepliedAfterStage: boolean
+  /** Corpo do modelo já preenchido (null = não achado / não se aplica). */
+  renderedBody: string | null
+  hasAttachment: boolean
+}): StageDeliveryPlan {
+  const livre = !input.officialChannel || input.windowOpen
+  const attach = input.hasAttachment && livre
+  const entrega = input.sendTemplateText && !!input.templateName
+
+  if (entrega) {
+    if (!livre) return { send: 'template', attach: false, reason: 'modelo_fora_da_janela' }
+    const corpo = (input.renderedBody ?? '').trim()
+    if (corpo && !hasUnfilledTemplateVars(corpo)) {
+      return { send: 'text', attach, reason: 'texto_do_modelo' }
+    }
+    // O texto ficaria com um buraco à mostra ("Olá {{1}}"). No oficial o
+    // próprio modelo resolve (a Meta diz o que falta); fora dele não há plano B.
+    if (input.officialChannel) {
+      return { send: 'template', attach, reason: corpo ? 'modelo_variavel_vazia' : 'modelo_sem_corpo' }
+    }
+    return { send: 'skip', attach: false, reason: corpo ? 'variavel_vazia' : 'corpo_nao_encontrado' }
+  }
+
+  if (input.customerRepliedAfterStage) {
+    return { send: 'skip', attach: false, reason: 'cliente_respondeu' }
+  }
+  if (!livre) {
+    return input.templateName
+      ? { send: 'template', attach: false, reason: 'modelo_fora_da_janela' }
+      : { send: 'skip', attach: false, reason: 'janela_fechada_sem_modelo' }
+  }
+  return { send: 'ai', attach, reason: 'ia' }
+}
+
+/**
+ * Nota interna para quando o gatilho não manda nada por um motivo que a equipe
+ * precisa saber. null = não é aviso (ex.: o cliente respondeu — o auto-reply
+ * assumiu, como sempre foi).
+ */
+export function stageSkipNote(
+  reason: StageDeliveryReason,
+  stage: string,
+  templateName: string | null,
+): string | null {
+  const modelo = templateName ? `"${templateName}"` : 'do gatilho'
+  switch (reason) {
+    case 'janela_fechada_sem_modelo':
+      return `⚠️ Etapa "${stage}": janela de 24h fechada e o gatilho não tem modelo — nada foi enviado.`
+    case 'variavel_vazia':
+      return `⚠️ O follow-up da etapa "${stage}" não saiu: o modelo ${modelo} ficou com variável sem valor ({{n}}) e este canal não envia modelo. Confira os parâmetros do gatilho.`
+    case 'corpo_nao_encontrado':
+      return `⚠️ O follow-up da etapa "${stage}" não saiu: o texto do modelo ${modelo} não foi encontrado (confira nome e idioma em Modelos).`
+    default:
+      return null
+  }
+}
+
+/** Primeiros caracteres comparados pela guarda de duplicata da entrega. */
+const DELIVERY_PREFIX_CHARS = 60
+/** Abaixo disso o começo do texto é genérico demais ("Olá, Ana!") para provar entrega. */
+const DELIVERY_PREFIX_MIN = 20
+
+/**
+ * O começo do texto entregue, para reconhecer a mesma entrega no histórico.
+ * Conta em CARACTERES (code points), como o `left()` do Postgres — com
+ * `.slice` do JS um emoji contaria 2 e o prefixo nunca casaria.
+ */
+export function deliveryTextPrefix(text: string | null | undefined): string | null {
+  const chars = Array.from((text ?? '').trim())
+  if (chars.length < DELIVERY_PREFIX_MIN) return null
+  return chars.slice(0, DELIVERY_PREFIX_CHARS).join('')
+}
+
+/**
+ * Separa as etapas dos gatilhos em NORMAIS (travas do reengajamento) e
+ * OPERACIONAIS (`ignoreAiPause`). Vence o PRIMEIRO gatilho de cada etapa — o
+ * mesmo que o laço acha com `find` —, senão o SQL deixaria passar uma conversa
+ * pausada para um gatilho que não aceita conversa pausada.
+ */
+export function splitStageTriggers(triggers: StageTrigger[]): {
+  normal: string[]
+  operational: string[]
+} {
+  const vistas = new Set<string>()
+  const normal: string[] = []
+  const operational: string[] = []
+  for (const t of triggers) {
+    const chave = normStage(t.stage)
+    if (!chave || vistas.has(chave)) continue
+    vistas.add(chave)
+    ;(t.ignoreAiPause ? operational : normal).push(t.stage.toLowerCase())
+  }
+  return { normal, operational }
+}
+
+/**
+ * Filtro de conversa da varredura de etapa (aliases: ps = etapa, c = conversa).
+ *
+ * NORMAL mantém as travas de sempre — conversa aberta/pendente, IA ligada nela
+ * e ninguém atendendo: o toque é da IA e ela não fala por cima do humano.
+ * OPERACIONAL (`ignoreAiPause`) aceita IA desligada, conversa atribuída e até
+ * resolvida — é a mesma lógica do lembrete de consulta (loadConvMeta): é uma
+ * entrega que o responsável pediu, não uma IA puxando conversa. Só spam fica de
+ * fora.
+ */
+export function sqlStageConversationCond(normal: string[], operational: string[]): SQL {
+  const lista = (nomes: string[]) =>
+    sql`ARRAY[${sql.join(
+      nomes.map((n) => sql`${n}`),
+      sql`, `,
+    )}]::text[]`
+  const ramos: SQL[] = []
+  if (normal.length > 0) {
+    // ai_paused_until: a transferência virou PAUSA (0201) — antes ela
+    // desligava a IA e este filtro já tirava a conversa; sem esta linha o
+    // toque da etapa falaria por cima do humano recém-chamado.
+    ramos.push(sql`(lower(ps.name) = ANY(${lista(normal)})
+          AND c.status IN ('open','pending')
+          AND c.ai_autoreply_disabled = false
+          AND (c.ai_paused_until IS NULL OR c.ai_paused_until <= now())
+          AND c.assigned_agent_id IS NULL)`)
+  }
+  if (operational.length > 0) {
+    ramos.push(sql`(lower(ps.name) = ANY(${lista(operational)})
+          AND c.status <> 'spam')`)
+  }
+  if (ramos.length === 0) return sql`AND false`
+  return sql`AND (${sql.join(ramos, sql` OR `)})`
+}
+
+/**
+ * Escada de silêncio: fora quem pediu um humano e ainda não voltou a falar.
+ *
+ * A transferência ([[HANDOFF]]) vai virar PAUSA da IA por um tempo, não
+ * desligamento — e a escada não pode cutucar "oi, ainda tem interesse?" quem
+ * acabou de pedir para falar com uma pessoa. Vale enquanto a nota de
+ * transferência for MAIS NOVA que a última mensagem do cliente: se ele voltou a
+ * escrever depois, a conversa seguiu e a escada volta a valer.
+ *
+ * Compara com `left()` em vez de LIKE: o prefixo tem emoji e asterisco, e LIKE
+ * exigiria escapar curinga num texto que pode mudar (handoff-pause.ts).
+ * Colunas qualificadas (mh/mc) — subquery crua sem alias já casou coluna da
+ * consulta de fora em silêncio.
+ */
+export function sqlSemPedidoDeHumanoPendente(): SQL {
+  const prefixo = HANDOFF_NOTE_PREFIX
+  const tamanho = Array.from(prefixo).length
+  return sql`AND NOT EXISTS (
+          SELECT 1 FROM messages mh
+           WHERE mh.conversation_id = c.id
+             AND mh.is_internal = true
+             AND left(mh.content_text, ${tamanho}::int) = ${prefixo}
+             AND mh.created_at > COALESCE(
+                   (SELECT max(mc.created_at) FROM messages mc
+                     WHERE mc.conversation_id = c.id
+                       AND mc.sender_type = 'customer' AND mc.is_internal = false),
+                   '-infinity'::timestamptz)
+        )`
+}
+
+/**
+ * Rótulo do custo no medidor (ai_usage.source): "Follow-up e lembretes".
+ * ⚠️ A coluna tem CHECK com a lista fechada de fontes e um valor fora dela faz
+ * o INSERT falhar em silêncio (recordAiUsage só loga) — 'followup' só existe a
+ * partir da migração 0203. Fonte nova = migração + UsageSource + rótulo.
+ */
+const FOLLOWUP_USAGE_SOURCE = 'followup' as const
+
+function followUpUsageMeta(
+  agent: Pick<AgentRow, 'id' | 'account_id'>,
+  conversationId: string,
+  channelId: string | null,
+): UsageMeta {
+  return {
+    accountId: agent.account_id,
+    agentId: agent.id,
+    conversationId,
+    channelId,
+    source: FOLLOWUP_USAGE_SOURCE,
+  }
+}
+
 interface CandRow {
   id: string
   contact_id: string
+  channel_id: string | null
   last_message_at: string | null
   last_follow_up_at: string | null
   follow_up_step: number
@@ -739,7 +1085,7 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
     const channelCond = agentCoverageCond(agent)
 
     const candRes = await db.execute(sql`
-      SELECT c.id, c.contact_id, c.last_message_at, c.last_follow_up_at, c.follow_up_step,
+      SELECT c.id, c.contact_id, c.channel_id, c.last_message_at, c.last_follow_up_at, c.follow_up_step,
              ch.provider AS channel_provider, ct.name AS contact_name,
              (SELECT max(m.created_at) FROM messages m
                 WHERE m.conversation_id = c.id
@@ -754,6 +1100,9 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         -- mesmo gate do auto-reply, pra não falar por cima do humano.
         AND c.ai_autoreply_disabled = false
         AND c.assigned_agent_id IS NULL
+        -- IA pausada depois de pedir um humano (0201): enquanto vale, nada de
+        -- reengajar — o humano foi chamado agora há pouco.
+        AND (c.ai_paused_until IS NULL OR c.ai_paused_until <= now())
         AND c.last_message_at IS NOT NULL
         AND c.last_message_at <= now() - (${minDelay} * interval '1 minute')
         AND c.last_message_at >= ${cfg.armedAt}::timestamptz
@@ -781,6 +1130,9 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         -- virou negócio nesta conversa → o reengajamento não tem o que
         -- reengajar. Sem o flag, nada muda (venda longa precisa do empurrão).
         ${cfg.skipWhenDealExists ? sql`AND NOT EXISTS (SELECT 1 FROM deals d WHERE d.conversation_id = c.id)` : sql``}
+        -- Pediu um humano e ainda não voltou a escrever: a escada espera
+        -- (01/10 — a transferência vira pausa; ver sqlSemPedidoDeHumanoPendente).
+        ${sqlSemPedidoDeHumanoPendente()}
         -- Só quem JÁ escreveu alguma vez (senão não é reengajamento):
         AND EXISTS (
           SELECT 1 FROM messages mi
@@ -925,7 +1277,7 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
             templateParams: params,
           })
           sent += 1
-          await logFollowUpTask(cfg, agent.account_id, c.id, `Follow-up enviado — ${step.templateName}`)
+          await logFollowUpTask(cfg, agent.account_id, c.id, `Follow-up enviado — ${step.templateName}`, 'whatsapp')
           console.log('[followup] template:', step.templateName)
         } catch (err) {
           console.error('[followup] template falhou:', err)
@@ -941,6 +1293,9 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
       if (!config) break
 
       let text = ''
+      // [[ENVIAR:nome]] que a IA escreveu: os arquivos vão depois do texto.
+      let materialNames: string[] = []
+      let silent = false
       let closeDirs: ReturnType<typeof parseCloseDirectives> | null = null
       try {
         const messages = await buildConversationContext(c.id, undefined, tz)
@@ -999,10 +1354,24 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         } catch {
           /* best-effort: sem histórico, reengaja normal */
         }
-        const r = await generateReply({ config, systemPrompt, messages })
+        // `meta`: sem ela o custo desta geração não ia para o medidor (ai_usage)
+        // — a conta pagava o follow-up e o painel de custo não mostrava.
+        const r = await generateReply({
+          config,
+          systemPrompt,
+          messages,
+          meta: followUpUsageMeta(agent, c.id, c.channel_id),
+        })
         const raw = (r.text || '').trim()
         closeDirs = resolveOn || moveOn ? parseCloseDirectives(raw) : null
-        text = stripLeadingTimestamp(closeDirs ? closeDirs.text : raw).trim()
+        // Marcador nenhum vai cru ao cliente (01/10, Zelo) — prepareFollowUpText.
+        const prep = prepareFollowUpText(stripLeadingTimestamp(closeDirs ? closeDirs.text : raw))
+        if (prep.removed.length) {
+          console.warn('[followup] marcador removido do texto da IA:', c.id, prep.removed.join(' · '))
+        }
+        text = prep.text
+        materialNames = prep.materials
+        silent = prep.silent
       } catch (err) {
         // 💳 Sem saldo na chave do cliente: diz de quem é e avisa a plataforma
         // uma vez (o tick repete de minuto em minuto).
@@ -1026,6 +1395,9 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
             resolve: wantResolve,
             funnelStageName: wantMove ? closeDirs!.funnelStage : null,
             loseReason: wantLose ? closeDirs!.lose!.reason : null,
+            // O comentário do [[PERDER:motivo | comentário]] vai junto do
+            // motivo — sem isto o "porquê" que a IA escreveu se perdia aqui.
+            loseNote: wantLose ? (closeDirs!.lose!.note ?? null) : null,
           })
           console.log('[followup] encerramento:', JSON.stringify(rr))
         }
@@ -1055,7 +1427,7 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
       // Rafael: a MESMA frase saiu de novo uma hora depois). Instrução no
       // prompt não segurou; aqui a comparação é no código — o toque é gasto
       // (stamp) pra não ficar tentando a mesma coisa a cada tick.
-      if (text && !text.includes(SILENT)) {
+      if (text && !silent) {
         try {
           const ultimas = await db
             .select({ contentText: messages.contentText })
@@ -1071,7 +1443,10 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
             .limit(3)
           if (isEchoOfRecent(text, ultimas.map((m) => m.contentText ?? ''))) {
             console.log('[followup] repetiria mensagem já enviada — não manda:', c.id)
+            // O eco leva junto o arquivo que vinha com ele: repetir o texto
+            // não, mas reenviar o mesmo PDF seria a mesma repetição.
             text = ''
+            materialNames = []
           }
         } catch (err) {
           console.error('[followup] checagem de repetição falhou (segue o envio):', err instanceof Error ? err.message : err)
@@ -1079,7 +1454,7 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
       }
 
       // Calou ou vazio → não manda, mas ainda executa o encerramento se veio.
-      if (!text || text.includes(SILENT)) {
+      if (silent || (!text && materialNames.length === 0)) {
         await runFollowUpClose()
         await runCloseStep()
         await stamp(c.id, currentStep + 1)
@@ -1089,12 +1464,20 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
       try {
         // Toque por E-MAIL no e-mail do mesmo lead (conversa de e-mail própria);
         // se a entrega por e-mail falhar, CAI no WhatsApp (fallback escolhido).
-        const emailOk = emailTarget
-          ? await deliverFollowUpEmail(agent.account_id, emailTarget, text)
-          : false
+        // Só com texto: um toque que é SÓ arquivo não tem corpo de e-mail.
+        const emailOk =
+          emailTarget && text ? await deliverFollowUpEmail(agent.account_id, emailTarget, text) : false
         if (emailTarget && emailOk) {
           sent += 1
-          await logFollowUpTask(cfg, agent.account_id, c.id, 'Follow-up enviado por e-mail')
+          await logFollowUpTask(cfg, agent.account_id, c.id, 'Follow-up enviado por e-mail', 'email')
+          if (materialNames.length > 0) {
+            // O e-mail sai sem anexo (deliverFollowUpEmail só leva texto). Fica
+            // escrito, para ninguém supor que o lead recebeu o arquivo.
+            await postInternalNote({
+              conversationId: c.id,
+              text: `⚠️ O follow-up saiu por e-mail sem ${materialNames.map((n) => `"${n}"`).join(', ')} — material do agente só vai pelo WhatsApp.`,
+            })
+          }
         } else {
           // Fallback WhatsApp — mas respeita a janela oficial (Meta fora da 24h
           // sem template não entrega): não manda free-text nem conta o toque.
@@ -1104,15 +1487,28 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
               '[followup] toque sem entrega (e-mail falhou/ausente e WhatsApp fora da janela de 24h)',
             )
           } else {
-            await engineSendText({
-              accountId: agent.account_id,
-              userId: agent.created_by ?? '',
-              conversationId: c.id,
-              contactId: c.contact_id,
-              text,
-            })
-            sent += 1
-            await logFollowUpTask(cfg, agent.account_id, c.id, 'Follow-up enviado pela IA')
+            if (text) {
+              await engineSendText({
+                accountId: agent.account_id,
+                userId: agent.created_by ?? '',
+                conversationId: c.id,
+                contactId: c.contact_id,
+                text,
+              })
+              sent += 1
+              await logFollowUpTask(cfg, agent.account_id, c.id, 'Follow-up enviado pela IA', 'whatsapp')
+            }
+            if (materialNames.length > 0) {
+              await sendFollowUpMaterials({
+                accountId: agent.account_id,
+                agentId: agent.id,
+                userId: agent.created_by ?? '',
+                conversationId: c.id,
+                contactId: c.contact_id,
+                names: materialNames,
+                onde: 'follow-up',
+              })
+            }
           }
         }
       } catch (err) {
@@ -1129,11 +1525,14 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
 
 interface StageCandRow {
   deal_id: string
+  /** Responsável pelo card — quem "inscreve" na cadência depois da entrega. */
+  deal_user_id: string | null
   conversation_id: string
   stage_name: string
   stage_changed_at: string | null
   next_follow_up_at: string | null
   contact_id: string
+  channel_id: string | null
   channel_provider: string | null
   contact_name: string | null
   last_inbound_at: string | null
@@ -1239,10 +1638,16 @@ function normStage(s: string): string {
 
 /**
  * Follow-up por ETAPA: quando um card ENTRA numa etapa configurada como gatilho,
- * após o delay (se o cliente ficou calado desde a entrada e ainda estamos na
- * janela de 24h), manda UM toque gerado pela IA (ex.: confirmar a reunião em
- * "Agendado", ou remarcar em "No-show"). Dispara 1x por entrada de etapa
- * (`deals.stage_follow_up_at`). Mesmas travas do sweep de reengajamento.
+ * após o delay, manda UM toque. Dispara 1x por entrada de etapa
+ * (`deals.stage_follow_up_at`). O QUE sai é decidido em planStageDelivery:
+ *   - modo IA (padrão): texto gerado com o contexto, se o cliente ficou calado
+ *     desde a entrada (ex.: confirmar a reunião em "Agendado");
+ *   - modo ENTREGA (`sendTemplateText`): o texto aprovado do modelo, sem IA,
+ *     com o material anexado (ex.: a COF em "Envio da COF").
+ * Fora da janela de 24h no canal oficial, só o modelo passa.
+ *
+ * 01/10 (Zelo): todo "não saiu" deixa nota interna na conversa. Antes o
+ * carimbo acontecia em silêncio — a COF não chegava e ninguém via.
  */
 export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
   let sent = 0
@@ -1267,15 +1672,14 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
     // Só os deals nas etapas-gatilho deste agente (case-insensitive no SQL;
     // refino final por normStage). Sem filtro de delay: queremos ver o card já
     // logo que entra na etapa (pra setar o "próximo follow-up" visível).
-    const stageNames = cfg.stageTriggers.map((t) => t.stage.toLowerCase())
-    const stageCond = sql`AND lower(ps.name) = ANY(ARRAY[${sql.join(
-      stageNames.map((n) => sql`${n}`),
-      sql`, `,
-    )}]::text[])`
+    // Etapa NORMAL herda as travas do reengajamento; OPERACIONAL não (ver
+    // sqlStageConversationCond).
+    const { normal, operational } = splitStageTriggers(cfg.stageTriggers)
+    const convCond = sqlStageConversationCond(normal, operational)
 
     const rows = await db.execute(sql`
-      SELECT d.id AS deal_id, d.conversation_id, d.stage_changed_at,
-             d.next_follow_up_at, ps.name AS stage_name, c.contact_id,
+      SELECT d.id AS deal_id, d.user_id AS deal_user_id, d.conversation_id, d.stage_changed_at,
+             d.next_follow_up_at, ps.name AS stage_name, c.contact_id, c.channel_id,
              ch.provider AS channel_provider, ct.name AS contact_name,
              (SELECT max(m.created_at) FROM messages m
                 WHERE m.conversation_id = c.id
@@ -1290,10 +1694,7 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
         AND d.conversation_id IS NOT NULL
         AND d.stage_changed_at IS NOT NULL
         AND (d.stage_follow_up_at IS NULL OR d.stage_changed_at > d.stage_follow_up_at)
-        AND c.status IN ('open','pending')
-        AND c.ai_autoreply_disabled = false
-        AND c.assigned_agent_id IS NULL
-        ${stageCond}
+        ${convCond}
         ${channelCond}
       ORDER BY d.stage_changed_at ASC
       LIMIT ${PER_AGENT_CAP}
@@ -1303,6 +1704,7 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
 
     let config: AiConfig | null = null
     let loaded = false
+    const materiais = lazyMaterials(agent.account_id, agent.id)
 
     for (const d of cands) {
       if (!d.stage_changed_at) continue
@@ -1330,108 +1732,454 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
       // Ainda não venceu? O card já mostra o horário; espera o próximo tick.
       if (Date.now() < fireMs) continue
 
-      // O cliente respondeu DEPOIS de entrar na etapa? O auto-reply cuida — encerra
-      // este follow-up de etapa (limpa o "próximo" + marca pra não repetir).
-      if (
-        d.last_inbound_at &&
-        new Date(d.last_inbound_at) > new Date(d.stage_changed_at)
-      ) {
-        await stampStage(d.deal_id)
-        continue
-      }
-
+      const official = officialWindowApplies(d.channel_provider)
       const windowOpen =
         !!d.last_inbound_at &&
         Date.now() - new Date(d.last_inbound_at).getTime() < WINDOW_MS
+      const entrega = trig.sendTemplateText && !!trig.templateName
+      const etapa = trig.stage
 
-      // Canal OFICIAL (Meta) FORA da janela de 24h → só dá pra alcançar via
-      // TEMPLATE aprovado. Se o gatilho tem template, envia; senão encerra (limpa
-      // o card). WAHA/etc. não têm janela → cai no texto da IA abaixo.
-      if (officialWindowApplies(d.channel_provider) && !windowOpen) {
-        if (!trig.templateName) {
-          await stampStage(d.deal_id)
-          continue
-        }
-        try {
-          const params = await resolveTemplateParams(trig.templateParams, {
-            accountId: agent.account_id,
-            contactId: d.contact_id,
-            name: firstName(d.contact_name),
-            tz,
-          })
-          await sendMessageToConversation(agent.account_id, {
-            conversationId: d.conversation_id,
-            messageType: 'template',
-            templateName: trig.templateName,
-            templateLanguage: trig.templateLanguage,
-            templateParams: params,
-          })
-          sent += 1
-          await logFollowUpTask(cfg, agent.account_id, d.conversation_id, `Follow-up da etapa "${trig.stage}" — ${trig.templateName}`)
-          console.log('[stage-followup] template:', trig.templateName)
-        } catch (err) {
-          console.error('[stage-followup] template falhou:', err)
-        }
-        await stampStage(d.deal_id)
-        continue
-      }
-
-      if (!loaded) {
-        loaded = true
-        config = await loadAiConfigById(agent.account_id, agent.id, {
-          requireActive: false,
+      // Params do modelo: o envio do modelo precisa deles, e o texto do modelo
+      // (modo entrega) também — os dois saem do MESMO preenchimento.
+      let params: string[] = []
+      if (trig.templateName && (entrega || (official && !windowOpen))) {
+        params = await resolveTemplateParams(trig.templateParams, {
+          accountId: agent.account_id,
+          contactId: d.contact_id,
+          name: firstName(d.contact_name),
+          tz,
         })
       }
-      if (!config) break
-
-      let text = ''
-      try {
-        const messages = await buildConversationContext(d.conversation_id, undefined, tz)
-        if (messages.length === 0) {
-          await stampStage(d.deal_id)
+      let renderedBody: string | null = null
+      if (entrega) {
+        try {
+          const corpo = await getTemplateBody(
+            agent.account_id,
+            d.channel_id,
+            trig.templateName as string,
+            trig.templateLanguage,
+            // Canal sem templates (WAHA): o modelo mora no número oficial.
+            { anyChannel: !official },
+          )
+          renderedBody = corpo ? renderTemplateText(corpo.bodyText, params) || null : null
+        } catch (err) {
+          // Falha de banco é passageira: não carimba, tenta no próximo tick.
+          console.error('[stage-followup] leitura do modelo falhou:', err)
           continue
         }
-        const companyProfile = formatCompanyProfileForPrompt(
-          await getCompanyProfile(agent.account_id),
-        )
-        const catalog = await formatCatalogForPrompt(agent.account_id)
-        const systemPrompt = buildStageFollowUpPrompt(
-          trig,
-          d.stage_name,
-          companyProfile,
-          catalog,
-          tz,
-        )
-        const r = await generateReply({ config, systemPrompt, messages })
-        text = stripLeadingTimestamp(r.text || '').trim()
-      } catch (err) {
-        if (isNoCreditError(err)) await warnNoCredit({ accountId: agent.account_id, where: 'follow-up por etapa do funil', err })
-        else console.error('[stage-followup] geração falhou:', err)
-        continue // não marca — tenta no próximo tick
       }
 
-      if (!text || text.includes(SILENT)) {
+      const plan = planStageDelivery({
+        sendTemplateText: trig.sendTemplateText,
+        templateName: trig.templateName,
+        officialChannel: official,
+        windowOpen,
+        customerRepliedAfterStage:
+          !!d.last_inbound_at && new Date(d.last_inbound_at) > new Date(d.stage_changed_at),
+        renderedBody,
+        hasAttachment: !!trig.attachMaterial,
+      })
+
+      if (plan.send === 'skip') {
+        // Cliente respondeu (modo IA): o auto-reply cuida — encerra calado,
+        // como sempre. Os outros motivos são aviso para a equipe.
+        const nota = stageSkipNote(plan.reason, etapa, trig.templateName)
+        if (nota) await postInternalNote({ conversationId: d.conversation_id, text: nota })
         await stampStage(d.deal_id)
         continue
       }
 
-      try {
-        await engineSendText({
+      // Material do gatilho: resolvido ANTES do envio porque a URL dele entra
+      // na guarda de duplicata.
+      let material: AgentMaterial | null = null
+      if (trig.attachMaterial) {
+        const lista = await materiais()
+        material = lista ? findMaterialByName(lista, trig.attachMaterial) : null
+      }
+
+      // 🔁 Guarda de duplicata da ENTREGA. Um card que volta para a etapa (ou
+      // é movido de novo por engano) não pode mandar a COF outra vez para
+      // quem já recebeu. Olha o histórico de 30 dias: o mesmo arquivo, o
+      // mesmo modelo ou o MESMO texto inteiro (um começo igual — a saudação
+      // padrão da casa — bloquearia outra entrega, ex. o contrato).
+      if (entrega) {
+        let jaEm: string | null
+        try {
+          jaEm = await findPriorDelivery({
+            conversationId: d.conversation_id,
+            materialUrl: material?.mediaUrl ?? null,
+            templateName: trig.templateName,
+            fullText: deliveryTextPrefix(renderedBody) ? (renderedBody as string) : null,
+          })
+        } catch (err) {
+          // Sem a guarda não se manda: o risco é repetir o PDF. Tenta de novo.
+          console.error('[stage-followup] guarda de duplicata falhou:', err)
+          continue
+        }
+        if (jaEm) {
+          await postInternalNote({
+            conversationId: d.conversation_id,
+            text: `ℹ️ O follow-up da etapa "${etapa}" não foi reenviado: já tinha sido enviado em ${fmtDateInTz(jaEm, tz)}.`,
+          })
+          await stampStage(d.deal_id)
+          continue
+        }
+      }
+
+      // Modo IA: gera o texto (com o mesmo tratamento de marcador das outras
+      // varreduras — o "[[ENVIAR:…]]" vira o arquivo, não texto).
+      let aiText = ''
+      let aiMaterials: string[] = []
+      if (plan.send === 'ai') {
+        if (!loaded) {
+          loaded = true
+          config = await loadAiConfigById(agent.account_id, agent.id, {
+            requireActive: false,
+          })
+        }
+        if (!config) break
+        try {
+          const messages = await buildConversationContext(d.conversation_id, undefined, tz)
+          if (messages.length === 0) {
+            await stampStage(d.deal_id)
+            continue
+          }
+          const companyProfile = formatCompanyProfileForPrompt(
+            await getCompanyProfile(agent.account_id),
+          )
+          const catalog = await formatCatalogForPrompt(agent.account_id)
+          const systemPrompt = buildStageFollowUpPrompt(
+            trig,
+            d.stage_name,
+            companyProfile,
+            catalog,
+            tz,
+          )
+          const r = await generateReply({
+            config,
+            systemPrompt,
+            messages,
+            meta: followUpUsageMeta(agent, d.conversation_id, d.channel_id),
+          })
+          const prep = prepareFollowUpText(stripLeadingTimestamp(r.text || ''))
+          if (prep.removed.length) {
+            console.warn('[stage-followup] marcador removido do texto da IA:', d.conversation_id, prep.removed.join(' · '))
+          }
+          if (prep.silent) {
+            await stampStage(d.deal_id)
+            continue
+          }
+          aiText = prep.text
+          aiMaterials = prep.materials
+        } catch (err) {
+          if (isNoCreditError(err)) await warnNoCredit({ accountId: agent.account_id, where: 'follow-up por etapa do funil', err })
+          else console.error('[stage-followup] geração falhou:', err)
+          continue // não marca — tenta no próximo tick
+        }
+      }
+
+      // Envio da mensagem. "Lançou" não é "não chegou": entregue-mas-não-
+      // gravado conta como enviado (30/09 — retentar repete para quem já leu).
+      const temMensagem = plan.send !== 'ai' || !!aiText
+      if (temMensagem) {
+        try {
+          if (plan.send === 'template') {
+            await sendMessageToConversation(agent.account_id, {
+              conversationId: d.conversation_id,
+              messageType: 'template',
+              templateName: trig.templateName,
+              templateLanguage: trig.templateLanguage,
+              templateParams: params,
+              // Automático: não é atendente entrando (não pausa fluxo ativo).
+              senderType: 'bot',
+            })
+          } else {
+            await engineSendText({
+              accountId: agent.account_id,
+              userId: agent.created_by ?? '',
+              conversationId: d.conversation_id,
+              contactId: d.contact_id,
+              text: plan.send === 'text' ? (renderedBody as string) : aiText,
+            })
+          }
+        } catch (err) {
+          if (saiuMesmoComErro(err)) {
+            console.error('[stage-followup] entregue mas não registrado:', err)
+          } else {
+            console.error('[stage-followup] envio falhou:', err)
+            // Carimba mesmo assim: sem isto o mesmo erro voltaria a cada tick
+            // (número fora do ar, modelo recusado). A nota diz o que fazer.
+            await postInternalNote({
+              conversationId: d.conversation_id,
+              text: `⚠️ O follow-up da etapa "${etapa}" não saiu: ${motivoLegivel(err)}`,
+            })
+            await stampStage(d.deal_id)
+            continue
+          }
+        }
+        sent += 1
+        await logFollowUpTask(
+          cfg,
+          agent.account_id,
+          d.conversation_id,
+          plan.send === 'template'
+            ? `Follow-up da etapa "${etapa}" — ${trig.templateName}`
+            : `Follow-up da etapa "${etapa}"`,
+          'whatsapp',
+        )
+        if (plan.send === 'template') console.log('[stage-followup] template:', trig.templateName)
+      }
+
+      // 📎 Anexos: o material do gatilho + os pedidos pela IA, depois da
+      // mensagem e só com envio livre (janela aberta ou canal sem templates).
+      if (trig.attachMaterial && !plan.attach) {
+        await postInternalNote({
+          conversationId: d.conversation_id,
+          text: `⚠️ Etapa "${etapa}": o material "${trig.attachMaterial}" não foi anexado — a janela de 24h está fechada e o canal oficial só aceita o modelo. Envie quando o cliente responder.`,
+        })
+      }
+      // Modo IA com material anexado não passa pela guarda da entrega: confere
+      // só o ARQUIVO — card que volta à etapa não reenvia o mesmo PDF.
+      let materialJaFoi = false
+      if (!entrega && plan.attach && material) {
+        try {
+          materialJaFoi = !!(await findPriorDelivery({
+            conversationId: d.conversation_id,
+            materialUrl: material.mediaUrl,
+            templateName: null,
+            fullText: null,
+          }))
+        } catch (err) {
+          console.error('[stage-followup] guarda do anexo falhou (não anexa):', err)
+          materialJaFoi = true
+        }
+      }
+      const nomes = [
+        ...(plan.attach && trig.attachMaterial && !materialJaFoi ? [trig.attachMaterial] : []),
+        ...aiMaterials,
+      ]
+      let anexos = 0
+      if (nomes.length > 0) {
+        anexos = await sendFollowUpMaterials({
           accountId: agent.account_id,
+          agentId: agent.id,
           userId: agent.created_by ?? '',
           conversationId: d.conversation_id,
           contactId: d.contact_id,
-          text,
+          names: nomes,
+          onde: `follow-up da etapa "${etapa}"`,
+          carregar: materiais,
         })
-        sent += 1
-        await logFollowUpTask(cfg, agent.account_id, d.conversation_id, `Follow-up da etapa "${trig.stage}"`)
-      } catch (err) {
-        console.error('[stage-followup] envio falhou:', err)
+      }
+
+      // Depois de algo que SAIU, segue na cadência escolhida no gatilho.
+      if (trig.enrollCadenceId && (temMensagem || anexos > 0)) {
+        await enrollAfterStageDelivery({
+          accountId: agent.account_id,
+          userId: d.deal_user_id ?? agent.created_by ?? null,
+          cadenceId: trig.enrollCadenceId,
+          contactId: d.contact_id,
+          conversationId: d.conversation_id,
+          dealId: d.deal_id,
+          etapa,
+        })
       }
       await stampStage(d.deal_id)
     }
   }
   return { sent }
+}
+
+/**
+ * Carrega os materiais do agente uma vez por varredura (e só se alguém pedir).
+ * null = a leitura falhou — diferente de "não há materiais" (lista vazia):
+ * quem usa avisa que não conseguiu carregar, em vez de dizer "não encontrado".
+ */
+function lazyMaterials(accountId: string, agentId: string): () => Promise<AgentMaterial[] | null> {
+  let p: Promise<AgentMaterial[] | null> | null = null
+  return () =>
+    (p ??= listMaterialsForAgent(accountId, agentId).catch((err) => {
+      console.error('[followup] materiais do agente não carregaram:', err)
+      return null
+    }))
+}
+
+/**
+ * Manda os materiais pedidos, na ordem, depois da mensagem — mesmo jeito do
+ * auto-reply (engineSendMedia; documento sem legenda, imagem/vídeo com o nome).
+ * O mesmo arquivo pedido duas vezes (gatilho + IA) sai uma vez só.
+ *
+ * Nada some em silêncio: material não achado, lista que não carregou e envio
+ * recusado viram UMA nota interna. Devolve quantos arquivos saíram.
+ */
+async function sendFollowUpMaterials(input: {
+  accountId: string
+  agentId: string
+  userId: string
+  conversationId: string
+  contactId: string
+  names: string[]
+  /** Para a nota: "follow-up", "lembrete", "follow-up da etapa X". */
+  onde: string
+  carregar?: () => Promise<AgentMaterial[] | null>
+}): Promise<number> {
+  const lista = await (input.carregar ?? lazyMaterials(input.accountId, input.agentId))()
+  const problemas: string[] = []
+  const enviados = new Set<string>()
+  let n = 0
+  if (!lista) {
+    problemas.push(
+      `os materiais do agente não puderam ser carregados (${input.names.map((x) => `"${x}"`).join(', ')} não foi)`,
+    )
+  } else {
+    for (const nome of input.names) {
+      const mat = findMaterialByName(lista, nome)
+      if (!mat) {
+        problemas.push(`o material "${nome}" não existe em Materiais do agente`)
+        continue
+      }
+      if (enviados.has(mat.id)) continue
+      enviados.add(mat.id)
+      try {
+        await engineSendMedia({
+          accountId: input.accountId,
+          userId: input.userId,
+          conversationId: input.conversationId,
+          contactId: input.contactId,
+          kind: mat.mediaType,
+          link: mat.mediaUrl,
+          filename: mat.filename ?? undefined,
+          mimetype: mat.mimetype ?? undefined,
+          caption: mat.mediaType === 'document' ? undefined : mat.name,
+        })
+        n++
+        console.log('[followup] material enviado:', mat.name)
+      } catch (err) {
+        if (saiuMesmoComErro(err)) {
+          // O cliente recebeu; só o registro ficou para trás.
+          console.error('[followup] material entregue mas não registrado:', mat.name, err)
+          n++
+        } else {
+          console.error('[followup] envio de material falhou:', mat.name, err)
+          problemas.push(`o material "${mat.name}" não saiu: ${motivoLegivel(err)}`)
+        }
+      }
+    }
+  }
+  if (problemas.length > 0) {
+    await postInternalNote({
+      conversationId: input.conversationId,
+      text: `⚠️ ${input.onde[0].toUpperCase()}${input.onde.slice(1)}: ${problemas.join('; ')}. O cliente NÃO recebeu esse arquivo.`,
+    })
+  }
+  return n
+}
+
+/** Janela da guarda de duplicata da entrega. */
+const DELIVERY_DEDUP_DAYS = 30
+
+/**
+ * Esta conversa já recebeu esta entrega? Devolve QUANDO (ISO) ou null.
+ *
+ * Sinais (qualquer um basta), só mensagens que SAÍRAM (bot/agente, não nota):
+ *  - o mesmo arquivo (media_url do material);
+ *  - o mesmo modelo (send-message grava template_name no envio de template);
+ *  - o mesmo começo de texto (o corpo do modelo mandado como texto).
+ * Lança em falha de banco — quem chama decide não mandar sem a guarda.
+ */
+async function findPriorDelivery(input: {
+  conversationId: string
+  materialUrl: string | null
+  templateName: string | null
+  fullText: string | null
+}): Promise<string | null> {
+  const sinais: SQL[] = []
+  if (input.materialUrl) sinais.push(eq(messages.mediaUrl, input.materialUrl))
+  if (input.templateName) sinais.push(eq(messages.templateName, input.templateName))
+  if (input.fullText) sinais.push(eq(messages.contentText, input.fullText))
+  if (sinais.length === 0) return null
+  const desde = new Date(Date.now() - DELIVERY_DEDUP_DAYS * 24 * 60 * 60_000).toISOString()
+  const row = firstOrNull(
+    await db
+      .select({ at: messages.createdAt })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, input.conversationId),
+          eq(messages.isInternal, false),
+          inArray(messages.senderType, ['bot', 'agent']),
+          gte(messages.createdAt, desde),
+          or(...sinais),
+        ),
+      )
+      .orderBy(desc(messages.createdAt))
+      .limit(1),
+  )
+  return row?.at ?? null
+}
+
+/**
+ * Inscreve na cadência do gatilho depois da entrega. Inscrição AUTOMÁTICA
+ * (ninguém vira responsável pela conversa; respeita o silêncio da conta).
+ * Import dinâmico: cadence.ts puxa a fila (BullMQ) e o inbound — não precisam
+ * pesar no carregamento de quem só lê a config de follow-up.
+ */
+async function enrollAfterStageDelivery(input: {
+  accountId: string
+  userId: string | null
+  cadenceId: string
+  contactId: string
+  conversationId: string
+  dealId: string
+  etapa: string
+}): Promise<void> {
+  let erro: string | null = null
+  try {
+    if (!input.userId) {
+      erro = 'o negócio não tem responsável'
+    } else {
+      const { enrollContactInCadence } = await import('@/lib/cadences/cadence')
+      const r = await enrollContactInCadence(
+        { accountId: input.accountId, userId: input.userId },
+        {
+          cadenceId: input.cadenceId,
+          contactId: input.contactId,
+          conversationId: input.conversationId,
+          dealId: input.dealId,
+        },
+        { automatic: true },
+      )
+      if (!r.ok) erro = r.error ?? 'motivo desconhecido'
+    }
+  } catch (err) {
+    console.error('[stage-followup] inscrição na cadência falhou:', err)
+    erro = err instanceof Error ? err.message : String(err)
+  }
+  if (erro) {
+    await postInternalNote({
+      conversationId: input.conversationId,
+      text: `⚠️ Etapa "${input.etapa}": a mensagem saiu, mas não deu para inscrever na cadência — ${erro}.`,
+    })
+  }
+}
+
+/**
+ * A exceção quer dizer que o cliente JÁ recebeu? Além do tipo de
+ * delivery-error.ts, cobre o "db_error" de sendMessageToConversation ("Message
+ * sent to Meta but failed to save to DB"), que ainda lança SendMessageError.
+ */
+function saiuMesmoComErro(err: unknown): boolean {
+  if (jaFoiEntregue(err)) return true
+  const code = typeof err === 'object' && err !== null ? (err as { code?: unknown }).code : undefined
+  if (code === 'db_error') return true
+  const msg = err instanceof Error ? err.message : ''
+  return msg.includes('sent to Meta but failed to save to DB')
+}
+
+/** Motivo da falha em português para a nota interna (curto, sem dump de gRPC). */
+function motivoLegivel(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err)
+  return (friendlySendError(raw) ?? raw).slice(0, 300)
 }
 
 /** Carimba que o follow-up de etapa desta entrada já saiu (não repete) e limpa
@@ -1576,12 +2324,17 @@ async function currentStageName(
  * "executar" de novo o que já foi feito.
  *
  * Best-effort: registro nunca derruba envio.
+ *
+ * 01/10: a mesma tarefa vai para o espelho do RD CRM (enqueueRdTask), para o
+ * gestor da Zelo — que trabalha no RD — enxergar o toque lá também. `kind` diz
+ * por onde o toque saiu (o RD separa tarefa de WhatsApp e de e-mail).
  */
 async function logFollowUpTask(
   cfg: FollowUpConfig,
   accountId: string,
   conversationId: string,
   titulo: string,
+  kind: 'whatsapp' | 'email',
 ): Promise<void> {
   if (!cfg.logTasks) return
   try {
@@ -1600,19 +2353,42 @@ async function logFollowUpTask(
         .limit(1),
     )
     if (!row) return // sem card aberto não há onde registrar
-    await db.insert(tasks).values({
-      accountId,
-      title: titulo.slice(0, 200),
-      description:
-        'Registro automático da IA: a mensagem já foi enviada. Não precisa executar nada — esta tarefa existe só para o histórico do negócio.',
-      status: 'done',
-      type: 'follow_up',
-      dealId: row.id,
-      contactId: row.contactId,
-      assignedTo: row.userId,
-      createdBy: row.userId,
-      dueAt: new Date().toISOString(),
-    })
+    const assunto = titulo.slice(0, 200)
+    const feitaEm = new Date()
+    const criada = firstOrNull(
+      await db
+        .insert(tasks)
+        .values({
+          accountId,
+          title: assunto,
+          description:
+            'Registro automático da IA: a mensagem já foi enviada. Não precisa executar nada — esta tarefa existe só para o histórico do negócio.',
+          status: 'done',
+          type: 'follow_up',
+          dealId: row.id,
+          contactId: row.contactId,
+          assignedTo: row.userId,
+          createdBy: row.userId,
+          dueAt: feitaEm.toISOString(),
+        })
+        .returning({ id: tasks.id }),
+    )
+    // Espelho do RD: o taskId trava duplicata do lado de lá. Import dinâmico —
+    // a integração só carrega para quem registra tarefa. enqueueRdTask não
+    // lança (contrato), mas o import pode; nada aqui derruba o envio.
+    try {
+      const { enqueueRdTask } = await import('@/lib/integrations/rdcrm/task-outbox')
+      await enqueueRdTask({
+        accountId,
+        dealId: row.id,
+        taskId: criada?.id ?? null,
+        kind,
+        subject: assunto,
+        doneAt: feitaEm,
+      })
+    } catch (err) {
+      console.error('[followup] tarefa não foi para a fila do RD:', err)
+    }
   } catch (err) {
     console.error('[followup] registro da tarefa falhou:', err)
   }
@@ -1683,6 +2459,8 @@ interface ConvMeta {
   lastInboundAt: string | null
   contactId: string | null
   contactName: string | null
+  /** Para atribuir o custo da geração ao canal (medidor de custo). */
+  channelId: string | null
 }
 
 /**
@@ -1816,6 +2594,7 @@ async function loadConvMeta(
     lastInboundAt: row.last_inbound_at,
     contactId: row.contact_id,
     contactName: row.contact_name,
+    channelId: row.channel_id,
   }
 }
 
@@ -2277,7 +3056,7 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
             templateParams: params,
           })
           sent += 1
-          await logFollowUpTask(cfg, agent.account_id, e.conversation_id, `${reminderLabel(r)} — ${r.templateName}`)
+          await logFollowUpTask(cfg, agent.account_id, e.conversation_id, `${reminderLabel(r)} — ${r.templateName}`, 'whatsapp')
           console.log('[meeting-reminder] template:', r.templateName)
           await resolver()
         } catch (err) {
@@ -2311,6 +3090,9 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
       }
 
       let text = ''
+      // [[ENVIAR:nome]] que a IA escreveu no lembrete — arquivos depois do texto.
+      let materialNames: string[] = []
+      let silent = false
       try {
         const messages = await buildConversationContext(e.conversation_id, undefined, tz)
         if (messages.length === 0) {
@@ -2331,8 +3113,20 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
           companyProfile,
           catalog,
         )
-        const gen = await generateReply({ config, systemPrompt, messages })
-        text = stripLeadingTimestamp(gen.text || '').trim()
+        const gen = await generateReply({
+          config,
+          systemPrompt,
+          messages,
+          meta: followUpUsageMeta(agent, e.conversation_id, meta.channelId),
+        })
+        // Marcador nenhum vai cru ao cliente (01/10, Zelo) — prepareFollowUpText.
+        const prep = prepareFollowUpText(stripLeadingTimestamp(gen.text || ''))
+        if (prep.removed.length) {
+          console.warn('[meeting-reminder] marcador removido do texto da IA:', e.conversation_id, prep.removed.join(' · '))
+        }
+        text = prep.text
+        materialNames = prep.materials
+        silent = prep.silent
       } catch (err) {
         // 💳 Mesma cortesia que as duas varreduras irmãs já faziam (follow-up e
         // gatilho de etapa) e que só o lembrete de consulta não tinha: com a
@@ -2347,10 +3141,34 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
         continue
       }
 
-      if (!text || text.includes(SILENT)) {
+      if (silent || (!text && materialNames.length === 0)) {
         await resolver()
         continue
       }
+      // Os arquivos pedidos saem DEPOIS do texto — e só se o texto saiu (ou se
+      // o lembrete era só o arquivo). Texto recusado segura o degrau inteiro.
+      const enviarMateriais = async (): Promise<number> =>
+        materialNames.length === 0
+          ? 0
+          : sendFollowUpMaterials({
+              accountId: agent.account_id,
+              agentId: agent.id,
+              userId: agent.created_by ?? '',
+              conversationId: e.conversation_id as string,
+              contactId: meta.contactId ?? e.contact_id ?? '',
+              names: materialNames,
+              onde: reminderLabel(r).toLowerCase(),
+            })
+      if (!text) {
+        if ((await enviarMateriais()) > 0) {
+          sent += 1
+          await logFollowUpTask(cfg, agent.account_id, e.conversation_id, reminderLabel(r), 'whatsapp')
+        }
+        // Material que não saiu já virou nota; o degrau não tem outra coisa a mandar.
+        await resolver()
+        continue
+      }
+      let textoSaiu = false
       try {
         await engineSendText({
           accountId: agent.account_id,
@@ -2359,8 +3177,9 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
           contactId: meta.contactId ?? e.contact_id ?? '',
           text,
         })
+        textoSaiu = true
         sent += 1
-        await logFollowUpTask(cfg, agent.account_id, e.conversation_id, reminderLabel(r))
+        await logFollowUpTask(cfg, agent.account_id, e.conversation_id, reminderLabel(r), 'whatsapp')
         await resolver()
       } catch (err) {
         // ⚠️ 30/09, em produção: "a chamada lançou" NÃO é "a mensagem não
@@ -2371,6 +3190,7 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
         // novo para quem já leu — pior do que não registrar.
         if (jaFoiEntregue(err)) {
           console.error('[meeting-reminder] entregue mas não registrado:', err)
+          textoSaiu = true
           await resolver()
         } else {
           // Aí sim o canal recusou (número fora do ar, sessão caída…): a
@@ -2379,6 +3199,7 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
           await impedir('envio_falhou')
         }
       }
+      if (textoSaiu) await enviarMateriais()
     }
   }
   return { sent }

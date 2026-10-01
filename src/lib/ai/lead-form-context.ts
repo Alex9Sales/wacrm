@@ -19,6 +19,7 @@ import {
   leadLinesForPrompt,
   parseNoteLines,
   prettyFormValue,
+  usefulOrigin,
   type FactKey,
 } from '@/lib/leads/lead-facts'
 import { neutralizeUntrusted } from './untrusted'
@@ -59,13 +60,20 @@ export async function loadLeadFormContext(
     const lines: string[] = []
     const covered = new Set<FactKey>()
     for (const c of custom) {
-      const v = prettyFormValue(c.value ?? '')
+      const f = factForFieldName(c.name)
+      // Zelo 01/10: card com "Campanha: unknown" (gravada antes do conserto)
+      // mandava isso pra Zélia — e, marcando a campanha como "coberta",
+      // escondia a linha "Campanha:" das observações, que pode ser a boa.
+      // Genérica = como se não houvesse o campo.
+      const pretty = prettyFormValue(c.value ?? '')
+      const v = f === 'campanha' ? usefulOrigin(pretty) : pretty
       if (!v) continue
       lines.push(`${c.name}: ${v}`)
-      const f = factForFieldName(c.name)
       if (f) covered.add(f)
     }
-    const origin = [deal.origin, deal.source].map((s) => (s ?? '').trim()).filter(Boolean)
+    // Card aberto antes de 01/10 por uma conversão do PRÓPRIO RD CRM tem
+    // `source` = "Tarefa criada no RD Station CRM": isso não é origem do lead.
+    const origin = [deal.origin, deal.source].map((s) => usefulOrigin(s)).filter(Boolean)
     if (origin.length) lines.push(`Origem do lead: ${origin.join(' — ')}`)
     lines.push(...leadLinesForPrompt(parseNoteLines(deal.notes), covered))
 

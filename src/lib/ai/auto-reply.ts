@@ -57,6 +57,14 @@ import { isNoCreditError, warnNoCredit } from './no-credit-alert'
 import { STALE_DROPS_TTL_SECONDS, staleDropsKey, staleReplyDecision, turnIsDroppable } from './stale-reply'
 import { alertContactName, buildClientTail } from '@/lib/alerts/alert-text'
 import { isNewEpisode } from './reply-episode'
+import {
+  HANDOFF_NOTE_PREFIX,
+  aiPauseActive,
+  handoffAlertMotivo,
+  handoffContextInstruction,
+  handoffNoteSuffix,
+  handoffOutcome,
+} from './handoff-pause'
 import { enqueueAiReplyDebounced } from '@/lib/queue/queues'
 
 /** Ver guard anti-eco: folga entre o snapshot e o created_at da msg do cliente. */
@@ -112,6 +120,8 @@ interface DispatchArgs {
  *   - AI off / auto-reply disabled for the account
  *   - a human agent is assigned (they own the thread)
  *   - auto-reply was disabled for this conversation (prior handoff)
+ *   - the AI is paused here after asking for a human (ai_paused_until —
+ *     rechecks by itself when the pause ends; see handoff-pause.ts)
  *   - the per-conversation reply cap is reached
  *   - there's nothing to reply to
  *
@@ -426,6 +436,7 @@ export async function dispatchInboundToAiReply(
           channelId: conversations.channelId,
           voicePreference: conversations.voicePreference,
           humanPresentUntil: conversations.humanPresentUntil,
+          aiPausedUntil: conversations.aiPausedUntil,
           isGroup: contacts.isGroup,
         })
         .from(conversations)
@@ -568,6 +579,27 @@ export async function dispatchInboundToAiReply(
       await scheduleRecheckAfter(
         args,
         new Date(conv.humanPresentUntil).getTime() - Date.now(),
+      )
+      return
+    }
+    // 🙋 Pausa pós-transferência (29/09, caso Zelo): a IA pediu um humano e
+    // fica quieta até ai_paused_until — SEM desligar. Mesma mecânica do humano
+    // digitando: a mensagem do cliente não fica pendurada, reagenda pro FIM da
+    // pausa. Lá, se alguém da equipe respondeu nesse meio-tempo, o guard
+    // "humano falou por último" e o barge-in seguram; se ninguém respondeu, a
+    // IA volta (com o contexto pós-transferência no prompt, ver abaixo).
+    if (aiPauseActive(conv.aiPausedUntil)) {
+      console.log(
+        '[ai auto-reply] calada:',
+        JSON.stringify({ reason: 'paused', conversationId, until: conv.aiPausedUntil }),
+      )
+      // A régua de cobrança ouve mesmo com a IA calada (igual ao gate de IA
+      // desligada): se um humano responder antes do fim da pausa, a rechecagem
+      // para no "humano no meio" e o "já paguei" nunca seria lido.
+      await silentCollectionCheck(config)
+      await scheduleRecheckAfter(
+        args,
+        new Date(conv.aiPausedUntil as string).getTime() - Date.now(),
       )
       return
     }
@@ -866,6 +898,41 @@ export async function dispatchInboundToAiReply(
       }
     }
 
+    // 🙋 A IA já pediu um humano nesta conversa nas últimas 24h (e voltou —
+    // pausa vencida, ou alguém religou)? Sem isto ela voltava "do zero":
+    // cumprimentava e recomeçava a qualificação com quem já tinha sido passado
+    // pra equipe. Best-effort: sem a leitura, segue sem a instrução.
+    // Só para agente COM pausa configurada: sem pausa a transferência desliga a
+    // IA, e se alguém a religa é porque o assunto foi resolvido — "a equipe já
+    // foi avisada" num pedido novo (e segurar o próximo [[HANDOFF]]) seria
+    // errado em conta que não pediu nada disso.
+    let handoffContext: string | null = null
+    if ((config.handoffPauseMinutes ?? 0) > 0) try {
+      const lastHandoff = firstOrNull(
+        await db
+          .select({ handoffAt: messagesTable.createdAt })
+          .from(messagesTable)
+          .where(
+            and(
+              eq(messagesTable.conversationId, conversationId),
+              eq(messagesTable.isInternal, true),
+              sql`${messagesTable.contentText} LIKE ${HANDOFF_NOTE_PREFIX + '%'}`,
+              sql`${messagesTable.createdAt} >= now() - interval '24 hours'`,
+            ),
+          )
+          .orderBy(desc(messagesTable.createdAt))
+          .limit(1),
+      )
+      if (lastHandoff?.handoffAt) {
+        handoffContext = handoffContextInstruction({
+          handoffAt: lastHandoff.handoffAt,
+          timezone: settings.businessTimezone,
+        })
+      }
+    } catch (err) {
+      console.error('[ai auto-reply] contexto pós-transferência falhou (segue sem):', err instanceof Error ? err.message : err)
+    }
+
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
@@ -887,6 +954,7 @@ export async function dispatchInboundToAiReply(
       agendasDaEquipe,
       extraInstructions: (() => {
         const extra: string[] = []
+        if (handoffContext) extra.push(handoffContext)
         if (contaSuspensa) extra.push(contaSuspensa)
         if (openDebt) extra.push(collectionInstruction(openDebt))
         // 🧾 criar_cobranca: a regra só entra no prompt do agente que tem a
@@ -898,6 +966,9 @@ export async function dispatchInboundToAiReply(
       })(),
       tools,
       pipelineStages: closeCtx?.stageNames ?? [],
+      // Etapa ATUAL do card: o prompt da Zelo decide pela etapa ("card em
+      // Envio da COF" = COF já foi) e a IA só via a lista (01/10).
+      currentStage: closeCtx?.currentStageName ?? null,
       otherFunnels,
       availableTags: accountTags,
       routingTags,
@@ -1328,7 +1399,12 @@ export async function dispatchInboundToAiReply(
     // `withResolve: false` no handoff: a conversa vai pro humano, não fecha —
     // mas o card ainda anda (Jordan/Zelo 18/09: "move pro funil E manda pro
     // Renato"; antes o handoff saía antes e o [[FUNIL:]] se perdia).
-    const runClose = async (opts: { withResolve?: boolean } = {}) => {
+    // DEVOLVE o resultado (null = nada a fazer): o [[HANDOFF]] precisa saber se
+    // o card foi perdido ou foi pra outro funil pra decidir entre pausar e
+    // desligar a IA (handoff-pause.ts).
+    const runClose = async (
+      opts: { withResolve?: boolean } = {},
+    ): Promise<Awaited<ReturnType<typeof applyCloseActions>> | null> => {
       const wantResolve = opts.withResolve !== false && has('resolve') && dirs.resolve
       // "[[FUNIL:<funil> > <etapa>]]" = troca de funil (ferramenta move_funnel);
       // sem ">" = etapa dentro do funil (move_card). Cada um no seu gate.
@@ -1348,6 +1424,8 @@ export async function dispatchInboundToAiReply(
           resolve: wantResolve,
           funnelStageName: wantMove ? dirs.funnelStage : null,
           loseReason: wantLose ? dirs.lose!.reason : null,
+          // Comentário do [[PERDER:motivo | comentário]] — vai pra nota da perda.
+          loseNote: wantLose ? (dirs.lose?.note ?? null) : null,
           win: !!wantWin,
           allowCrossFunnel: crossMove && has('move_funnel'),
         })
@@ -1357,7 +1435,9 @@ export async function dispatchInboundToAiReply(
         if (r.movedTo) {
           await planStageFollowUp({ accountId, conversationId, stageName: r.movedTo })
         }
+        return r
       }
+      return null
     }
 
     // 🔀 Transferência entre agentes ([[AGENTE:nome|resumo]]): muda o dono da
@@ -1450,15 +1530,73 @@ export async function dispatchInboundToAiReply(
       }
       return
     }
-    // Handoff (sentinel "pediu humano"): desliga a IA na conversa + avisa o
-    // responsável. NÃO retorna antes do envio — o bug da 1ª transferência da
-    // Maria (26/08): o modelo escreveu a despedida ("o responsável já vai te
-    // chamar") e o código descartava o texto, deixando o cliente no vácuo.
-    const finishHandoff = async () => {
-      await db
-        .update(conversations)
-        .set({ aiAutoreplyDisabled: true })
-        .where(eq(conversations.id, conversationId))
+    // Handoff (sentinel "pediu humano"): pausa OU desliga a IA na conversa +
+    // avisa o responsável. NÃO retorna antes do envio — o bug da 1ª
+    // transferência da Maria (26/08): o modelo escreveu a despedida ("o
+    // responsável já vai te chamar") e o código descartava o texto, deixando o
+    // cliente no vácuo.
+    //
+    // 🙋 29/09 (caso Zelo): desligar de vez travava o funil — a IA transferiu,
+    // o dono marcou a reunião à mão pelo WhatsApp e o card nunca andou. Com
+    // `handoffPauseMinutes` > 0 a IA fica quieta N min e volta sozinha; perda,
+    // lead que foi pra outro funil e a 2ª transferência em 24h continuam
+    // desligando (regras em handoff-pause.ts). Capturado FORA do closure:
+    // `config` é `let` e o TS não estreita o null dentro da função aninhada.
+    const pauseMin = config.handoffPauseMinutes ?? 0
+    const finishHandoff = async (closeRes: Awaited<ReturnType<typeof runClose>>) => {
+      // Transferências anteriores nesta conversa nas últimas 24h — contadas
+      // ANTES de gravar a nota desta (senão ela mesma contaria e a 1ª já
+      // desligaria). Só importa quando há pausa configurada. Falha na contagem
+      // = segue como 1ª: a nota DESTA transferência é gravada mesmo assim, então
+      // a próxima contagem a enxerga e o laço não se forma.
+      let priorHandoffs24h = 0
+      if (pauseMin > 0) {
+        try {
+          const row = firstOrNull(
+            await db
+              .select({ handoffs: sql<number>`count(*)::int` })
+              .from(messagesTable)
+              .where(
+                and(
+                  eq(messagesTable.conversationId, conversationId),
+                  eq(messagesTable.isInternal, true),
+                  sql`${messagesTable.contentText} LIKE ${HANDOFF_NOTE_PREFIX + '%'}`,
+                  sql`${messagesTable.createdAt} >= now() - interval '24 hours'`,
+                ),
+              ),
+          )
+          priorHandoffs24h = Number(row?.handoffs ?? 0) || 0
+        } catch (err) {
+          console.error('[ai auto-reply] contagem de transferências falhou (segue como 1ª):', err instanceof Error ? err.message : err)
+        }
+      }
+      // Troca de funil = o card MUDOU de funil de verdade (moveu ou abriu cópia
+      // no destino). Só o marcador não basta: "[[FUNIL:<o mesmo funil> > etapa]]"
+      // não troca nada e não pode desligar a IA.
+      const outcome = handoffOutcome({
+        pauseMinutes: pauseMin,
+        lose: !!dirs.lose || !!closeRes?.lost,
+        crossFunnel: !!closeRes?.changedFunnel || !!closeRes?.spawnedDealId,
+        win: !!dirs.win || !!closeRes?.won,
+        priorHandoffs24h,
+      })
+      console.log(
+        '[ai auto-reply] transferência pra humano:',
+        JSON.stringify({ conversationId, outcome, priorHandoffs24h }),
+      )
+      if (outcome.kind === 'pause') {
+        // NÃO desliga: só cala até o fim da pausa (gate no começo do dispatch).
+        await db
+          .update(conversations)
+          .set({ aiPausedUntil: sql`now() + make_interval(mins => ${outcome.minutes})` })
+          .where(eq(conversations.id, conversationId))
+      } else {
+        // Payload EXATO de antes (há teste esperando): desligar é o caminho antigo.
+        await db
+          .update(conversations)
+          .set({ aiAutoreplyDisabled: true })
+          .where(eq(conversations.id, conversationId))
+      }
       try {
         const { sendOwnerAlert } = await import('@/lib/alerts/owner-alerts')
         const c = firstOrNull(
@@ -1509,11 +1647,14 @@ export async function dispatchInboundToAiReply(
         // 16/09: o resumo ia SÓ pro WhatsApp do dono — na conversa a equipe via
         // a despedida e a IA desligada, sem motivo. Agora fica também na tela.
         // Prefixo diferente do "Transferido pela IA" (transferência por
-        // etiqueta) pra os dois caminhos continuarem distinguíveis.
+        // etiqueta) pra os dois caminhos continuarem distinguíveis. O prefixo
+        // abre a nota SEMPRE igual (o contador de transferências e o contexto
+        // pós-pausa procuram por ele); o complemento diz se a IA pausou ou
+        // desligou — e por quê, quando a pausa configurada não valeu.
         await postInternalNote({
           conversationId,
           text: [
-            '🙋 *A IA pediu um humano*',
+            `${HANDOFF_NOTE_PREFIX}${handoffNoteSuffix(outcome)}`,
             aiSummary ? `📋 ${aiSummary}` : null,
             clientTail ? `Cliente disse: ${clientTail}` : null,
           ]
@@ -1525,7 +1666,9 @@ export async function dispatchInboundToAiReply(
         await sendOwnerAlert(accountId, 'handoff', {
           cliente: c?.name ?? '',
           telefone: c?.phone ?? '',
-          motivo: 'A IA pediu um humano nesta conversa',
+          // Com pausa, o dono fica sabendo que a IA volta sozinha se ninguém
+          // responder — senão ele acha que tem tempo infinito pra assumir.
+          motivo: handoffAlertMotivo(outcome),
           // Sem resumo nem fala do cliente, a linha some — a despedida do
           // modelo não é resumo.
           resumo: aiSummary || (clientTail ? `Cliente disse: ${clientTail}` : ''),
@@ -1537,6 +1680,18 @@ export async function dispatchInboundToAiReply(
         })
       } catch (err) {
         console.error('[ai auto-reply] aviso de handoff falhou:', err)
+      }
+    }
+    // Card anda/fecha ANTES de decidir pausa × desliga (perda e troca de funil
+    // desligam). Sem resolver a conversa: ela vai pro humano, não fecha. Se o
+    // encerramento falhar, a transferência sai mesmo assim — antes, a exceção
+    // pulava o finishHandoff e a IA seguia ligada, sem aviso ao dono.
+    const runCloseForHandoff = async () => {
+      try {
+        return await runClose({ withResolve: false })
+      } catch (err) {
+        console.error('[ai auto-reply] encerramento no handoff falhou (transfere mesmo assim):', err)
+        return null
       }
     }
     if (handoff && !text) {
@@ -1554,8 +1709,7 @@ export async function dispatchInboundToAiReply(
         console.error('[ai auto-reply] despedida do handoff falhou:', err)
       }
       await applyTags()
-      await runClose({ withResolve: false })
-      await finishHandoff()
+      await finishHandoff(await runCloseForHandoff())
       return
     }
     // Uma resposta que é SÓ [[COBRAR:…]] ainda tem o que mandar: o link.
@@ -2009,8 +2163,7 @@ export async function dispatchInboundToAiReply(
     // e avisa o responsável. Não agenda depois de pedir humano, mas o card
     // ainda anda/fecha se a IA pediu (sem resolver a conversa).
     if (handoff) {
-      await runClose({ withResolve: false })
-      await finishHandoff()
+      await finishHandoff(await runCloseForHandoff())
       return
     }
     await runSchedule()

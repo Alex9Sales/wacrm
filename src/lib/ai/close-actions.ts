@@ -11,6 +11,12 @@
 //                         e abre um NOVO no outro funil (spawnDealInFunnel).
 //
 // A IA escolhe a etapa pelo nome (injetamos as etapas do funil no prompt).
+//
+// [[PERDER:<motivo> | <comentário>]] (01/10, Zelo): o motivo casa com a lista
+// de motivos da conta (grafia da lista; lista travada e motivo fora dela →
+// "Outros" + o texto da IA no comentário) e o comentário vai pro evento e pra
+// nota interna. Ganhar/perder só fecha card que AINDA está aberto (UPDATE …
+// WHERE status='open'): duas mensagens juntas não fecham o mesmo card 2x.
 // ============================================================
 
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
@@ -31,6 +37,8 @@ import {
 import { firstOrNull } from '@/db/helpers'
 import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
 import { resolveTargetPipeline } from '@/lib/pipelines/default-pipeline'
+import { getAccountSettings } from '@/lib/settings/account-settings'
+import { canonReason } from '@/lib/deals/lost-reasons'
 import { SAME_ORDER_WINDOW_MS } from './order-window'
 import {
   resolveFunnelTarget,
@@ -137,6 +145,9 @@ export interface DealCloseContext {
   dealId: string
   pipelineId: string
   currentStageId: string
+  /** Nome da etapa em que o card ESTÁ (vai pro prompt: "The card is currently
+   *  at stage"). Null se a etapa sumiu do funil (card órfão de etapa). */
+  currentStageName: string | null
   /** Nomes das etapas do funil do deal — a IA escolhe uma pelo nome. */
   stageNames: string[]
 }
@@ -189,8 +200,9 @@ export async function loadDealCloseContext(
       .limit(1),
   )
   if (!deal) return null
+  // A etapa atual sai da MESMA lista (id junto) — sem consulta a mais.
   const stages = await db
-    .select({ name: pipelineStages.name })
+    .select({ id: pipelineStages.id, name: pipelineStages.name })
     .from(pipelineStages)
     .where(eq(pipelineStages.pipelineId, deal.pipelineId))
     .orderBy(pipelineStages.position)
@@ -198,6 +210,7 @@ export async function loadDealCloseContext(
     dealId: deal.id,
     pipelineId: deal.pipelineId,
     currentStageId: deal.stageId,
+    currentStageName: stages.find((s) => s.id === deal.stageId)?.name ?? null,
     stageNames: stages.map((s) => s.name),
   }
 }
@@ -465,10 +478,76 @@ function norm(s: string): string {
     .toLowerCase()
 }
 
+/** Teto do comentário da perda (evento + nota interna): é contexto pra
+ *  equipe, não redação — e o evento mora num jsonb lido pela timeline. */
+const LOST_NOTE_MAX = 1000
+
+/** "Outros"/"Outro" (sem caixa e acento) — a gaveta de sobra da lista. */
+function isCatchAllReason(r: string): boolean {
+  const c = canonReason(r)
+  return c === 'outros' || c === 'outro'
+}
+
+/**
+ * Motivo de perda pedido pela IA × lista de motivos da conta. Pura.
+ *
+ * 01/10 (Zelo): o motivo da IA alimenta o relatório de perda e o espelho do RD,
+ * que só conhecem os motivos da lista. "área sem clientes" e "Área sem
+ * clientes" viravam dois motivos; e com a lista FECHADA um motivo inventado
+ * pela IA furava a trava que o vendedor humano respeita.
+ *   - casou (sem caixa/acento, canonReason) → grafia DA LISTA;
+ *   - não casou e a lista é travada → "Outros" (a grafia da lista, se ela tiver
+ *     a gaveta) e o texto da IA vai pro INÍCIO do comentário — nada se perde;
+ *   - não casou e a lista é aberta → fica como a IA escreveu (não entra na
+ *     lista: só caminho humano acrescenta motivo, ver rememberLostReason).
+ */
+export function resolveAiLostReason(input: {
+  reason: string
+  note?: string | null
+  lostReasons: string[]
+  locked: boolean
+}): { reason: string; note: string | null } {
+  const reason = input.reason.trim()
+  const note = (input.note ?? '').trim() || null
+  const want = canonReason(reason)
+  const hit = input.lostReasons.find((r) => r.trim() && canonReason(r) === want)
+  if (hit) return { reason: hit.trim(), note }
+  if (!input.locked) return { reason, note }
+  const catchAll = input.lostReasons.find(isCatchAllReason)?.trim() || 'Outros'
+  // A IA já escreveu "Outros" (e a lista não tem a gaveta): não repete no comentário.
+  if (isCatchAllReason(reason)) return { reason: catchAll, note }
+  return { reason: catchAll, note: note ? `${reason} — ${note}` : reason }
+}
+
+/**
+ * Nota interna da perda (só pra equipe, na conversa). Pura. A 1ª linha é a de
+ * sempre; o comentário do [[PERDER:motivo | comentário]] vem numa linha
+ * própria pra não virar uma frase só com o motivo.
+ */
+export function lostInternalNoteText(input: {
+  stageName: string | null
+  followUps?: number | null
+  reason: string
+  note?: string | null
+  by: 'ai' | 'followup' | 'system'
+}): string {
+  const ctx = input.followUps != null ? ` após ${input.followUps} follow-up(s) sem retorno` : ''
+  const head = `🔻 Negócio marcado como PERDIDO${
+    input.stageName ? ` na etapa "${input.stageName}"` : ''
+  }${ctx} — motivo: ${input.reason}. (${input.by === 'ai' ? 'IA' : input.by})`
+  const note = (input.note ?? '').trim()
+  return note ? `${head}\n💬 ${note}` : head
+}
+
 /**
  * Marca o negócio ligado à conversa (ou por id) como PERDIDO mantendo a etapa
  * atual (perde-em-pé) + histórico rico. Reutilizável: IA (marcador [[PERDER:]])
  * e, na fase 2, a auto-perda por follow-up esgotado. Best-effort, nunca lança.
+ *
+ * Só perde card que AINDA está aberto, no próprio UPDATE (WHERE status='open'
+ * … RETURNING): duas mensagens do mesmo lead processadas juntas liam o card
+ * aberto ao mesmo tempo e as duas o fechavam — evento, nota e funil de resgate
+ * em dobro. Ninguém atualizado → null, sem evento e sem nota.
  */
 export async function markDealLostInPlace(input: {
   accountId: string
@@ -476,6 +555,9 @@ export async function markDealLostInPlace(input: {
   conversationId?: string | null
   dealId?: string | null
   reason?: string | null
+  /** Comentário da perda ([[PERDER:motivo | comentário]]): vai pro evento
+   *  (data.note, timeline do card) e pra nota interna. */
+  note?: string | null
   by?: 'ai' | 'followup' | 'system'
   followUps?: number | null
   /** Quem fechou já escolheu o próximo funil (spawnDealInFunnel): não dispara
@@ -484,7 +566,8 @@ export async function markDealLostInPlace(input: {
 }): Promise<{ dealId: string; stageName: string | null } | null> {
   const { accountId, userId, conversationId, dealId } = input
   const by = input.by ?? 'ai'
-  const reason = (input.reason || '').trim().slice(0, 120) || 'Sem interesse'
+  let reason = (input.reason || '').trim() || 'Sem interesse'
+  let note = (input.note ?? '').trim() || null
   try {
     // Acha o negócio ABERTO (por id, senão o mais recente ligado à conversa).
     const deal = firstOrNull(
@@ -515,14 +598,40 @@ export async function markDealLostInPlace(input: {
           .limit(1),
       )?.name ?? null
 
+    // Motivo da IA × lista de motivos da conta. Motivo do follow-up/sistema
+    // ("Não respondeu (N follow-ups)") é do próprio CRM e fica como está.
+    // Sem as configurações, perde com o texto da IA mesmo: deixar de perder
+    // o card por causa da lista seria pior que um motivo fora dela.
+    if (by === 'ai') {
+      try {
+        const s = await getAccountSettings(accountId)
+        const resolved = resolveAiLostReason({
+          reason,
+          note,
+          lostReasons: Array.isArray(s.lostReasons) ? s.lostReasons : [],
+          locked: !!s.lostReasonsLocked,
+        })
+        reason = resolved.reason
+        note = resolved.note
+      } catch (err) {
+        console.error('[ai lose] motivos da conta indisponíveis — usa o motivo da IA:', err)
+      }
+    }
+    reason = reason.slice(0, 120)
+    note = note ? note.slice(0, LOST_NOTE_MAX) : null
+
     // Perde EM PÉ: status='lost' + motivo (SEM mexer na etapa) + evento carimbado
     // ATÔMICOS — o evento é o dado que o Raio-X data a perda; se falhar, desfaz o
     // status pra não ficar 'lost' sem evento (KPI de perda datada não desincroniza).
-    await db.transaction(async (tx) => {
-      await tx
+    // WHERE status='open': o card fechado por outra mensagem no meio do caminho
+    // não é fechado de novo (o Postgres reavalia o WHERE depois do lock da linha).
+    const closed = await db.transaction(async (tx) => {
+      const updated = await tx
         .update(deals)
         .set({ status: 'lost', lostReason: reason })
-        .where(and(eq(deals.id, deal.id), eq(deals.accountId, accountId)))
+        .where(and(eq(deals.id, deal.id), eq(deals.accountId, accountId), eq(deals.status, 'open')))
+        .returning({ id: deals.id })
+      if (updated.length === 0) return false
       await tx.insert(dealEvents).values({
         accountId,
         actorUserId: userId || null,
@@ -532,25 +641,25 @@ export async function markDealLostInPlace(input: {
           from: 'open',
           to: 'lost',
           reason,
+          ...(note ? { note } : {}),
           stageId: deal.stageId,
           stageName,
           by,
           ...(input.followUps != null ? { followUps: input.followUps } : {}),
         },
       })
+      return true
     })
+    if (!closed) {
+      console.log(`[ai lose] card ${deal.id} já não estava aberto (fechado por outra mensagem) — nada a fazer`)
+      return null
+    }
 
     // Nota interna (visível pra equipe na conversa).
     if (conversationId) {
-      const ctx =
-        input.followUps != null
-          ? ` após ${input.followUps} follow-up(s) sem retorno`
-          : ''
       await postInternalNote({
         conversationId,
-        text: `🔻 Negócio marcado como PERDIDO${
-          stageName ? ` na etapa "${stageName}"` : ''
-        }${ctx} — motivo: ${reason}. (${by === 'ai' ? 'IA' : by})`,
+        text: lostInternalNoteText({ stageName, followUps: input.followUps, reason, note, by }),
       })
     }
     // 🔀 Funil→funil: perda automática também abre o negócio de resgate.
@@ -577,6 +686,11 @@ export async function markDealLostInPlace(input: {
  * reunião; Jordan/Zelo 18/09: "dá o ganho na 4ª tentativa"). Não é "venda
  * fechada": NÃO manda o aviso de venda nem grava compra no histórico do
  * cliente (isso é do ganho pelo funil, em pipelines/actions). Nunca lança.
+ *
+ * Atômico como a perda: só ganha card AINDA aberto (UPDATE … WHERE
+ * status='open' RETURNING). Null = ninguém atualizado (outra mensagem ganhou
+ * ou perdeu primeiro) — sem evento, sem nota, sem pós-venda; quem chama não
+ * abre card no outro funil (applyCloseActions, reply-win).
  */
 export async function markDealWonInPlace(input: {
   accountId: string
@@ -618,11 +732,13 @@ export async function markDealWonInPlace(input: {
           .limit(1),
       )?.name ?? null
 
-    await db.transaction(async (tx) => {
-      await tx
+    const closed = await db.transaction(async (tx) => {
+      const updated = await tx
         .update(deals)
         .set({ status: 'won', lostReason: null })
-        .where(and(eq(deals.id, deal.id), eq(deals.accountId, accountId)))
+        .where(and(eq(deals.id, deal.id), eq(deals.accountId, accountId), eq(deals.status, 'open')))
+        .returning({ id: deals.id })
+      if (updated.length === 0) return false
       await tx.insert(dealEvents).values({
         accountId,
         actorUserId: userId || null,
@@ -630,7 +746,12 @@ export async function markDealWonInPlace(input: {
         type: 'status_changed',
         data: { from: 'open', to: 'won', stageId: deal.stageId, stageName, by },
       })
+      return true
     })
+    if (!closed) {
+      console.log(`[ai win] card ${deal.id} já não estava aberto (fechado por outra mensagem) — nada a fazer`)
+      return null
+    }
 
     if (conversationId) {
       await postInternalNote({
@@ -723,6 +844,9 @@ export async function applyCloseActions(input: {
   funnelStageName: string | null
   /** Motivo da perda (marcador [[PERDER:]]) — perde EM PÉ, não move de etapa. */
   loseReason?: string | null
+  /** Comentário da perda ([[PERDER:motivo | comentário]] → dirs.lose.note).
+   *  Só tem efeito junto com loseReason. */
+  loseNote?: string | null
   /** [[GANHO]] — ganha EM PÉ (o card cumpriu o objetivo do funil dele). */
   win?: boolean
   /**
@@ -738,9 +862,14 @@ export async function applyCloseActions(input: {
   won?: boolean
   /** Card NOVO aberto no outro funil (ganho/perda + [[FUNIL:<funil> > <etapa>]]). */
   spawnedDealId?: string | null
+  /** O card (ou o card novo) ficou num funil DIFERENTE do de origem.
+   *  `movedToFunnel` também vem preenchido quando o "[[FUNIL:<funil> >
+   *  <etapa>]]" aponta para o funil ATUAL — e isso não é troca de funil. */
+  changedFunnel?: boolean
 }> {
   const { accountId, userId, conversationId, resolve, funnelStageName, loseReason } = input
   let movedToFunnel: string | null = null
+  let changedFunnel = false
   let resolved = false
   let movedTo: string | null = null
   let lost = false
@@ -812,7 +941,7 @@ export async function applyCloseActions(input: {
       if (source) {
         const closed = wantWin
           ? await markDealWonInPlace({ accountId, userId, conversationId, dealId: source.id, by: 'ai', skipAccountAutomation: !!target })
-          : await markDealLostInPlace({ accountId, userId, conversationId, dealId: source.id, reason: loseReason, by: 'ai', skipAccountAutomation: !!target })
+          : await markDealLostInPlace({ accountId, userId, conversationId, dealId: source.id, reason: loseReason, note: input.loseNote, by: 'ai', skipAccountAutomation: !!target })
         won = wantWin && !!closed
         lost = wantLose && !!closed
         if (closed && target) {
@@ -828,6 +957,7 @@ export async function applyCloseActions(input: {
             spawnedDealId = spawned.dealId
             movedTo = target.stageName
             movedToFunnel = target.pipelineName
+            changedFunnel = true
             await postInternalNote({
               conversationId,
               text: `➡️ Card ${spawned.created ? 'novo' : 'existente'} em "${target.pipelineName} › ${target.stageName}".`,
@@ -848,6 +978,7 @@ export async function applyCloseActions(input: {
       userId,
       conversationId,
       reason: loseReason,
+      note: input.loseNote,
       by: 'ai',
     })
     lost = !!r
@@ -887,6 +1018,8 @@ export async function applyCloseActions(input: {
       if (cross) {
         movedTo = cross.stageName
         movedToFunnel = cross.pipelineName
+        // `cross` só existe com `deal` (ver o ternário acima).
+        changedFunnel = cross.pipelineId !== deal?.pipelineId
       } else if (deal && !splitCrossFunnel(funnelStageName)) {
         // Marcador de OUTRO funil sem a ferramenta (ou destino não achado) não
         // cai aqui: o casamento aproximado de etapa acharia "Novo lead" no
@@ -945,7 +1078,7 @@ export async function applyCloseActions(input: {
     }
   }
 
-  return { resolved, movedTo, movedToFunnel, lost, won, spawnedDealId }
+  return { resolved, movedTo, movedToFunnel, lost, won, spawnedDealId, changedFunnel }
 }
 
 /**

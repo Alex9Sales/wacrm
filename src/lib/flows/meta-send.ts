@@ -7,6 +7,7 @@ import { DeliveredButNotRecordedError } from '@/lib/channels/delivery-error'
 import { db, contacts, conversations, messages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { and, eq } from 'drizzle-orm'
+import { stripInstructionMarkers } from '@/lib/whatsapp/instruction-markers'
 
 import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels'
 import { publishEvent } from '@/lib/events/publish'
@@ -175,6 +176,27 @@ async function avisarTela(accountId: string, conversationId: string): Promise<vo
 export async function engineSendText(
   args: SendTextEngineArgs,
 ): Promise<{ whatsapp_message_id: string }> {
+  // 🛡️ Marcador interno nunca sai daqui (01/10, Zelo). O gatilho de etapa
+  // "Envio da COF" mandou QUATRO vezes "[[ENVIAR: Circular de Oferta de
+  // Franquia]]" cru para o cliente: ele envia por esta função, e a rede que
+  // limpa marcador morava só no auto-reply e em sendMessageToConversation.
+  // Follow-up, lembrete, fluxo, CSAT — tudo que é automático passa por aqui,
+  // então a rede também tem que passar. Limpa ANTES de enviar e o texto
+  // gravado é o mesmo que o cliente leu. Texto sem "[[" sai idêntico.
+  const limpo = stripInstructionMarkers(args.text)
+  const text = limpo.removed.length ? (limpo.text ?? '') : args.text
+  if (limpo.removed.length) {
+    console.warn(
+      `[flows] marcador removido antes de enviar (conversa ${args.conversationId}):`,
+      limpo.removed.join(' · '),
+    )
+    // Era SÓ marcador: não manda bolha vazia. Lança ANTES de qualquer consulta
+    // para quem chamou registrar a falha (nota interna) em vez de achar que saiu.
+    if (!text.trim()) {
+      throw new Error('mensagem vazia depois de limpar marcadores internos')
+    }
+  }
+
   const { contact, sanitized, channel } = await loadContactAndChannel(
     args.accountId,
     args.contactId,
@@ -186,7 +208,7 @@ export async function engineSendText(
     channel,
     contact.id,
     sanitized,
-    async (phone) => (await provider.sendText(channel, phone, args.text)).externalMessageId,
+    async (phone) => (await provider.sendText(channel, phone, text)).externalMessageId,
   )
 
   try {
@@ -194,7 +216,7 @@ export async function engineSendText(
       conversationId: args.conversationId,
       senderType: 'bot',
       contentType: 'text',
-      contentText: args.text,
+      contentText: text,
       messageId: waMessageId,
       status: 'sent',
     })
@@ -206,7 +228,7 @@ export async function engineSendText(
   await db
     .update(conversations)
     .set({
-      lastMessageText: args.text,
+      lastMessageText: text,
       lastMessageAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     })

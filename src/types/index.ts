@@ -221,9 +221,12 @@ export interface Conversation {
   /** Estado honesto da IA (15/09, GoLink): ligada com responsável humano =
    *  'waiting_assignee' — a IA não responde e o botão mostra "IA em espera".
    *  Ver lib/ai/conversation-ai-state.ts. Só vem de getConversationWithContact. */
-  ai_state?: 'responding' | 'waiting_assignee' | 'paused' | 'channel_off';
+  ai_state?: 'responding' | 'waiting_assignee' | 'paused' | 'channel_off' | 'handoff_pause';
   /** Nome do responsável, pra dica "Com responsável (<nome>)…". */
   ai_assignee_name?: string | null;
+  /** 🙋 IA calada até aqui depois de pedir um humano (migr 0201) — volta
+   *  sozinha. Nulo/passado = sem pausa. Só vem de getConversationWithContact. */
+  ai_paused_until?: string | null;
   /** Handoff note shown to the receiving agent after a sector transfer. */
   transfer_note?: string | null;
   transfer_note_at?: string | null;

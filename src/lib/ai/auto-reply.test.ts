@@ -33,6 +33,9 @@ const h = vi.hoisted(() => ({
   evaluateCollectionMarker: vi.fn(),
   claimReplyNote: vi.fn(),
   postInternalNote: vi.fn(),
+  // 🙋 encerramento (perda/troca de funil decide pausa × desliga) e aviso ao dono.
+  applyCloseActions: vi.fn(),
+  sendOwnerAlert: vi.fn(),
   state: {
     // 🏁 marcador "até onde a última resposta viu" (reply-marker.ts):
     // string ISO = há marca · null = sem marca · undefined = Redis fora.
@@ -51,6 +54,13 @@ const h = vi.hoisted(() => ({
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
     sqlCalls: [] as string[],
+    // 🙋 Pausa pós-transferência (handoff-pause.ts):
+    // notas "A IA pediu um humano" nas últimas 24h, lidas pro contexto do prompt…
+    handoffNotes: [] as { handoffAt: string }[],
+    // …e a contagem delas que o finishHandoff faz ANTES de gravar a nova.
+    priorHandoffs: 0,
+    // Contagem que falha (banco fora) — a transferência segue como 1ª.
+    countThrows: false,
   },
 }))
 
@@ -102,10 +112,13 @@ vi.mock('./close-actions', () => ({
   listAccountTagNames: async () => [],
   applyTagsByName: async () => [],
   loadDealCloseContext: async () => null,
-  applyCloseActions: async () => ({ resolved: false, movedTo: null }),
+  applyCloseActions: h.applyCloseActions,
   postInternalNote: h.postInternalNote,
   createDealFromAi: async () => null,
+  // Linha "origem" do aviso de transferência — sem card nos testes.
+  handoffDealLine: async () => null,
 }))
+vi.mock('@/lib/alerts/owner-alerts', () => ({ sendOwnerAlert: h.sendOwnerAlert }))
 // 🧾 Cobrança: sem estes mocks, openDebtForPrompt lia o db mockado e voltava
 // sempre null — o caminho do marcador nunca rodava nos testes (revisão 16/09).
 vi.mock('@/lib/collections/reply', async (importOriginal) => ({
@@ -133,6 +146,9 @@ vi.mock('@/db', async (importOriginal) => {
           // resposta velha) podem vir de uma fila ordenada no teste.
           const isWhoWhen =
             !!fields && Object.keys(fields).sort().join(',') === 'createdAt,senderType'
+          // 🙋 Leituras da pausa pós-transferência, pelo formato dos campos.
+          const isHandoffCount = !!fields && 'handoffs' in fields
+          const isHandoffContext = !!fields && 'handoffAt' in fields
           // The eligibility read joins contacts (for is_group); the automations
           // guard doesn't. `innerJoin` returns the same chain so both shapes
           // resolve through the same where().limit().
@@ -144,27 +160,43 @@ vi.mock('@/db', async (importOriginal) => {
             }
           } = {
             innerJoin: () => chain,
-            where: () => ({
-              limit: () => {
-                if (table === actual.automations) {
-                  return Promise.resolve(h.state.autoResponders)
-                }
-                if (table === actual.messages) {
-                  // 🤫 gate do barge-in: msgs de HUMANO recentes na conversa.
-                  return Promise.resolve(h.state.recentHumanMsgs ?? [])
-                }
-                return Promise.resolve(h.state.conv ? [h.state.conv] : [])
-              },
-              // 🏁 guard anti-eco (messages + orderBy + limit): última msg.
-              orderBy: () => ({
-                limit: () =>
-                  Promise.resolve(
-                    isWhoWhen && h.state.orderedReads.length > 0
-                      ? (h.state.orderedReads.shift() ?? [])
-                      : (h.state.lastMessages ?? []),
-                  ),
-              }),
-            }),
+            where: () => {
+              // count(*) sem limit: a própria cadeia é aguardada.
+              if (isHandoffCount) {
+                const counted = h.state.countThrows
+                  ? Promise.reject(new Error('banco fora'))
+                  : Promise.resolve([{ handoffs: h.state.priorHandoffs }])
+                return Object.assign(counted, {
+                  limit: () => counted,
+                  orderBy: () => ({ limit: () => counted }),
+                })
+              }
+              if (isHandoffContext) {
+                const notes = Promise.resolve(h.state.handoffNotes)
+                return { limit: () => notes, orderBy: () => ({ limit: () => notes }) }
+              }
+              return {
+                limit: () => {
+                  if (table === actual.automations) {
+                    return Promise.resolve(h.state.autoResponders)
+                  }
+                  if (table === actual.messages) {
+                    // 🤫 gate do barge-in: msgs de HUMANO recentes na conversa.
+                    return Promise.resolve(h.state.recentHumanMsgs ?? [])
+                  }
+                  return Promise.resolve(h.state.conv ? [h.state.conv] : [])
+                },
+                // 🏁 guard anti-eco (messages + orderBy + limit): última msg.
+                orderBy: () => ({
+                  limit: () =>
+                    Promise.resolve(
+                      isWhoWhen && h.state.orderedReads.length > 0
+                        ? (h.state.orderedReads.shift() ?? [])
+                        : (h.state.lastMessages ?? []),
+                    ),
+                }),
+              }
+            },
           }
           return chain
         },
@@ -187,6 +219,8 @@ vi.mock('@/db', async (importOriginal) => {
 })
 
 import { dispatchInboundToAiReply } from './auto-reply'
+import { HANDOFF_NOTE_PREFIX } from './handoff-pause'
+import { parseCloseDirectives } from './defaults'
 
 const ARGS = {
   accountId: 'acct-1',
@@ -240,9 +274,16 @@ beforeEach(() => {
   h.claimReplyNote.mockResolvedValue(true)
   h.postInternalNote.mockReset()
   h.postInternalNote.mockResolvedValue(true)
+  h.applyCloseActions.mockReset()
+  h.applyCloseActions.mockResolvedValue({ resolved: false, movedTo: null, lost: false })
+  h.sendOwnerAlert.mockReset()
+  h.sendOwnerAlert.mockResolvedValue(undefined)
   h.state.claim = true
   h.state.updatePayload = null
   h.state.sqlCalls = []
+  h.state.handoffNotes = []
+  h.state.priorHandoffs = 0
+  h.state.countThrows = false
   h.hasAgent.mockResolvedValue(true)
   h.loadAiConfig.mockResolvedValue(aiConfig())
   h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
@@ -671,5 +712,191 @@ describe('dispatchInboundToAiReply — handoff', () => {
       }),
     )
     expect(h.state.updatePayload).toEqual({ aiAutoreplyDisabled: true })
+  })
+})
+
+// 🙋 29/09 (reunião, caso Zelo): a IA transferiu, o dono marcou a reunião à mão
+// pelo WhatsApp e o card nunca andou — o [[HANDOFF]] desligava a IA de vez. Com
+// pausa configurada ela fica quieta N min e volta; perda, troca de funil e a 2ª
+// transferência em 24h continuam desligando.
+describe('dispatchInboundToAiReply — pausa ao pedir um humano', () => {
+  const comPausa = (min = 30, extra: Partial<AiConfig> = {}) =>
+    h.loadAiConfig.mockResolvedValue(aiConfig({ handoffPauseMinutes: min, ...extra }))
+  /** Texto da nota "A IA pediu um humano" (a 1ª linha decide pausa × desliga). */
+  const notaDoHandoff = () =>
+    (h.postInternalNote.mock.calls as [{ text: string }][])
+      .map((c) => c[0].text)
+      .find((t) => t.startsWith(HANDOFF_NOTE_PREFIX))
+  const pausouPor = (min: number) => {
+    expect(h.state.updatePayload).not.toBeNull()
+    expect(Object.keys(h.state.updatePayload!)).toEqual(['aiPausedUntil'])
+    // now() + make_interval(mins => N): o N vai como parâmetro do SQL.
+    expect(h.safeStringify(h.state.updatePayload!.aiPausedUntil)).toContain('make_interval')
+    expect(h.safeStringify(h.state.updatePayload!.aiPausedUntil)).toContain(String(min))
+  }
+
+  it('com pausa configurada: NÃO desliga — pausa, nota com o prefixo idêntico e aviso ao dono dizendo que volta', async () => {
+    comPausa(30)
+    h.generateReply.mockResolvedValue({ text: 'Perfeito! O responsável já vai falar contigo.', handoff: true })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Perfeito! O responsável já vai falar contigo.' }),
+    )
+    pausouPor(30)
+    expect(h.state.updatePayload).not.toHaveProperty('aiAutoreplyDisabled')
+    const nota = notaDoHandoff()
+    expect(nota?.split('\n')[0]).toBe(
+      `${HANDOFF_NOTE_PREFIX} — IA pausada por 30 min (volta sozinha se a pessoa escrever e ninguém responder)`,
+    )
+    expect(h.sendOwnerAlert).toHaveBeenCalledWith(
+      'acct-1',
+      'handoff',
+      expect.objectContaining({ motivo: expect.stringContaining('pausada por 30 min') }),
+    )
+  })
+
+  it('handoff SEM texto com pausa: despedida padrão e pausa', async () => {
+    comPausa(15)
+    h.generateReply.mockResolvedValue({ text: '', handoff: true })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+    pausouPor(15)
+  })
+
+  it('2ª transferência em 24h → desliga de vez (anti-laço), payload antigo e o porquê na nota', async () => {
+    comPausa(30)
+    h.state.priorHandoffs = 1
+    h.generateReply.mockResolvedValue({ text: 'Já chamo alguém!', handoff: true })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toEqual({ aiAutoreplyDisabled: true })
+    expect(notaDoHandoff()?.split('\n')[0]).toContain('2ª transferência em 24h')
+    expect(h.sendOwnerAlert).toHaveBeenCalledWith(
+      'acct-1',
+      'handoff',
+      expect.objectContaining({ motivo: expect.stringContaining('desligada') }),
+    )
+  })
+
+  it('contagem de transferências falhou → segue como 1ª (pausa) e não derruba a transferência', async () => {
+    comPausa(30)
+    h.state.countThrows = true
+    h.generateReply.mockResolvedValue({ text: 'Já chamo alguém!', handoff: true })
+    await dispatchInboundToAiReply(ARGS)
+    pausouPor(30)
+    expect(h.sendOwnerAlert).toHaveBeenCalled()
+  })
+
+  it('[[PERDER]] junto do handoff → desliga, e o comentário da perda vai pro encerramento', async () => {
+    comPausa(30, { tools: ['move_card'] } as Partial<AiConfig>)
+    const text = 'Entendi, vou passar pra equipe.\n[[PERDER:Sem orçamento | só ano que vem]]'
+    h.generateReply.mockResolvedValue({ text, handoff: true })
+    await dispatchInboundToAiReply(ARGS)
+    // O que o parser devolver (contrato do [[PERDER:motivo | comentário]]) é
+    // repassado tal e qual: motivo em loseReason, comentário em loseNote.
+    const lose = parseCloseDirectives(text).lose
+    expect(h.applyCloseActions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolve: false,
+        loseReason: lose?.reason,
+        loseNote: (lose as { note?: string } | null)?.note ?? null,
+      }),
+    )
+    expect(h.state.updatePayload).toEqual({ aiAutoreplyDisabled: true })
+    expect(notaDoHandoff()?.split('\n')[0]).toContain('marcado como perdido')
+  })
+
+  it('card foi pra OUTRO funil sem ganho (lead de serviço/emprego) → desliga', async () => {
+    comPausa(30, { tools: ['move_funnel'] } as Partial<AiConfig>)
+    h.applyCloseActions.mockResolvedValue({ resolved: false, movedTo: 'Novo', movedToFunnel: 'Serviços', lost: false, changedFunnel: true })
+    h.generateReply.mockResolvedValue({ text: 'Vou te passar pro time certo.\n[[FUNIL:Serviços > Novo]]', handoff: true })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toEqual({ aiAutoreplyDisabled: true })
+    expect(notaDoHandoff()?.split('\n')[0]).toContain('outro funil')
+  })
+
+  it('"[[FUNIL:<funil atual> > etapa]]" só troca a ETAPA → pausa (não é outro funil)', async () => {
+    comPausa(30, { tools: ['move_funnel'] } as Partial<AiConfig>)
+    h.applyCloseActions.mockResolvedValue({ resolved: false, movedTo: 'Qualificado', movedToFunnel: 'Vendas', lost: false, changedFunnel: false })
+    h.generateReply.mockResolvedValue({ text: 'Já chamo alguém!\n[[FUNIL:Vendas > Qualificado]]', handoff: true })
+    await dispatchInboundToAiReply(ARGS)
+    pausouPor(30)
+  })
+
+  it('outro funil COM ganho (lead qualificado indo pra venda) → pausa', async () => {
+    comPausa(30, { tools: ['move_funnel'] } as Partial<AiConfig>)
+    h.applyCloseActions.mockResolvedValue({
+      resolved: false,
+      movedTo: 'Reunião',
+      movedToFunnel: 'Vendas',
+      lost: false,
+      won: true,
+      spawnedDealId: 'deal-2',
+    })
+    h.generateReply.mockResolvedValue({ text: 'Show! Já chamo o consultor.\n[[GANHO]]\n[[FUNIL:Vendas > Reunião]]', handoff: true })
+    await dispatchInboundToAiReply(ARGS)
+    pausouPor(30)
+  })
+
+  it('encerramento lançou → a transferência sai mesmo assim (antes a IA ficava ligada e o dono sem aviso)', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ tools: ['move_card'] } as Partial<AiConfig>))
+    h.applyCloseActions.mockRejectedValue(new Error('banco fora'))
+    h.generateReply.mockResolvedValue({ text: 'Já chamo alguém!\n[[FUNIL:Qualificado]]', handoff: true })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toEqual({ aiAutoreplyDisabled: true })
+    expect(h.sendOwnerAlert).toHaveBeenCalled()
+  })
+
+  it('sem pausa (padrão 0): nota exatamente como antes e nenhuma contagem extra', async () => {
+    h.generateReply.mockResolvedValue({ text: 'Já chamo alguém!', handoff: true })
+    h.state.priorHandoffs = 5 // ignorado: sem pausa nem conta
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toEqual({ aiAutoreplyDisabled: true })
+    expect(notaDoHandoff()?.split('\n')[0]).toBe(HANDOFF_NOTE_PREFIX)
+    expect(h.sendOwnerAlert).toHaveBeenCalledWith(
+      'acct-1',
+      'handoff',
+      expect.objectContaining({ motivo: 'A IA pediu um humano nesta conversa' }),
+    )
+  })
+
+  it('gate: pausa vigente → não gera, não desliga e reagenda pro FIM da pausa', async () => {
+    h.state.conv = { ...(h.state.conv as object), aiPausedUntil: new Date(Date.now() + 10 * 60_000).toISOString() }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.enqueueRecheck).toHaveBeenCalledTimes(1)
+    const delay = h.enqueueRecheck.mock.calls[0][1] as number
+    expect(delay).toBeGreaterThan(9 * 60_000)
+    expect(delay).toBeLessThan(11 * 60_000)
+  })
+
+  it('gate: pausa vencida → responde normalmente', async () => {
+    h.state.conv = { ...(h.state.conv as object), aiPausedUntil: new Date(Date.now() - 60_000).toISOString() }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalled()
+    expect(h.enqueueRecheck).not.toHaveBeenCalled()
+  })
+
+  it('contexto: transferência nas últimas 24h → o prompt diz que a equipe foi avisada e não recomeça a qualificação', async () => {
+    comPausa(60)
+    h.state.handoffNotes = [{ handoffAt: new Date(Date.now() - 40 * 60_000).toISOString() }]
+    await dispatchInboundToAiReply(ARGS)
+    const prompt = (h.generateReply.mock.calls[0][0] as { systemPrompt: string }).systemPrompt
+    expect(prompt).toContain('HANDED OFF TO A HUMAN')
+    expect(prompt).toContain('Do NOT restart the qualification')
+  })
+
+  it('contexto: agente SEM pausa (padrão) → nada muda no prompt, mesmo com transferência recente', async () => {
+    h.state.handoffNotes = [{ handoffAt: new Date(Date.now() - 40 * 60_000).toISOString() }]
+    await dispatchInboundToAiReply(ARGS)
+    const prompt = (h.generateReply.mock.calls[0][0] as { systemPrompt: string }).systemPrompt
+    expect(prompt).not.toContain('HANDED OFF TO A HUMAN')
+  })
+
+  it('contexto: sem transferência recente → prompt sem a instrução', async () => {
+    await dispatchInboundToAiReply(ARGS)
+    const prompt = (h.generateReply.mock.calls[0][0] as { systemPrompt: string }).systemPrompt
+    expect(prompt).not.toContain('HANDED OFF TO A HUMAN')
   })
 })

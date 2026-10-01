@@ -72,6 +72,33 @@ export function hasRealName(name: string | null | undefined, phone: string): boo
   return !isBarePhone(n);
 }
 
+/**
+ * Rótulo de contato exportado do Google na FRENTE do nome: "Endereço pessoal
+ * de Fulano", "Endereço comercial da Fulana". Só o rótulo INTEIRO no começo —
+ * "de/da/do" soltos ("Maria da Silva") nunca são tocados. Com e sem acento
+ * (planilha exportada perde o ç), qualquer caixa.
+ */
+const CONTACT_EXPORT_PREFIX =
+  /^\s*endere[cç]o\s+(?:pessoal|comercial|residencial|profissional)\s+d(?:e|a|o|as|os)\s+/iu;
+
+/**
+ * Tira o rótulo de exportação do começo do nome (puro).
+ *
+ * 01/10: um contato veio do RD como "Endereço pessoal de Fulano" (rótulo da
+ * agenda do Google que virou nome numa exportação) com name_source='crm' — o
+ * nome que NADA automático troca — e a saudação saiu "Oi, Endereço!". Limpar
+ * na entrada evita que o rótulo se cristalize como nome do CRM.
+ * Sem o rótulo, ou se não sobrar nada depois dele, devolve o nome intacto.
+ */
+export function stripContactExportPrefix(name: string): string {
+  // NFC: "Endereço" colado de PDF/Mac vem decomposto (c + cedilha separada) e
+  // não casaria com [cç].
+  const nfc = name.normalize('NFC');
+  if (!CONTACT_EXPORT_PREFIX.test(nfc)) return name;
+  const rest = nfc.replace(CONTACT_EXPORT_PREFIX, '').trim();
+  return rest || name;
+}
+
 const KNOWN_SOURCES: ReadonlySet<string> = new Set(['crm', 'phonebook', 'whatsapp']);
 
 /** Normaliza o valor cru do banco pra `NameSource | null`. */

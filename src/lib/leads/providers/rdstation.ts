@@ -15,7 +15,19 @@
 // ============================================================
 
 import { type FetchedLead, str } from './shared'
-import { isSyntheticConversion } from '../lead-facts'
+import { cleanOrigin, isGenericOrigin, isSyntheticConversion } from '../lead-facts'
+
+/** Lead do RD + o que o webhook precisa saber antes de tratá-lo como lead. */
+export interface RdLead extends FetchedLead {
+  /**
+   * Rótulo da conversão MAIS RECENTE quando quem a gerou foi o próprio RD CRM
+   * ("Tarefa criada no RD Station CRM"…); null quando é do lead. Fica FORA de
+   * `meta` de propósito: a observação do card não pode exibir esse rótulo como
+   * se fosse uma conversão do lead (Zelo 01/10), mas o webhook precisa dele
+   * pra não abrir card (ver isSyntheticConversion).
+   */
+  selfConversion: string | null
+}
 
 /** Campos que já viram nome/telefone/e-mail — não repetir nas anotações. */
 const CORE_KEYS = new Set([
@@ -43,43 +55,63 @@ function isBag(v: unknown): v is Bag {
   return !!v && typeof v === 'object' && !Array.isArray(v)
 }
 
-/** Nome legível da conversão ("Formulário X", "Landing Page Y"). */
-function conversionLabel(v: unknown): string {
-  if (!isBag(v)) return ''
+/** Uma conversão do RD (`first_conversion`/`last_conversion`) já lida. */
+interface RdConversion {
+  /** Todos os rótulos que o RD mandou pra ela, na ordem de preferência. */
+  labels: string[]
+  /**
+   * Nome legível ("Formulário X", "Landing Page Y"): o 1º rótulo que diz algo
+   * ("unknown" não é nome). '' quando nenhum diz.
+   */
+  label: string
+  /**
+   * O rótulo do próprio RD CRM, quando QUALQUER candidato for um — não só o
+   * preferido. Zelo 01/10: com `source` vindo antes de `content.identificador`,
+   * "Tarefa criada no RD Station CRM" podia ficar escondido atrás de outro
+   * rótulo e passar pelo filtro.
+   */
+  synthetic: string | null
+  /** AAAA-MM-DD, quando vier. */
+  date: string
+  /**
+   * Campanha/canal de ANÚNCIO (`conversion_origin`: utm_campaign, fonte,
+   * meio) — o "campo campanha" que o Jordan (Zelo 18/09) quer que a IA leia
+   * pra saber de qual campanha o lead veio. Já sem os pedaços genéricos;
+   * '' quando o RD não mandou nada útil.
+   */
+  campaign: string
+  channel: string
+}
+
+function readConversion(v: unknown): RdConversion | null {
+  if (!isBag(v)) return null
   const content = isBag(v.content) ? v.content : {}
-  return (
-    str(v.source) ||
-    str(content.identificador) ||
-    str(content.identifier) ||
-    str(v.conversion_identifier) ||
-    ''
-  ).trim()
-}
-
-/** Data da conversão, quando vier. */
-function conversionDate(v: unknown): string {
-  if (!isBag(v)) return ''
-  return str(v.created_at).slice(0, 10)
-}
-
-/**
- * Campanha/canal de ANÚNCIO da conversão (`conversion_origin`: utm_campaign,
- * fonte, meio) — o "campo campanha" que o Jordan (Zelo 18/09) quer que a IA
- * leia pra saber de qual campanha o lead veio. Vazio quando o RD não manda.
- */
-function conversionOrigin(v: unknown): { campaign: string; channel: string } {
-  if (!isBag(v) || !isBag(v.conversion_origin)) return { campaign: '', channel: '' }
-  const o = v.conversion_origin
-  const campaign = str(o.campaign).trim()
-  const channel = [str(o.source), str(o.medium)].map((s) => s.trim()).filter(Boolean).join(' / ')
-  return { campaign, channel }
+  const labels = [v.source, content.identificador, content.identifier, v.conversion_identifier]
+    .map((c) => str(c).trim())
+    .filter(Boolean)
+  const o = isBag(v.conversion_origin) ? v.conversion_origin : {}
+  // Canal parte a parte: "facebook / unknown" → "facebook". Fonte e meio
+  // genéricos → o `channel` agrupado do RD ("Paid Search", "Social"…), se útil.
+  const channel =
+    [o.source, o.medium]
+      .map((s) => cleanOrigin(str(s)))
+      .filter(Boolean)
+      .join(' / ') || cleanOrigin(str(o.channel))
+  return {
+    labels,
+    label: labels.find((l) => !isGenericOrigin(l)) ?? '',
+    synthetic: labels.find((l) => isSyntheticConversion(l)) ?? null,
+    date: str(v.created_at).slice(0, 10),
+    campaign: cleanOrigin(str(o.campaign)),
+    channel,
+  }
 }
 
 /**
  * Um lead do RD → o formato que o motor de leads já entende.
  * Nunca lança: campo estranho vira anotação, campo faltando vira null.
  */
-export function mapRdLead(raw: unknown): FetchedLead | null {
+export function mapRdLead(raw: unknown): RdLead | null {
   if (!isBag(raw)) return null
 
   const fields: Record<string, string> = {}
@@ -99,19 +131,26 @@ export function mapRdLead(raw: unknown): FetchedLead | null {
   }
 
   const meta: Record<string, string> = {}
-  const first = conversionLabel(raw.first_conversion)
-  const last = conversionLabel(raw.last_conversion)
-  if (first) meta['Primeira conversão'] = first
-  if (last && last !== first) meta['Última conversão'] = last
-  const when = conversionDate(raw.last_conversion) || conversionDate(raw.first_conversion)
+  const first = readConversion(raw.first_conversion)
+  const last = readConversion(raw.last_conversion)
+  // Só conversão do LEAD vira linha de origem. A do próprio RD CRM ("Tarefa
+  // criada no RD Station CRM"…) não é "Última conversão" de ninguém — Zelo
+  // 01/10: aparecia na nota como se o lead tivesse convertido nela.
+  const firstReal = first && !first.synthetic ? first : null
+  const lastReal = last && !last.synthetic ? last : null
+  if (firstReal?.label) meta['Primeira conversão'] = firstReal.label
+  if (lastReal?.label && lastReal.label !== firstReal?.label) meta['Última conversão'] = lastReal.label
+  // Mais recente PRIMEIRO, sempre entre as reais: data, campanha e canal saem
+  // da última conversão do lead e, no que ela não disser nada (genérico), da
+  // primeira. Zelo 01/10: a conversão do RD CRM chegava com tudo "unknown" e
+  // tomava o lugar da campanha boa do formulário.
+  const real = [lastReal, firstReal].filter((c): c is RdConversion => !!c)
+  const when = real.map((c) => c.date).find(Boolean)
   if (when) meta['Data da conversão'] = when
-  // Campanha do anúncio: da última conversão real, senão da primeira.
-  const lastIsReal = !!last && !isSyntheticConversion(last)
-  const lastOrigin = conversionOrigin(raw.last_conversion)
-  const firstOrigin = conversionOrigin(raw.first_conversion)
-  const adOrigin = lastIsReal && (lastOrigin.campaign || lastOrigin.channel) ? lastOrigin : firstOrigin
-  if (adOrigin.campaign) meta['Campanha'] = adOrigin.campaign
-  if (adOrigin.channel) meta['Canal da conversão'] = adOrigin.channel
+  const campaign = real.map((c) => c.campaign).find(Boolean)
+  if (campaign) meta['Campanha'] = campaign
+  const channel = real.map((c) => c.channel).find(Boolean)
+  if (channel) meta['Canal da conversão'] = channel
   if (Array.isArray(raw.tags)) {
     const tags = raw.tags.map(str).filter(Boolean)
     if (tags.length) meta['Tags no RD'] = tags.join(', ')
@@ -128,15 +167,21 @@ export function mapRdLead(raw: unknown): FetchedLead | null {
   const email = str(raw.email).trim() || null
   const company = str(raw.company).trim() || null
 
+  // A conversão que trouxe ESTE webhook é a última que tem rótulo (sem
+  // rótulo nenhum, a primeira) — mesma régua de antes, agora olhando todos os
+  // candidatos de rótulo de cada uma.
+  const latest = last?.labels.length ? last : first
+  const selfConversion = latest?.synthetic ?? null
+
   if (!phone && !email && !name) return null
-  return { name, phone, email, company, fields, meta }
+  return { name, phone, email, company, fields, meta, selfConversion }
 }
 
 /**
  * Corpo do webhook → lista de leads. Aceita `{leads:[…]}`, `{lead:{…}}`,
  * um array solto ou um lead solto — o RD já avisou que o formato vai mudar.
  */
-export function parseRdWebhook(body: unknown): FetchedLead[] {
+export function parseRdWebhook(body: unknown): RdLead[] {
   const raw: unknown[] = Array.isArray(body)
     ? body
     : isBag(body)
@@ -146,13 +191,15 @@ export function parseRdWebhook(body: unknown): FetchedLead[] {
           ? [body.lead]
           : [body]
       : []
-  return raw.map(mapRdLead).filter((l): l is FetchedLead => !!l)
+  return raw.map(mapRdLead).filter((l): l is RdLead => !!l)
 }
 
 /**
  * Identificador da conversão — vira a origem do lead no card do funil e decide
- * a abertura. A conversão sintética "Negociação criada no RD Station CRM" não
- * conta: ela diria "franquia" pra um pedido de orçamento.
+ * a abertura. A conversão sintética do RD CRM ("Negociação criada no RD
+ * Station CRM", "Tarefa criada…") não conta: ela diria "franquia" pra um
+ * pedido de orçamento. O `mapRdLead` já não a põe em `meta`; o filtro aqui
+ * fica pra quem montar o lead por outro caminho.
  */
 export function rdOriginLabel(lead: FetchedLead): string {
   const last = lead.meta['Última conversão']

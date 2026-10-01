@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   aiEnableWithAssigneeWarning,
+  aiHandoffPauseHint,
   aiState,
   aiWaitingHint,
 } from './conversation-ai-state'
@@ -25,6 +26,28 @@ describe('aiState', () => {
     expect(
       aiState({ aiActiveChannel: true, aiAutoreplyDisabled: false, assignedAgentId: 'u1' }),
     ).toBe('waiting_assignee')
+  })
+
+  it('🙋 pausa pós-transferência vigente = "handoff_pause"; vencida = respondendo', () => {
+    const now = Date.parse('2026-10-01T15:00:00.000Z')
+    const base = { aiActiveChannel: true, aiAutoreplyDisabled: false, assignedAgentId: null, now }
+    expect(aiState({ ...base, aiPausedUntil: '2026-10-01T15:30:00.000Z' })).toBe('handoff_pause')
+    expect(aiState({ ...base, aiPausedUntil: '2026-10-01T14:30:00.000Z' })).toBe('responding')
+    expect(aiState({ ...base, aiPausedUntil: null })).toBe('responding')
+  })
+
+  it('🙋 a ordem dos gates do auto-reply: desligada e com responsável vencem a pausa', () => {
+    const now = Date.parse('2026-10-01T15:00:00.000Z')
+    const aiPausedUntil = '2026-10-01T15:30:00.000Z'
+    expect(
+      aiState({ aiActiveChannel: true, aiAutoreplyDisabled: true, assignedAgentId: null, aiPausedUntil, now }),
+    ).toBe('paused')
+    expect(
+      aiState({ aiActiveChannel: true, aiAutoreplyDisabled: false, assignedAgentId: 'u1', aiPausedUntil, now }),
+    ).toBe('waiting_assignee')
+    expect(aiHandoffPauseHint('14:30')).toBe(
+      'A IA pediu um humano e está pausada até 14:30. Volta sozinha se a pessoa escrever e ninguém responder.',
+    )
   })
 
   it('ligada sem responsável = respondendo', () => {

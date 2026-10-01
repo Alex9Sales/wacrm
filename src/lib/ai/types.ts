@@ -37,6 +37,10 @@ export interface AiConfig {
   autoReplyBufferSeconds?: number
   /** 🤫 Barge-in: humano respondeu → IA observa por N min (0 = off). */
   bargeInMinutes?: number
+  /** 🙋 Ao pedir um humano ([[HANDOFF]]): pausar a IA na conversa por N min e
+   *  voltar sozinha (0/ausente = desliga de vez, como antes de 29/09). Perda,
+   *  troca de funil e 2ª transferência em 24h sempre desligam — handoff-pause.ts. */
+  handoffPauseMinutes?: number
   /** 🔊 Responder por áudio (TTS). false → entende áudio, responde só texto. */
   audioRepliesEnabled?: boolean
   /** 🗣️ Voz ElevenLabs (voice_id). null/undefined → OpenAI 'nova' (padrão). */
@@ -95,8 +99,12 @@ export interface TokenUsage {
 /** De onde partiu a chamada de IA (mantém teste separado do tráfego real). */
 export type UsageSource =
   | 'inbox'
-  /** Cobrança: o que a régua e o agente de cobrança gastam (23/09, Alex). */
+  /** Cobrança: o que a régua e o agente de cobrança gastam (23/09, Alex).
+   *  ⚠️ O banco só aceitou a partir da migração 0203 (01/10). */
   | 'collections'
+  /** Follow-up da IA: escada de silêncio, lembrete de reunião, gatilho de
+   *  etapa (followup.ts). Antes da 0203 ia como 'inbox' (01/10). */
+  | 'followup'
   | 'draft'
   | 'playground'
   | 'pipeline'

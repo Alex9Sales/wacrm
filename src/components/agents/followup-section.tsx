@@ -18,6 +18,8 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/use-auth';
 import { canEditSettings } from '@/lib/auth/roles';
 import { listApprovedTemplates } from '@/app/(dashboard)/inbox/actions';
+import { listAgentMaterials } from '@/app/(dashboard)/agents/materials-actions';
+import { listCadenceOptions } from '@/app/(dashboard)/automations/cadencias/actions';
 import type { MessageTemplate } from '@/types';
 
 /** Quantos parâmetros {{n}} o corpo do template tem (maior índice). */
@@ -107,9 +109,31 @@ interface StageTrig {
   templateLanguage: string;
   /** Params do template, separados por vírgula (tokens {nome} {hora} {data}). */
   templateParamsText: string;
+  /**
+   * Entrega (01/10, Zelo "Envio da COF"): manda o TEXTO do modelo, sem IA,
+   * também dentro da janela de 24h. Só vale com modelo escolhido.
+   */
+  sendTemplateText: boolean;
+  /** Nome do material do agente anexado depois da mensagem ('' = nenhum). */
+  attachMaterial: string;
+  /** Envia mesmo com a IA pausada na conversa ou com um atendente nela. */
+  ignoreAiPause: boolean;
+  /** Cadência para inscrever depois do envio ('' = nenhuma). */
+  enrollCadenceId: string;
   /** Só UI: mostra o campo de orientação. */
   _guide?: boolean;
 }
+
+/**
+ * Campos de entrega zerados. Todo gatilho novo nasce com eles: a tela monta o
+ * gatilho campo a campo e o que não estiver aqui some no "Salvar".
+ */
+const EMPTY_DELIVERY = {
+  sendTemplateText: false,
+  attachMaterial: '',
+  ignoreAiPause: false,
+  enrollCadenceId: '',
+};
 
 const MAX_STAGE_TRIGGERS = 6;
 const MAX_MEETING_REMINDERS = 6;
@@ -135,7 +159,12 @@ const MEETING_DEFAULTS: MeetingRem[] = [
 ];
 /** Opções prontas (o "tem opções ou escreve" do Alex): preenche um gatilho que
  *  o usuário edita (nome da etapa + tempo). */
-const EMPTY_TEMPLATE = { templateName: '', templateLanguage: '', templateParamsText: '' };
+const EMPTY_TEMPLATE = {
+  templateName: '',
+  templateLanguage: '',
+  templateParamsText: '',
+  ...EMPTY_DELIVERY,
+};
 const STAGE_PRESETS: { label: string; trig: StageTrig }[] = [
   {
     label: 'Confirmar reunião',
@@ -185,6 +214,13 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
   const [skipWhenDealExists, setSkipWhenDealExists] = useState(false);
   const [logTasks, setLogTasks] = useState(false);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
+  // Materiais do agente e cadências, para os seletores do gatilho de etapa.
+  // Erro de carga NUNCA vira "lista vazia" (chamado do Rafael 24/08: bundle
+  // velho fazia "Nenhuma cadência criada" aparecer com cadência existindo).
+  const [materialNames, setMaterialNames] = useState<string[]>([]);
+  const [materialsError, setMaterialsError] = useState(false);
+  const [cadenceOpts, setCadenceOpts] = useState<{ id: string; name: string }[]>([]);
+  const [cadencesError, setCadencesError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -193,6 +229,38 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
       .then((t) => setTemplates(t))
       .catch(() => setTemplates([]));
   }, []);
+
+  useEffect(() => {
+    let vivo = true;
+    // Lança para quem não é admin (requireRole) — a mensagem de erro aparece no
+    // lugar de uma lista vazia, e o valor salvo continua no seletor.
+    listAgentMaterials(agentId)
+      .then((rows) => {
+        if (!vivo) return;
+        setMaterialNames(rows.map((r) => r.name));
+        setMaterialsError(false);
+      })
+      .catch(() => {
+        if (vivo) setMaterialsError(true);
+      });
+    // null = a busca falhou (não é "sem cadências").
+    listCadenceOptions()
+      .then((opts) => {
+        if (!vivo) return;
+        if (opts === null) {
+          setCadencesError(true);
+        } else {
+          setCadenceOpts(opts);
+          setCadencesError(false);
+        }
+      })
+      .catch(() => {
+        if (vivo) setCadencesError(true);
+      });
+    return () => {
+      vivo = false;
+    };
+  }, [agentId]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -252,6 +320,10 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
             templateParamsText: Array.isArray(x.templateParams)
               ? (x.templateParams as string[]).join(', ')
               : '',
+            sendTemplateText: x.sendTemplateText === true,
+            attachMaterial: typeof x.attachMaterial === 'string' ? x.attachMaterial : '',
+            ignoreAiPause: x.ignoreAiPause === true,
+            enrollCadenceId: typeof x.enrollCadenceId === 'string' ? x.enrollCadenceId : '',
             _guide: !!((x.instructions as string) ?? '').trim(),
           })),
         );
@@ -331,6 +403,7 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
               templateName: '',
               templateLanguage: '',
               templateParamsText: '',
+              ...EMPTY_DELIVERY,
             },
           ],
     );
@@ -403,6 +476,12 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                 .split(',')
                 .map((p) => p.trim())
                 .filter(Boolean),
+              // Os 4 campos da entrega (01/10). Fora daqui eles sumiam no
+              // primeiro "Salvar" — o PATCH só grava o que a tela manda.
+              sendTemplateText: t.sendTemplateText && !!t.templateName.trim(),
+              attachMaterial: t.attachMaterial.trim(),
+              ignoreAiPause: t.ignoreAiPause,
+              enrollCadenceId: t.enrollCadenceId,
             })),
           meetingReminders: meetingRems.map((m) => ({
             offsetValue: Math.max(0, Math.round(m.offsetValue || 1)),
@@ -717,6 +796,10 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
               Quando o card entra numa etapa, a IA dá um toque depois de um tempo
               (ex.: entrou em <strong>Agendado</strong> → confirma a reunião). Só
               dispara se o cliente estiver calado e dentro da janela de 24h.
+              Para <strong>entregar um documento</strong> (ex.: a circular de
+              franquia), escolha o modelo e marque &ldquo;Mandar o texto do
+              modelo&rdquo;: sai o texto aprovado, sem IA, com o material anexado —
+              mesmo que o cliente já tenha respondido.
             </p>
 
             {stageTriggers.map((t, i) => (
@@ -802,10 +885,13 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                 )}
 
                 {/* Modelo aprovado: usado quando estiver FORA da janela de 24h
-                    no canal OFICIAL (Meta). Dentro da janela = texto da IA. */}
+                    no canal OFICIAL (Meta). Dentro da janela = texto da IA —
+                    ou o texto do próprio modelo, no modo entrega. */}
                 <div className="mt-2 border-t border-dashed border-border pt-2">
                   <Label className="text-[11px] text-muted-foreground">
-                    Modelo p/ fora da janela de 24h (canal oficial)
+                    {t.sendTemplateText && t.templateName
+                      ? 'Modelo — o texto dele é o que sai'
+                      : 'Modelo p/ fora da janela de 24h (canal oficial)'}
                   </Label>
                   <select
                     value={
@@ -818,6 +904,9 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                       setTrig(i, {
                         templateName: name || '',
                         templateLanguage: lang || '',
+                        // Sem modelo não há texto a entregar: desmarca junto,
+                        // senão a caixa ficaria marcada e desabilitada.
+                        ...(name ? {} : { sendTemplateText: false }),
                       });
                     }}
                     disabled={!canEdit}
@@ -851,6 +940,106 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                         (próxima reunião).
                       </p>
                     </>
+                  )}
+                </div>
+
+                {/* Entrega (01/10, Zelo "Envio da COF"): texto aprovado + arquivo,
+                    sem depender da IA ligada na conversa. */}
+                <div className="mt-2 space-y-2 border-t border-dashed border-border pt-2 text-xs">
+                  <label
+                    className={`flex items-start gap-1.5 ${
+                      t.templateName ? 'cursor-pointer' : 'opacity-60'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={t.sendTemplateText && !!t.templateName}
+                      onChange={(e) => setTrig(i, { sendTemplateText: e.target.checked })}
+                      disabled={!canEdit || !t.templateName}
+                      className="mt-0.5 h-3.5 w-3.5"
+                    />
+                    <span className="text-muted-foreground">
+                      Mandar o texto do modelo, sem IA (também dentro da janela de 24h)
+                      {!t.templateName && ' — escolha um modelo acima'}
+                    </span>
+                  </label>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-muted-foreground">Anexar material:</span>
+                    <select
+                      value={t.attachMaterial}
+                      onChange={(e) => setTrig(i, { attachMaterial: e.target.value })}
+                      disabled={!canEdit}
+                      className="h-8 max-w-full rounded-md border border-border bg-background px-2 text-sm text-foreground"
+                    >
+                      <option value="">— nenhum —</option>
+                      {materialNames.map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                      {/* O valor salvo fica selecionável mesmo fora da lista (lista
+                          que não carregou, ou material renomeado/apagado). */}
+                      {t.attachMaterial && !materialNames.includes(t.attachMaterial) && (
+                        <option value={t.attachMaterial}>
+                          {t.attachMaterial}
+                          {!materialsError &&
+                          !materialNames.some(
+                            (n) => n.toLowerCase() === t.attachMaterial.toLowerCase(),
+                          )
+                            ? ' (não está mais em Materiais)'
+                            : ''}
+                        </option>
+                      )}
+                    </select>
+                  </div>
+                  {materialsError && (
+                    <p className="text-[11px] text-destructive">
+                      Não foi possível carregar os materiais
+                    </p>
+                  )}
+
+                  <label className="flex cursor-pointer items-start gap-1.5">
+                    <input
+                      type="checkbox"
+                      checked={t.ignoreAiPause}
+                      onChange={(e) => setTrig(i, { ignoreAiPause: e.target.checked })}
+                      disabled={!canEdit}
+                      className="mt-0.5 h-3.5 w-3.5"
+                    />
+                    <span className="text-muted-foreground">
+                      Enviar mesmo com a IA pausada ou a conversa com um atendente
+                    </span>
+                  </label>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-muted-foreground">Depois, inscrever na cadência:</span>
+                    <select
+                      value={t.enrollCadenceId}
+                      onChange={(e) => setTrig(i, { enrollCadenceId: e.target.value })}
+                      disabled={!canEdit}
+                      className="h-8 max-w-full rounded-md border border-border bg-background px-2 text-sm text-foreground"
+                    >
+                      <option value="">— nenhuma —</option>
+                      {cadenceOpts.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                      {t.enrollCadenceId &&
+                        !cadenceOpts.some((c) => c.id === t.enrollCadenceId) && (
+                          <option value={t.enrollCadenceId}>
+                            {cadencesError
+                              ? 'Cadência salva'
+                              : 'Cadência salva (desligada ou sem degraus)'}
+                          </option>
+                        )}
+                    </select>
+                  </div>
+                  {cadencesError && (
+                    <p className="text-[11px] text-destructive">
+                      Não foi possível carregar as cadências — recarregue a página.
+                    </p>
                   )}
                 </div>
               </div>

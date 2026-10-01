@@ -6,7 +6,46 @@ import {
   hasRealName,
   isBarePhone,
   nameSourceLabel,
+  stripContactExportPrefix,
 } from './name-rule';
+
+// 01/10: "Endereço pessoal de Fulano" entrou como nome com origem 'crm' (que
+// nada automático troca) e a saudação saiu "Oi, Endereço!".
+describe('stripContactExportPrefix', () => {
+  it('tira o rótulo de exportação inteiro do começo', () => {
+    expect(stripContactExportPrefix('Endereço pessoal de Fulano Exemplo')).toBe('Fulano Exemplo');
+    expect(stripContactExportPrefix('Endereço comercial da Beltrana')).toBe('Beltrana');
+    expect(stripContactExportPrefix('Endereço residencial do Ciclano')).toBe('Ciclano');
+    expect(stripContactExportPrefix('Endereço profissional de Fulano')).toBe('Fulano');
+    expect(stripContactExportPrefix('  Endereço pessoal de   Fulano  ')).toBe('Fulano');
+  });
+
+  it('sem acento, qualquer caixa, decomposto (NFD)', () => {
+    expect(stripContactExportPrefix('Endereco pessoal de Fulano')).toBe('Fulano');
+    expect(stripContactExportPrefix('ENDEREÇO COMERCIAL DE FULANO')).toBe('FULANO');
+    expect(stripContactExportPrefix('Endereço pessoal de Fulano'.normalize('NFD'))).toBe('Fulano');
+  });
+
+  it('nunca remove "de/da/do" soltos nem rótulo fora do começo', () => {
+    expect(stripContactExportPrefix('Maria da Silva')).toBe('Maria da Silva');
+    expect(stripContactExportPrefix('Ana de Souza')).toBe('Ana de Souza');
+    expect(stripContactExportPrefix('Fulano Endereço pessoal de Beltrano')).toBe(
+      'Fulano Endereço pessoal de Beltrano',
+    );
+    // "Endereço" sem o tipo (pessoal/comercial…) não é o rótulo
+    expect(stripContactExportPrefix('Endereço de Fulano')).toBe('Endereço de Fulano');
+  });
+
+  it('sem nada depois do rótulo, devolve o original (não grava nome vazio)', () => {
+    expect(stripContactExportPrefix('Endereço pessoal de')).toBe('Endereço pessoal de');
+    expect(stripContactExportPrefix('Endereço pessoal de   ')).toBe('Endereço pessoal de   ');
+  });
+
+  it('sem rótulo devolve o MESMO texto (não normaliza à toa)', () => {
+    const nfd = 'João'.normalize('NFD');
+    expect(stripContactExportPrefix(nfd)).toBe(nfd);
+  });
+});
 
 const phone = '5567990001234';
 

@@ -63,6 +63,10 @@ const REPUTATION_PATTERNS: RegExp[] = [
 const SESSION_DOWN_PATTERNS: RegExp[] = [
   /session status is not as expected/i,
   /logged\s*out/i,
+  // Token recusado pela Meta, já traduzido pelo friendlySendError (01/10) —
+  // antes o "logged out" cru chegava aqui; a frase nova não pode deixar a
+  // régua gastando tentativa com o canal morto.
+  /a meta recusou o acesso deste canal/i,
   /device removed/i,
   /session (?:not found|is not running|stopped|failed)/i,
   /\b(?:SCAN_QR|STARTING|STOPPED)\b/,

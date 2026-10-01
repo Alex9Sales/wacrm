@@ -114,6 +114,8 @@ export async function recordAiUsage(
       cacheCreationTokens: usage.cacheCreationTokens,
     })
   } catch (err) {
-    console.error('[ai usage] falha ao gravar uso (ignorado):', err)
+    // A origem vai no log: 'collections' passou 8 dias sendo recusada pelo
+    // CHECK da coluna e a linha não dizia qual origem (corrigido na 0203).
+    console.error(`[ai usage] falha ao gravar uso (ignorado) — origem '${meta.source}':`, err)
   }
 }

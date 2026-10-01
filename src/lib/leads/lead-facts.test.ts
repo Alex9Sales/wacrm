@@ -1,13 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import {
+  cleanOrigin,
   extractLeadFacts,
   factForFieldName,
   factForKey,
+  isGenericOrigin,
   isSyntheticConversion,
   leadLinesForPrompt,
   parseNoteLines,
   prettyFormKey,
   prettyFormValue,
+  usefulOrigin,
 } from './lead-facts'
 
 // Observações no formato que a entrada de lead do RD grava (dados fictícios).
@@ -72,6 +75,31 @@ describe('extractLeadFacts', () => {
   it('never takes the RD technical score "interest: 0" as interest', () => {
     expect(extractLeadFacts([['interest', '0']]).interesse).toBeNull()
   })
+
+  // Zelo 01/10: "Campanha: unknown" ocupava o lugar e o fallback pro
+  // identificador da conversão nunca rodava.
+  it('ignores a generic campaign and falls back to the real conversion identifier', () => {
+    const f = extractLeadFacts([
+      ['Primeira conversão', 'seja-um-franqueado-site'],
+      ['Última conversão', 'Tarefa criada no RD Station CRM'],
+      ['Campanha', 'unknown'],
+      ['Canal da conversão', 'unknown / unknown'],
+    ])
+    expect(f.campanha).toBe('seja-um-franqueado-site')
+  })
+
+  it('keeps only the useful part of a campaign ("Facebook Ads / unknown")', () => {
+    expect(extractLeadFacts([['Campanha', 'Facebook Ads / unknown']]).campanha).toBe('Facebook Ads')
+  })
+
+  it('no useful campaign and only RD CRM conversions → no campaign at all', () => {
+    const f = extractLeadFacts([
+      ['Primeira conversão', 'RD Station CRM'],
+      ['Última conversão', 'Tarefa atualizada no RD Station CRM'],
+      ['Campanha', '(not set)'],
+    ])
+    expect(f.campanha).toBeNull()
+  })
 })
 
 describe('isSyntheticConversion', () => {
@@ -82,11 +110,71 @@ describe('isSyntheticConversion', () => {
     expect(isSyntheticConversion('negociacao perdida no rd station crm')).toBe(true)
   })
 
+  // Zelo 01/10: os de TAREFA e o "RD Station CRM" puro passavam pelo filtro,
+  // trocavam a campanha por "unknown" e abriam card indevido.
+  it('task events and the bare "RD Station CRM" label are the RD itself too', () => {
+    expect(isSyntheticConversion('RD Station CRM')).toBe(true)
+    expect(isSyntheticConversion('Tarefa criada no RD Station CRM')).toBe(true)
+    expect(isSyntheticConversion('Tarefa atualizada no RD Station CRM')).toBe(true)
+    expect(isSyntheticConversion('tarefa-criada-no-rd-station-crm')).toBe(true)
+    expect(isSyntheticConversion('rd_station_crm')).toBe(true)
+    expect(isSyntheticConversion('RDStation CRM')).toBe(true)
+  })
+
   it('real form conversions pass', () => {
     expect(isSyntheticConversion('seja-um-franqueado-site-01-09-26')).toBe(false)
     expect(isSyntheticConversion('11/09/26 | v1 | Instant Forms Lóg. Condicional')).toBe(false)
     expect(isSyntheticConversion('Site | Form. Solicite um orçamento')).toBe(false)
+    expect(isSyntheticConversion('RD Station')).toBe(false)
+    expect(isSyntheticConversion('Formulário RD Station Marketing')).toBe(false)
     expect(isSyntheticConversion(null)).toBe(false)
+  })
+
+  // Revisão 01/10: lead de verdade que só CITA o RD não pode ser descartado.
+  it('a real lead that only mentions RD Station CRM passes', () => {
+    expect(isSyntheticConversion('lp-comparativo-rd-station-crm')).toBe(false)
+    expect(isSyntheticConversion('Alternativa ao RD Station CRM')).toBe(false)
+    expect(isSyntheticConversion('Webinar migração do RD Station CRM')).toBe(false)
+  })
+})
+
+describe('campanha com parênteses (revisão 01/10)', () => {
+  it('keeps campaign names that carry parentheses', () => {
+    expect(cleanOrigin('(ABO) Leads Botox (Novo)')).toBe('(ABO) Leads Botox (Novo)')
+    expect(cleanOrigin('(Site) Solicite um orçamento (v2)')).toBe('(Site) Solicite um orçamento (v2)')
+    expect(isGenericOrigin('(ABO) Leads Botox (Novo)')).toBe(false)
+    expect(isGenericOrigin('(not set)')).toBe(true)
+  })
+})
+
+describe('cleanOrigin / isGenericOrigin', () => {
+  it('drops generic parts one by one', () => {
+    expect(cleanOrigin('Facebook Ads / unknown')).toBe('Facebook Ads')
+    expect(cleanOrigin('unknown | Instant Forms')).toBe('Instant Forms')
+    expect(cleanOrigin('facebook/unknown')).toBe('facebook')
+    expect(cleanOrigin('(direct) / (none)')).toBe('(direct)')
+    expect(cleanOrigin('google / (not set) / cpc')).toBe('google / cpc')
+  })
+
+  it('nothing useful → empty (and generic)', () => {
+    for (const v of ['unknown', 'Unknown', 'unknown / unknown', '(not set)', 'not_set', 'n/a', '-', 'desconhecido', '', null]) {
+      expect(cleanOrigin(v)).toBe('')
+      expect(isGenericOrigin(v)).toBe(true)
+    }
+  })
+
+  it('usefulOrigin also refuses the RD CRM own label', () => {
+    expect(usefulOrigin('Tarefa criada no RD Station CRM')).toBe('')
+    expect(usefulOrigin('Facebook Ads / unknown')).toBe('Facebook Ads')
+    expect(usefulOrigin('RD Station')).toBe('RD Station')
+  })
+
+  it('leaves real values intact: dates, pipes and URLs', () => {
+    const v = '11/09/26 | v1 | Instant Forms Lóg. Condicional'
+    expect(cleanOrigin(v)).toBe(v)
+    expect(isGenericOrigin(v)).toBe(false)
+    expect(cleanOrigin('https://exemplo.com/unknown')).toBe('https://exemplo.com/unknown')
+    expect(cleanOrigin('franquia-setembro')).toBe('franquia-setembro')
   })
 })
 
@@ -126,5 +214,25 @@ describe('leadLinesForPrompt', () => {
     expect(lines.some((l) => /uuid|fit score|lead stage|Ficha no RD/i.test(l))).toBe(false)
     expect(lines.some((l) => l.startsWith('City'))).toBe(false)
     expect(lines.some((l) => l.startsWith('State'))).toBe(false)
+  })
+
+  // Zelo 01/10: a Zélia recebia "Campanha: unknown" no prompt.
+  it('skips generic origin lines and the RD CRM own conversion, cleans part by part', () => {
+    const lines = leadLinesForPrompt(
+      parseNoteLines(
+        [
+          'Primeira conversão: seja-um-franqueado-site',
+          'Última conversão: Tarefa criada no RD Station CRM',
+          'Campanha: unknown',
+          'Canal da conversão: Facebook Ads / unknown',
+        ].join('\n'),
+      ),
+    )
+    expect(lines).toEqual(['Primeira conversão: seja-um-franqueado-site', 'Canal da conversão: Facebook Ads'])
+  })
+
+  it('drops the channel line when every part is generic', () => {
+    const lines = leadLinesForPrompt([['Canal da conversão', 'unknown / unknown']])
+    expect(lines).toEqual([])
   })
 })

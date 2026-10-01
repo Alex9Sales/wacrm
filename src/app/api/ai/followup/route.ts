@@ -19,6 +19,10 @@ export const dynamic = 'force-dynamic'
 // (armedAt=agora) para não disparar no histórico.
 //   GET  /api/ai/followup?agent=<id>
 //   PATCH /api/ai/followup  { agent, enabled, steps: [{delayValue,delayUnit,instructions}] }  (admin+)
+//
+// Tudo passa por readFollowUpConfig, que é a LISTA BRANCA: campo que ele não lê
+// some ao salvar. Os do gatilho de etapa de 01/10 (sendTemplateText,
+// attachMaterial, ignoreAiPause, enrollCadenceId) são lidos em readStageTrigger.
 // ============================================================
 
 async function loadAgentFollowUp(accountId: string, agentId: string) {

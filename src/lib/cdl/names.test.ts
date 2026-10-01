@@ -48,6 +48,38 @@ describe('firstNameForGreeting', () => {
   })
 })
 
+// 01/10: rótulo da agenda do Google exportado como nome (veio do RD com origem
+// 'crm') — a saudação saía "Oi, Endereço!".
+describe('firstNameForGreeting — rótulo de contato exportado', () => {
+  it('tira o rótulo inteiro do começo (pessoal/comercial/residencial/profissional; de/da/do)', () => {
+    expect(firstNameForGreeting('Endereço pessoal de Fulano Exemplo')).toBe('Fulano')
+    expect(firstNameForGreeting('Endereço comercial da Beltrana')).toBe('Beltrana')
+    expect(firstNameForGreeting('Endereço residencial do Ciclano')).toBe('Ciclano')
+    expect(firstNameForGreeting('Endereço profissional de Dra. Ana Lima')).toBe('Dra. Ana')
+  })
+
+  it('sem acento, qualquer caixa e decomposto (NFD) também', () => {
+    expect(firstNameForGreeting('Endereco pessoal de Fulano')).toBe('Fulano')
+    expect(firstNameForGreeting('ENDEREÇO PESSOAL DE FULANO')).toBe('Fulano')
+    expect(firstNameForGreeting('endereço pessoal de fulano')).toBe('Fulano')
+    expect(firstNameForGreeting('Endereço pessoal de Fulano'.normalize('NFD'))).toBe('Fulano')
+  })
+
+  it('"Endereço" sem o rótulo completo nunca vira nome', () => {
+    expect(firstNameForGreeting('Endereço Fulano')).toBe('')
+    expect(firstNameForGreeting('Endereco')).toBe('')
+    expect(firstNameForGreeting('Endereço pessoal de')).toBe('')
+    expect(greeting('Endereço pessoal de Fulano')).toBe('Oi Fulano!')
+  })
+
+  it('"de/da/do" soltos no nome continuam intocados', () => {
+    expect(firstNameForGreeting('Maria da Silva')).toBe('Maria')
+    expect(firstNameForGreeting('Ana de Souza')).toBe('Ana')
+    // rótulo no MEIO não é rótulo
+    expect(firstNameForGreeting('Fulano Endereço pessoal de Beltrano')).toBe('Fulano')
+  })
+})
+
 describe('greeting', () => {
   it('says the name when there is one, plain "Oi!" otherwise', () => {
     expect(greeting('Dra. Ana Lima')).toBe('Oi Dra. Ana!')

@@ -1,7 +1,8 @@
 // ============================================================
 // 🔁 Espelho com CRM externo (RD Station CRM) — tick a cada 20 s.
 // Lê a fila `crm_sync_outbox` (o gatilho em `deals` enfileira toda mudança de
-// card em conta com integração ligada) e leva a mudança pro RD. Ver
+// card em conta com integração ligada) e leva a mudança pro RD; na mesma
+// rodada, as tarefas concluídas de `crm_task_outbox` (migração 0202). Ver
 // lib/integrations/rdcrm/sync.ts.
 // ============================================================
 
@@ -27,7 +28,12 @@ export function startCrmSyncWorker(): Worker {
     QUEUE,
     async () => {
       const r = await processCrmSyncOutbox();
-      if (r.failed) console.warn(`[crm-sync] tick: ${r.ok} ok, ${r.failed} com erro, ${r.waiting} esperando`);
+      if (r.failed || r.tasksFailed) {
+        console.warn(
+          `[crm-sync] tick: ${r.ok} ok, ${r.failed} com erro, ${r.waiting} esperando; ` +
+            `tarefas: ${r.tasksSent} enviadas, ${r.tasksFailed} com erro`,
+        );
+      }
       return r;
     },
     { connection: bullConnection(), concurrency: 1 },

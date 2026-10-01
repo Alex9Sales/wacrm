@@ -372,3 +372,47 @@ describe('POST /api/whatsapp/send — aviso em tempo real para os colegas', () =
     expect(publishEvent).not.toHaveBeenCalled()
   })
 })
+
+// 01/10: token do canal recusado pela Meta (190). O atendente lia um erro
+// genérico na bolha; agora a rota diz que o canal está desconectado e onde
+// reconectar. Falha que não é de token segue com a frase original.
+describe('POST /api/whatsapp/send — canal desconectado', () => {
+  beforeEach(() => {
+    h.conversationInserts.length = 0
+    h.messageInserts.length = 0
+    h.existingConversation = null
+    h.createdConversation = null
+    h.contactRow = CONTACT
+  })
+
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('token invalidado → "O canal X está desconectado — reconecte em Configurações → Canais."', async () => {
+    sendTemplateMessage.mockRejectedValueOnce(
+      new Error(
+        'Error validating access token: The session has been invalidated because the user changed their password or Facebook has changed the session for security reasons.',
+      ),
+    )
+    const res = await postContactTemplate()
+    const json = await res.json()
+
+    expect(res.status).toBe(502)
+    expect(json.error).toBe(
+      'O canal WhatsApp (Meta) está desconectado — reconecte em Configurações → Canais.',
+    )
+    expect(json.code).toBe('channel_disconnected')
+    expect(h.messageInserts).toHaveLength(0)
+  })
+
+  it('outra falha do provedor com o canal conectado mantém o erro original', async () => {
+    sendTemplateMessage.mockRejectedValueOnce(new Error('Something else broke'))
+    const res = await postContactTemplate()
+    const json = await res.json()
+
+    expect(res.status).toBe(502)
+    expect(json.error).toMatch(/Something else broke/)
+    expect(json.code).toBeUndefined()
+  })
+})

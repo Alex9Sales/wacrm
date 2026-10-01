@@ -67,7 +67,7 @@ function resultadoDoErro(err: unknown): ResultadoConfirmacao {
     if (/phone/i.test(err.message)) return naoEnviada('o telefone do paciente não é um número de WhatsApp válido')
     if (err.code === 'not_found') return naoEnviada('a conversa do paciente não foi encontrada')
     // friendlySendError: frase pronta em português ("O WhatsApp recusou…").
-    if (err.code === 'send_error' && !/send error:/i.test(err.message)) {
+    if ((err.code === 'send_error' || err.code === 'channel_disconnected') && !/send error:/i.test(err.message)) {
       return naoEnviada(err.message.replace(/\.$/, '').replace(/^\p{Lu}/u, (c) => c.toLowerCase()))
     }
     if (err.code === 'send_error') return naoEnviada('o WhatsApp recusou o envio (confira se o canal está conectado)')

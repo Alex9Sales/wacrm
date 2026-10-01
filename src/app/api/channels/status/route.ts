@@ -15,6 +15,12 @@
 // channel that LOOKS down, we confirm live via getState and persist the
 // fresh value before answering. Connected channels (the common case) skip
 // the extra call entirely — the reconcile only runs on the rare down one.
+//
+// 01/10: canais de TOKEN (Instagram, Messenger, WhatsApp oficial) também
+// trazem `problem` — antes o banner só via QR e Gmail, e um Instagram com o
+// token invalidado pela Meta (erro 190) ficou fora do ar sem aviso nenhum. O
+// motivo vai traduzido numa de três frases fixas (lib/channels/channel-down):
+// nunca o texto cru da Meta, que pode trazer fbtrace_id e ids de conta.
 // ============================================================
 
 import { eq } from 'drizzle-orm'
@@ -29,6 +35,7 @@ import {
 import { getProvider } from '@/lib/channels/registry'
 import type { ProviderId } from '@/lib/channels/provider'
 import { gmailHealthOf, gmailProblem } from '@/lib/channels/gmail-health-state'
+import { tokenChannelProblem } from '@/lib/channels/channel-down'
 
 /** Frase curta pro banner (lido por todos — sem "troque aqui"). */
 function gmailBannerProblem(providerMeta: unknown): string | null {
@@ -38,9 +45,14 @@ function gmailBannerProblem(providerMeta: unknown): string | null {
   return p.source === 'imap' ? 'não estamos conseguindo ler a caixa' : 'os envios estão falhando'
 }
 
-export async function GET() {
+export async function GET(req?: Request) {
   try {
     const ctx = await getCurrentAccount()
+    // ?reconcile=0 = releitura automática do banner (a cada 5 min / ao voltar
+    // pra aba): só LÊ. A conciliação com o gateway grava 'connected' por cima
+    // do 'error' que o channel-halt da cobrança põe por reputação (463) — feita
+    // a cada 5 min, desfazia a trava sistematicamente (revisão de 01/10).
+    const reconcile = req ? new URL(req.url).searchParams.get('reconcile') !== '0' : true
     const rows = await db
       .select({
         id: channels.id,
@@ -57,7 +69,7 @@ export async function GET() {
     // so a stale DB status never raises a false "channel down" banner.
     const out = await Promise.all(
       rows.map(async (ch) => {
-        if (ch.status === 'connected') return ch
+        if (ch.status === 'connected' || !reconcile) return ch
         try {
           const provider = getProvider(ch.provider as ProviderId)
           if (!provider.getState) return ch
@@ -85,7 +97,16 @@ export async function GET() {
         // 📧 Gmail fica 'connected' mesmo com a senha recusada (o poll segue
         // tentando): o problema real vem da saúde. Só a frase — nunca o
         // provider_meta.
-        problem: ch.provider === 'gmail' ? gmailBannerProblem(ch.providerMeta) : null,
+        // 🔑 Canal de token (IG/Messenger/WhatsApp oficial): problema quando
+        // o status caiu OU o monitor marcou needs_reconnect; demais → null.
+        problem:
+          ch.provider === 'gmail'
+            ? gmailBannerProblem(ch.providerMeta)
+            : tokenChannelProblem({
+                provider: ch.provider,
+                status: ch.status,
+                providerMeta: ch.providerMeta,
+              }),
       })),
     })
   } catch (err) {

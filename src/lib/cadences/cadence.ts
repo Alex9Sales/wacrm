@@ -1088,6 +1088,123 @@ export async function finalizeEnrollmentIfDrained(
   }
 }
 
+const STEP_CHANNEL_LABEL: Record<StepChannel, string> = {
+  whatsapp: 'WhatsApp',
+  email: 'E-mail',
+  instagram: 'Instagram',
+}
+
+/**
+ * 📝 Toque de cadência ENVIADO → tarefa já CONCLUÍDA no card e, quando a conta
+ * tem o espelho do RD CRM ligado, no negócio de lá (fila `crm_task_outbox`).
+ *
+ * Pedido da Zelo (29/09): o time trabalha no RD e via o lead "sem nenhuma
+ * tentativa" enquanto a régua já tinha mandado três mensagens — e ligava de
+ * novo, ou repetia o texto à mão. Só com `logCadenceTasks` ligado na conta (OFF
+ * por padrão: em conta de muito volume vira ruído na lista de tarefas) e
+ * inscrição com card. Imita `logFollowUpTask` (lib/ai/followup.ts): tarefa que
+ * não pede ação e diz isso no texto. Instagram fica só aqui — o RD não tem
+ * tarefa desse tipo. Nunca lança: registro não derruba envio.
+ */
+async function logCadenceStepTask(
+  accountId: string,
+  enr: { cadenceId: string; dealId: string | null },
+  scheduledMessageId: string,
+  stepPosition: number | null,
+): Promise<void> {
+  if (!enr.dealId) return
+  try {
+    if (!(await getAccountSettings(accountId)).logCadenceTasks) return
+    // Tabelas e fila só entram aqui (conta com o registro ligado); import
+    // dinâmico mantém o resto do motor como estava.
+    const { tasks, messages } = await import('@/db')
+    const deal = firstOrNull(
+      await db
+        .select({ id: deals.id, contactId: deals.contactId, userId: deals.userId, assignedTo: deals.assignedTo })
+        .from(deals)
+        .where(and(eq(deals.id, enr.dealId), eq(deals.accountId, accountId)))
+        .limit(1),
+    )
+    if (!deal) return
+    const cad = firstOrNull(
+      await db.select({ name: cadences.name }).from(cadences).where(eq(cadences.id, enr.cadenceId)).limit(1),
+    )
+    // Canal REAL do envio (o da conversa); o do degrau só se a conversa não diz.
+    const sm = firstOrNull(
+      await db
+        .select({
+          provider: channels.provider,
+          sentText: messages.contentText,
+          scheduledText: scheduledMessages.contentText,
+        })
+        .from(scheduledMessages)
+        .leftJoin(conversations, eq(conversations.id, scheduledMessages.conversationId))
+        .leftJoin(channels, eq(channels.id, conversations.channelId))
+        .leftJoin(messages, eq(messages.id, scheduledMessages.sentMessageId))
+        .where(and(eq(scheduledMessages.id, scheduledMessageId), eq(scheduledMessages.accountId, accountId)))
+        .limit(1),
+    )
+    let kind: StepChannel | null = sm?.provider
+      ? EMAIL_PROVIDERS.includes(sm.provider)
+        ? 'email'
+        : INSTAGRAM_PROVIDERS.includes(sm.provider)
+          ? 'instagram'
+          : 'whatsapp'
+      : null
+    if (!kind && stepPosition != null) {
+      const step = firstOrNull(
+        await db
+          .select({ channel: cadenceSteps.channel })
+          .from(cadenceSteps)
+          .where(and(eq(cadenceSteps.cadenceId, enr.cadenceId), eq(cadenceSteps.position, stepPosition)))
+          .limit(1),
+      )
+      const ch = step?.channel
+      kind = ch === 'email' || ch === 'instagram' ? ch : null
+    }
+    const channel: StepChannel = kind ?? 'whatsapp'
+    const name = (cad?.name ?? 'sem nome').trim().slice(0, 80)
+    const touch = stepPosition != null ? `toque ${stepPosition + 1}` : 'toque'
+    const title = `Cadência «${name}» — ${touch} enviado (${STEP_CHANNEL_LABEL[channel]})`.slice(0, 200)
+    const text = (sm?.sentText || sm?.scheduledText || '').trim()
+    // Dono do card: o responsável; sem responsável, quem criou (stage-tasks).
+    const owner = deal.assignedTo ?? deal.userId
+    const now = new Date()
+    const [task] = await db
+      .insert(tasks)
+      .values({
+        accountId,
+        title,
+        description:
+          'Registro automático da cadência: a mensagem já foi enviada. Não precisa executar nada — esta tarefa existe só para o histórico do negócio.' +
+          (text ? `\n\nMensagem enviada:\n${text.slice(0, 1000)}` : ''),
+        status: 'done',
+        type: 'cadencia',
+        dealId: deal.id,
+        contactId: deal.contactId,
+        assignedTo: owner,
+        assigneeIds: owner ? [owner] : [],
+        createdBy: owner,
+        dueAt: now.toISOString(),
+      })
+      .returning({ id: tasks.id })
+    if (channel === 'instagram') return
+    const { enqueueRdTask } = await import('@/lib/integrations/rdcrm/task-outbox')
+    await enqueueRdTask({
+      accountId,
+      dealId: deal.id,
+      taskId: task?.id ?? null,
+      kind: channel,
+      subject: title,
+      // Sem acento no RD: enqueue guarda como está, o envio passa por rdActivityText.
+      notes: text ? `Mensagem enviada pela cadência:\n${text.slice(0, 1500)}` : 'Enviado pela cadência do FluxiaCRM.',
+      doneAt: now,
+    })
+  } catch (err) {
+    console.error('[cadence] toque não virou tarefa:', err instanceof Error ? err.message : err)
+  }
+}
+
 /** Marca um degrau como enviado + conclui a inscrição se foi o último pendente.
  *  Chamado pelo worker de agendamento ao enviar uma scheduled_message de cadência. */
 export async function onCadenceStepSent(
@@ -1131,6 +1248,8 @@ export async function onCadenceStepSent(
         )
         if (step?.moveToStageId) await moveDealForward(accountId, null, enr.dealId, step.moveToStageId)
       }
+      // Depois de mover: a tarefa nasce com o card já na etapa do toque.
+      await logCadenceStepTask(accountId, enr, scheduledMessageId, stepPosition)
     }
     await finalizeEnrollmentIfDrained(accountId, enrollmentId)
   } catch (err) {
@@ -1188,9 +1307,34 @@ export async function checkCadenceStepStillWanted(
         .where(and(eq(deals.id, enr.dealId), eq(deals.accountId, accountId)))
         .limit(1),
     )
+    // Quantos toques QUE MOVEM o card já saíram nesta inscrição. A regra
+    // "card voltou de etapa" só vale depois de o card ter sido levado à etapa
+    // da cadência pelo menos uma vez — inscrição feita com o card ANTES dela
+    // (o 1º toque é quem leva) não pode ser cancelada antes de começar.
+    const movedRow = firstOrNull(
+      await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(scheduledMessages)
+        .innerJoin(
+          cadenceSteps,
+          and(
+            eq(cadenceSteps.cadenceId, enr.cadenceId),
+            eq(cadenceSteps.position, scheduledMessages.cadenceStepPosition),
+          ),
+        )
+        .where(
+          and(
+            eq(scheduledMessages.accountId, accountId),
+            eq(scheduledMessages.cadenceEnrollmentId, enr.id),
+            eq(scheduledMessages.status, 'sent'),
+            isNotNull(cadenceSteps.moveToStageId),
+          ),
+        ),
+    )
     const reason = cadenceStopReason({
       deal: deal ? { status: deal.status ?? 'open', pipelineId: deal.pipelineId, stagePosition: deal.stagePosition } : null,
       cadenceStages,
+      movingStepsSent: movedRow?.n ?? 0,
     })
     if (!reason) return { ok: true }
     await endEnrollment(accountId, enr, 'cancelled', reason)

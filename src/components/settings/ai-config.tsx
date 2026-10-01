@@ -115,6 +115,8 @@ export function AiConfig({
   );
   const [bufferSeconds, setBufferSeconds] = useState(8);
   const [bargeInMinutes, setBargeInMinutes] = useState(5);
+  // 🙋 Ao pedir um humano: pausar a IA por N min (0 = desliga, como antes).
+  const [handoffPauseMinutes, setHandoffPauseMinutes] = useState(0);
   const [audioReplies, setAudioReplies] = useState(true);
   const [voiceId, setVoiceId] = useState("");
   // 🎛️ Autonomia governada (Fase 8): política da reativação proativa.
@@ -261,6 +263,11 @@ export function AiConfig({
         );
         setBargeInMinutes(
           typeof data.barge_in_minutes === 'number' ? data.barge_in_minutes : 5,
+        );
+        setHandoffPauseMinutes(
+          typeof data.handoff_pause_minutes === 'number'
+            ? data.handoff_pause_minutes
+            : 0,
         );
         setAudioReplies(data.audio_replies_enabled !== false);
         setVoiceId(data.voice_id ?? "");
@@ -614,6 +621,7 @@ export function AiConfig({
     auto_reply_hours_mode: hoursMode,
     auto_reply_buffer_seconds: bufferSeconds,
     barge_in_minutes: bargeInMinutes,
+    handoff_pause_minutes: handoffPauseMinutes,
     audio_replies_enabled: audioReplies,
     voice_id: voiceId || null,
     autonomy: {
@@ -1598,6 +1606,37 @@ export function AiConfig({
                 onChange={(e) =>
                   setBargeInMinutes(
                     Math.min(120, Math.max(0, Number(e.target.value) || 0)),
+                  )
+                }
+                disabled={disabled || !autoReplyEnabled}
+                className="w-20"
+              />
+            </div>
+
+            {/* 🙋 Pausa ao pedir um humano (29/09, caso Zelo): desligar de vez
+                travava o funil — a IA transferia, o dono resolvia pelo
+                WhatsApp e o card nunca andava. Com N > 0 a IA fica quieta e
+                volta sozinha se a pessoa escrever e ninguém responder. */}
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label htmlFor="ai-handoff-pause">
+                  Ao pedir um humano, pausar a IA por (min)
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  0 = desliga a IA nesta conversa (como hoje). Lead de
+                  serviço/emprego, perda e a 2ª transferência em 24h sempre
+                  desligam.
+                </p>
+              </div>
+              <Input
+                id="ai-handoff-pause"
+                type="number"
+                min={0}
+                max={1440}
+                value={handoffPauseMinutes}
+                onChange={(e) =>
+                  setHandoffPauseMinutes(
+                    Math.min(1440, Math.max(0, Math.floor(Number(e.target.value) || 0))),
                   )
                 }
                 disabled={disabled || !autoReplyEnabled}

@@ -12,6 +12,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { db, member, contactTags, contacts, tags } from '@/db';
 import { firstOrNull } from '@/db/helpers';
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
+import { stripContactExportPrefix } from '@/lib/contacts/name-rule';
 import { resolveImportTagIds } from '@/lib/contacts/resolve-import-tags';
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils';
 
@@ -155,6 +156,11 @@ export async function findOrCreateContact(
   const existing = await findExistingContact(accountId, sanitized);
   if (existing) return { id: existing.id, created: false };
 
+  // 01/10: "Endereço pessoal de Fulano" (rótulo da agenda do Google numa
+  // exportação) entrou como nome com origem 'crm' — que nada automático troca —
+  // e a saudação saiu "Oi, Endereço!". O rótulo sai ANTES de gravar.
+  const name = input.name != null ? stripContactExportPrefix(input.name) : input.name;
+
   try {
     const created = firstOrNull(
       await db
@@ -163,9 +169,9 @@ export async function findOrCreateContact(
           accountId,
           userId: auditUserId,
           phone: sanitized,
-          name: input.name ?? sanitized,
+          name: name ?? sanitized,
           // Nome vindo da integração = o negócio sabe quem é → nada automático troca.
-          nameSource: input.name ? 'crm' : null,
+          nameSource: name ? 'crm' : null,
           email: input.email ?? null,
           company: input.company ?? null,
           customerCodes: normalizeCodes(input.customer_codes),
