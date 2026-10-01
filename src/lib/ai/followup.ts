@@ -1954,9 +1954,34 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
           materialJaFoi = true
         }
       }
+      // Os arquivos que a IA pediu ([[ENVIAR:]]) passam pela MESMA guarda: um
+      // card que volta à etapa não pode reenviar a COF só porque a instrução
+      // da etapa manda a IA pedir o arquivo (revisão de 01/10).
+      // O material do PRÓPRIO gatilho já foi decidido acima (vai ou não vai) —
+      // a IA pedindo o mesmo arquivo não muda isso. Os outros: só se não
+      // saíram nos últimos 30 dias (erro na consulta = não reenvia).
+      const aiNovos: string[] = []
+      if (aiMaterials.length > 0) {
+        const lista = await materiais()
+        for (const nome of aiMaterials) {
+          const m = lista ? findMaterialByName(lista, nome) : null
+          if (!m) {
+            aiNovos.push(nome) // não achado: o envio grava a nota de aviso
+            continue
+          }
+          if (material && m.mediaUrl === material.mediaUrl) continue
+          const ja = await findPriorDelivery({
+            conversationId: d.conversation_id,
+            materialUrl: m.mediaUrl,
+            templateName: null,
+            fullText: null,
+          }).catch(() => 'erro')
+          if (!ja) aiNovos.push(nome)
+        }
+      }
       const nomes = [
         ...(plan.attach && trig.attachMaterial && !materialJaFoi ? [trig.attachMaterial] : []),
-        ...aiMaterials,
+        ...aiNovos,
       ]
       let anexos = 0
       if (nomes.length > 0) {

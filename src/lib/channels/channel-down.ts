@@ -186,8 +186,11 @@ export function selectBannerChannels<T extends BannerChannel>(
 //   meta:      só a <msg> da Graph
 // e o canal sem token nenhum lança "sem credentials.accessToken" (IG/Messenger)
 // ou "is missing credentials.accessToken" (meta).
+// "(190)" sem "#" é como o meta-health grava o motivo ("token de acesso
+// inválido ou expirado (190)") — sem isto o motivo gravado do oficial nunca
+// contava como recusa de token (revisão de 01/10).
 const AUTH_FAILURE_RE =
-  /\bcode=190\b|\(#190\)|error validating access token|invalid oauth (?:2\.0 )?access token|session has been invalidated|session has expired|access token has expired|has not authorized application|(?:sem|missing) credentials\.accessToken/i
+  /\bcode=190\b|\(#?190\)|error validating access token|invalid oauth (?:2\.0 )?access token|session has been invalidated|session has expired|access token has expired|has not authorized application|(?:sem|missing) credentials\.accessToken/i
 
 /** O texto do erro de envio é a Meta recusando o token do canal? */
 export function looksLikeChannelAuthFailure(message: string | null | undefined): boolean {

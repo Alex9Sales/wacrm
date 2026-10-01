@@ -198,6 +198,10 @@ describe('isLeadReply — o que conta como resposta', () => {
     expect(looksLikeAutoReply('Obrigada pelo contato! Quero saber mais')).toBe(false)
     expect(looksLikeAutoReply('B e C')).toBe(false)
     expect(looksLikeAutoReply('No momento estou trabalhando, te respondo à noite')).toBe(false)
+    // Uma frase "de robô" sozinha não basta: gente também escreve assim.
+    expect(looksLikeAutoReply('No momento não podemos investir, obrigado')).toBe(false)
+    expect(looksLikeAutoReply('Agradecemos o contato, mas não temos interesse')).toBe(false)
+    expect(looksLikeAutoReply('Vou ver com meu sócio e retornaremos em breve')).toBe(false)
     expect(isLeadReply('Agradecemos o contato', 'btn_quero_saber_mais')).toBe(true) // clique conta
   })
 })

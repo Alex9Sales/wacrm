@@ -84,7 +84,8 @@ export function shiftOutOfQuietHours(
  * `movingStepsSent` (opcional) = quantos toques que movem o card JÁ saíram
  *   nesta inscrição. Com 0, o card ainda não foi levado a X pela cadência —
  *   estar atrás é "ainda não chegou", não "voltou" — e a regra da etapa presa
- *   não vale. Sem a informação, vale (quem chama hoje não manda).
+ *   não vale. checkCadenceStepStillWanted (cadence.ts) conta e manda.
+ *   Só vale com 2+ toques na mesma etapa (um toque só que move não é "presa").
  */
 export function cadenceStopReason(input: {
   deal: { status: string; pipelineId: string; stagePosition: number } | null

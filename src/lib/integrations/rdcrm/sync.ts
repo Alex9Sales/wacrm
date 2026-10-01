@@ -1068,8 +1068,13 @@ async function drainTaskOutbox(deadline: number): Promise<{ sent: number; failed
       // para o lote (insistir tiraria cota da fila de cards). 4xx definitivo
       // (corpo recusado, 404) desiste na hora: repetir não melhora e gastaria
       // ~4 requisições por tentativa (revisão de 01/10).
-      const rateLimited = err instanceof RdCrmError && err.status === 429
-      const giveUp = !rateLimited && (attempts >= TASK_MAX_ATTEMPTS || isRdRejection(err) || (err instanceof RdCrmError && err.status === 404))
+      //   401/403 (token do RD revogado/vencido) também param o lote sem contar
+      //   tentativa: a culpa é da integração, não da tarefa — descartar na 1ª
+      //   perderia a fila inteira até alguém trocar o token. Desiste na hora só
+      //   em recusa do CORPO/negócio (400/404/409/422); 408 é tentativa comum.
+      const status = err instanceof RdCrmError ? err.status : 0
+      const rateLimited = status === 429 || status === 401 || status === 403
+      const giveUp = !rateLimited && (attempts >= TASK_MAX_ATTEMPTS || [400, 404, 409, 422].includes(status))
       console.error(`[rd-crm] tarefa ${r.id} do card ${r.deal_id} (tentativa ${attempts}):`, msg)
       await db.execute(sql`
         UPDATE crm_task_outbox

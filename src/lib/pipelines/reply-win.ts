@@ -97,20 +97,28 @@ export function isLeadReply(
  * escritório" do e-mail, "mensagem automática". Ganhar o card com isso é
  * irreversível no RD (negócio fechado não reabre pela API) e o lead nem leu
  * (revisão de 01/10; na GoLink, 15 de 18 "respostas" de uma régua eram robô).
- * Padrões CONSERVADORES — frases de sistema, não o jeito de uma pessoa falar.
  * A próxima mensagem de verdade do lead ganha normalmente. Pura.
+ *
+ * Um sinal FORTE basta (só robô escreve assim). Os FRACOS — que uma pessoa
+ * também escreve ("Agradecemos o contato, mas não temos interesse", "no
+ * momento não podemos investir") — só valem em dupla: a mensagem de ausência
+ * padrão junta saudação + fora do horário + "retornaremos".
  */
-const AUTO_REPLY_PATTERNS: RegExp[] = [
-  /mensagem autom[aá]tica|resposta autom[aá]tica|\bauto[- ]?reply\b|automatic reply|out of (the )?office|fora do escrit[oó]rio/i,
-  /(no|neste) momento,? (n[aã]o (estamos|podemos|conseguimos)|estamos (ausentes|indispon[ií]veis|fora))/i,
+const AUTO_REPLY_STRONG =
+  /mensagem autom[aá]tica|resposta autom[aá]tica|\bauto[- ]?reply\b|automatic reply|out of (the )?office|fora do escrit[oó]rio/i
+const AUTO_REPLY_WEAK: RegExp[] = [
   /fora do hor[aá]rio de (atendimento|funcionamento|expediente)/i,
-  /(retornaremos|responderemos|entraremos em contato)[^.!?\n]{0,30}(o mais (breve|r[aá]pido)|assim que poss[ií]vel|em breve)/i,
-  /agradecemos (o seu|seu|o) contato/i,
+  /(no|neste) momento,? (n[aã]o (estamos|podemos) atender|estamos (ausentes|indispon[ií]veis))/i,
+  /(retornaremos|responderemos)[^.!?\n]{0,30}(o mais (breve|r[aá]pido)|assim que poss[ií]vel|em breve)/i,
+  /agradecemos (o seu|seu|o|pelo) contato|obrigad[oa] por (entrar em )?contato/i,
+  /nosso hor[aá]rio de atendimento/i,
 ]
 
 export function looksLikeAutoReply(text: string | null | undefined): boolean {
   const t = (text ?? '').trim()
-  return !!t && AUTO_REPLY_PATTERNS.some((re) => re.test(t))
+  if (!t) return false
+  if (AUTO_REPLY_STRONG.test(t)) return true
+  return AUTO_REPLY_WEAK.filter((re) => re.test(t)).length >= 2
 }
 
 export interface ReplyWinCandidate {
