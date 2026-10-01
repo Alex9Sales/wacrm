@@ -8,6 +8,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm'
 import { db, calendarConnections, calendars, calendarEvents, contacts } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { phoneFromDescription, phoneKey } from './event-contact'
+import { eventoParaGoogle, type PacienteDoEvento } from './event-patient'
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
 import { zonedIso } from '@/lib/assistant/rules'
 import { getAccountSettings } from '@/lib/settings/account-settings'
@@ -446,6 +447,25 @@ function toGoogleBody(row: PushRow, tz: string): GoogleEventBody {
   return body
 }
 
+/**
+ * Nome e telefone do paciente ligado ao compromisso (escopo da conta). Null =
+ * sem paciente. LANÇA se o banco falhar: quem chama manda o evento como antes,
+ * em vez de tratar a falha como "paciente desligado" e apagar o bloco no Google.
+ */
+async function pacienteDoEvento(accountId: string, contactId: string | null): Promise<PacienteDoEvento | null> {
+  if (!contactId) return null
+  const c = firstOrNull(
+    await db
+      .select({ name: contacts.name, phone: contacts.phone, isGroup: contacts.isGroup })
+      .from(contacts)
+      .where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
+      .limit(1),
+  )
+  if (!c) return null
+  // Grupo do WhatsApp guarda o id do grupo em `phone` — não é telefone de ninguém.
+  return { name: c.name, phone: c.isGroup ? null : c.phone }
+}
+
 /** Espelha um evento do CRM no Google. op: 'create' | 'update' | 'delete'.
  *  No-op se a agenda do evento não for do Google. */
 export async function pushEventToGoogle(
@@ -470,6 +490,7 @@ export async function pushEventToGoogle(
         endsAt: calendarEvents.endsAt,
         allDay: calendarEvents.allDay,
         googleEventId: calendarEvents.googleEventId,
+        contactId: calendarEvents.contactId,
         calGoogleId: calendars.googleCalendarId,
         connectionId: calendars.connectionId,
       })
@@ -504,6 +525,19 @@ export async function pushEventToGoogle(
 
   const tz = (await getAccountSettings(accountId)).businessTimezone || 'America/Sao_Paulo'
   const body = toGoogleBody(row as PushRow, tz)
+
+  // 🩺 01/10 (pedido de uma clínica): o paciente vai junto — nome no título, bloco com
+  // nome e telefone no fim da descrição (ver event-patient.ts). Vale para criar
+  // e para editar. O bloco NÃO é gravado na descrição do CRM: ele volta sozinho
+  // pelo import, e reaplicar sobre o que voltou não duplica.
+  try {
+    const paciente = await pacienteDoEvento(accountId, row.contactId)
+    const comPaciente = eventoParaGoogle({ title: row.title, description: row.description }, paciente)
+    body.summary = comPaciente.summary
+    body.description = comPaciente.description ?? undefined
+  } catch (err) {
+    console.error('[google-sync] paciente do evento falhou (vai como estava):', err)
+  }
 
   if (op === 'update' && row.googleEventId) {
     try {
