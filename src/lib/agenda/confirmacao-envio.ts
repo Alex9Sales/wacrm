@@ -16,7 +16,7 @@ import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm'
 
 import { db, aiConfigs, calendars, calendarEvents, channels, contacts, conversations, messages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
-import { degrausJaVencidos, lembretesDoCompromisso, sqlCarimboDoAtendimento } from '@/lib/ai/followup'
+import { degrausJaVencidos, lembretesDoCompromisso } from '@/lib/ai/followup'
 import { setCoveredUntil } from '@/lib/ai/reply-marker'
 import { CAPABILITIES, type ProviderId } from '@/lib/channels/provider'
 import { jaFoiEntregue } from '@/lib/channels/delivery-error'
@@ -171,42 +171,113 @@ async function abrirConversa(
 }
 
 /**
- * Depois de a confirmação SAIR (inclusive "entregue mas não gravada"). Cada
- * passo é best-effort: o paciente já recebeu, nada aqui pode virar erro.
+ * Degrau "antes" que vence nas próximas 3h também fica coberto pela
+ * confirmação (01/10, 2ª revisão): marcar às 9h50 o retorno de amanhã às 10h
+ * soltava o lembrete "é amanhã" dez minutos depois de "está confirmada".
  */
-async function depoisDeEnviar(args: {
+const FOLGA_DO_LEMBRETE_MS = 3 * 60 * 60 * 1000
+/** Paciente que escreveu há menos que isso ainda pode estar esperando a IA. */
+const RESPOSTA_PENDENTE_MS = 5 * 60 * 1000
+
+type Reserva = { n: number; anteriores: { id: string; antes: number }[] }
+
+/**
+ * Reserva, ANTES de enviar, os degraus de lembrete que a confirmação cobre: o
+ * deste compromisso e o das cópias dele (mesma conta, contato e horário,
+ * confirmadas). Antes era gravado DEPOIS do envio, e a varredura de lembretes
+ * (de minuto em minuto) que caísse nesses segundos mandava os dois (01/10, 2ª
+ * revisão). GREATEST: nunca volta. Devolve os valores de antes para desfazer
+ * se a confirmação não sair.
+ */
+async function reservarLembretes(args: {
   accountId: string
   eventId: string
-  conversationId: string
   startsAt: string
   agora: Date
-}): Promise<void> {
-  // 1. A IA não pode tomar a confirmação por fala DELA. A confirmação é
-  //    gravada como 'bot' (como o lembrete), e o auto-reply só se cala quando o
-  //    último a falar é gente ('agent'); com 'bot' por último, ele lê "fui eu
-  //    que falei" e responde a mensagem antiga do paciente que a recepção já
-  //    tinha atendido (auto-reply.ts, "humano falou por último" e
-  //    dropIfStale). Marcar a conversa como coberta até agora diz: o que o
-  //    paciente mandou antes disto já foi atendido (01/10, revisão).
+}): Promise<Reserva | null> {
   try {
+    const degraus = await lembretesDoCompromisso(args.accountId, args.eventId)
+    const n = degrausJaVencidos(degraus, args.startsAt, new Date(args.agora.getTime() + FOLGA_DO_LEMBRETE_MS))
+    if (n <= 0) return null
+    const res = await db.execute(sql`
+      WITH alvo AS (
+        SELECT d.id, d.reminders_sent AS antes
+          FROM calendar_events AS d
+          JOIN calendar_events AS e ON e.id = ${args.eventId} AND e.account_id = ${args.accountId}
+         WHERE d.account_id = e.account_id
+           AND (d.id = e.id
+                OR (d.contact_id = e.contact_id
+                    AND d.starts_at = e.starts_at
+                    AND d.status = 'confirmed'))
+           FOR UPDATE OF d
+      )
+      UPDATE calendar_events AS u
+         SET reminders_sent = GREATEST(u.reminders_sent, ${n}),
+             reminder_block = NULL,
+             reminder_block_at = NULL
+        FROM alvo
+       WHERE u.id = alvo.id
+      RETURNING u.id, alvo.antes
+    `)
+    const anteriores = (res.rows as { id: string; antes: number | string }[]).map((r) => ({
+      id: r.id,
+      antes: Number(r.antes),
+    }))
+    return { n, anteriores }
+  } catch (err) {
+    console.error('[agenda] confirmação: reservar os lembretes cobertos falhou:', err)
+    return null
+  }
+}
+
+/**
+ * A confirmação NÃO saiu (ou não se sabe): devolve os degraus. Compare-and-swap
+ * — só volta quem ainda está no valor que a reserva gravou; se a varredura já
+ * andou por conta própria, fica como ela deixou. Na dúvida, o lembrete sai:
+ * lembrete a mais é melhor que paciente sem aviso.
+ */
+async function desfazerReserva(reserva: Reserva | null): Promise<void> {
+  if (!reserva) return
+  for (const r of reserva.anteriores) {
+    if (r.antes >= reserva.n) continue
+    try {
+      await db.execute(sql`
+        UPDATE calendar_events
+           SET reminders_sent = ${r.antes}
+         WHERE id = ${r.id}
+           AND reminders_sent = ${reserva.n}
+      `)
+    } catch (err) {
+      console.error('[agenda] confirmação: devolver o lembrete reservado falhou:', err)
+    }
+  }
+}
+
+/**
+ * Depois de a confirmação SAIR (inclusive "entregue mas não gravada").
+ * Best-effort: o paciente já recebeu, nada aqui pode virar erro.
+ *
+ * A confirmação é gravada como 'bot' (como o lembrete). Com 'bot' por último,
+ * o auto-reply lê "fui eu que falei" e podia responder mensagem antiga que a
+ * recepção já tinha atendido (auto-reply.ts, "humano falou por último" e
+ * dropIfStale). Marcar a conversa como coberta diz: o que veio antes já foi
+ * atendido. MAS só se o paciente não escreveu agora há pouco — senão a
+ * pergunta que a IA ia responder ("e quanto custa?") ficava sem resposta
+ * (01/10, 2ª revisão).
+ */
+async function depoisDeEnviar(args: { conversationId: string; agora: Date }): Promise<void> {
+  try {
+    const ultima = firstOrNull(
+      await db
+        .select({ at: sql<string | null>`max(${messages.createdAt})` })
+        .from(messages)
+        .where(and(eq(messages.conversationId, args.conversationId), eq(messages.senderType, 'customer'))),
+    )
+    const ms = ultima?.at ? new Date(ultima.at).getTime() : 0
+    if (ms && args.agora.getTime() - ms < RESPOSTA_PENDENTE_MS) return
     await setCoveredUntil(args.conversationId, new Date())
   } catch (err) {
     console.error('[agenda] confirmação: marcar a conversa como atendida falhou:', err)
-  }
-
-  // 2. Confirmação e lembrete juntos (01/10, revisão): marcado hoje para
-  //    amanhã cedo, o degrau "24h antes" já venceu — sem isto, a IA mandava o
-  //    lembrete um minuto depois da confirmação. Avança `reminders_sent` deste
-  //    compromisso e das cópias dele (mesma conta, contato e horário,
-  //    confirmadas) até os degraus que já venceram AGORA, com a config do
-  //    agente que a varredura usaria. GREATEST: nunca volta. O que ainda não
-  //    venceu (o "no dia") sai normalmente.
-  try {
-    const degraus = await lembretesDoCompromisso(args.accountId, args.eventId)
-    const n = degrausJaVencidos(degraus, args.startsAt, args.agora)
-    if (n > 0) await db.execute(sqlCarimboDoAtendimento(args.accountId, args.eventId, n))
-  } catch (err) {
-    console.error('[agenda] confirmação: carimbar os lembretes já cobertos falhou:', err)
   }
 }
 
@@ -338,8 +409,9 @@ export async function enviarConfirmacaoDoAgendamento(args: {
       tz: settings.businessTimezone || FUSO_PADRAO,
     })
 
-    const depois = () =>
-      depoisDeEnviar({ accountId, eventId, conversationId: conversa.id, startsAt: ev.startsAt, agora })
+    const depois = () => depoisDeEnviar({ conversationId: conversa.id, agora })
+    // Reserva os degraus cobertos ANTES de enviar (ver reservarLembretes).
+    const reserva = await reservarLembretes({ accountId, eventId, startsAt: ev.startsAt, agora })
     try {
       // senderType 'bot': gravada como mensagem automática, igual ao lembrete
       // de consulta (engineSendText grava 'bot'). Como 'agent' ela seria lida
@@ -363,6 +435,8 @@ export async function enviarConfirmacaoDoAgendamento(args: {
         return 'enviada'
       }
       console.error('[agenda] confirmação ao paciente falhou:', err)
+      // Não saiu, ou não se sabe se saiu: o lembrete volta a valer.
+      await desfazerReserva(reserva)
       return resultadoDoErro(err)
     }
   } catch (err) {

@@ -61,6 +61,22 @@ describe('quando a edição pede confirmação', () => {
       ).toBeNull()
     })
 
+    it('o mesmo profissional escrito de dois jeitos ("Dr. Beltrano" × "Dr Beltrano Teste"): nada', () => {
+      expect(
+        tipoDaConfirmacaoNaEdicao({
+          antes: { ...antes, nomeAgenda: 'Dr. Beltrano Teste' },
+          depois: { ...antes, calendarId: 'cal-b', nomeAgenda: 'Dr Beltrano' },
+        }),
+      ).toBeNull()
+      // Primeiro nome igual, sobrenome diferente: é OUTRA pessoa.
+      expect(
+        tipoDaConfirmacaoNaEdicao({
+          antes: { ...antes, nomeAgenda: 'Dr. Beltrano Teste' },
+          depois: { ...antes, calendarId: 'cal-b', nomeAgenda: 'Dr. Beltrano Exemplo' },
+        }),
+      ).toBe('profissional')
+    })
+
     it('da agenda genérica para a do profissional: avisa quem é', () => {
       expect(
         tipoDaConfirmacaoNaEdicao({
@@ -189,13 +205,33 @@ describe('o nome da agenda vira "com {profissional}"?', () => {
     expect(profissionalDaAgenda('Dr Beltrano')).toBe('o Dr. Beltrano')
   })
 
-  it('nome e sobrenome de gente, sem título: vai como está, sem artigo', () => {
-    expect(profissionalDaAgenda('Beltrano Teste')).toBe('Beltrano Teste')
+  it('sem título não cita (2ª revisão: nome de serviço passava como gente)', () => {
+    for (const nome of [
+      'Beltrano Teste',
+      'Primeira Consulta',
+      'Convênio Unimed',
+      'Sorriso Perfeito',
+      'Drenagem Linfática',
+      'Equipe Exemplo',
+      'Dentística Restauradora',
+    ]) {
+      expect(profissionalDaAgenda(nome), nome).toBeNull()
+    }
+  })
+
+  it('grafias brasileiras do título: Drª, Dr.ª, Doutora, Doutor', () => {
+    expect(profissionalDaAgenda('Drª Fulana Teste')).toBe('a Dra. Fulana Teste')
+    expect(profissionalDaAgenda('Dr.ª Fulana')).toBe('a Dra. Fulana')
+    expect(profissionalDaAgenda('Doutora Fulana')).toBe('a Dra. Fulana')
+    expect(profissionalDaAgenda('Doutor Beltrano')).toBe('o Dr. Beltrano')
+    // Gênero em aberto: não afirma nada.
+    expect(profissionalDaAgenda('Dr(a). Fulana')).toBeNull()
   })
 
   it('"Agenda do/da/-" na frente: fica só o nome', () => {
     expect(profissionalDaAgenda('Agenda do Dr. Exemplo')).toBe('o Dr. Exemplo')
-    expect(profissionalDaAgenda('Agenda - Fulana Teste')).toBe('Fulana Teste')
+    expect(profissionalDaAgenda('Agenda - Dra. Fulana Teste')).toBe('a Dra. Fulana Teste')
+    expect(profissionalDaAgenda('Agenda - Fulana Teste')).toBeNull()
     expect(profissionalDaAgenda('Agenda Dr. Exemplo')).toBe('o Dr. Exemplo')
   })
 
@@ -347,8 +383,19 @@ describe('o texto que o paciente recebe', () => {
   it('nome digitado no CRM manda, mesmo se parecer apelido', () => {
     // Quem cadastrou escolheu o nome; a lista de apelidos é só para o perfil.
     expect(nomeParaSaudacao('Jesus Exemplo', 'crm')).toBe('Jesus')
-    expect(nomeParaSaudacao('Jesus Exemplo', null)).toBe('Jesus')
+    expect(nomeParaSaudacao('Jesus Exemplo', 'phonebook')).toBe('Jesus')
     expect(nomeParaSaudacao('Jesus Exemplo', 'whatsapp')).toBe('')
+    // name_source null = contato antigo, nome também veio do perfil.
+    expect(nomeParaSaudacao('Jesus Exemplo', null)).toBe('')
+  })
+
+  it('perfil com título na frente: olha o nome que vem depois', () => {
+    expect(nomeParaSaudacao('Dona Maria Teste', 'whatsapp')).toBe('Maria')
+    expect(nomeParaSaudacao('Pastor Joao Teste', null)).toBe('Joao')
+    expect(nomeParaSaudacao('Pr. Joao', 'whatsapp')).toBe('Joao')
+    for (const perfil of ['Sou de Deus', 'Serva de Deus', 'Madrinha', 'Abençoada']) {
+      expect(nomeParaSaudacao(perfil, 'whatsapp'), perfil).toBe('')
+    }
   })
 
   it('agenda genérica: tira o "com {profissional}"', () => {

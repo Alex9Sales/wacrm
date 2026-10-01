@@ -72,7 +72,7 @@ export function tipoDaConfirmacaoNaEdicao(args: {
     const novo = profissionalDaAgenda(depois.nomeAgenda)
     if (!novo) return null
     const velho = profissionalDaAgenda(antes.nomeAgenda)
-    if (velho && semAcento(velho) === semAcento(novo)) return null
+    if (velho && mesmoProfissional(velho, novo)) return null
     return 'profissional'
   }
   return null
@@ -135,31 +135,6 @@ export function decidirConfirmacao(args: {
 
 // ---------- O texto ----------
 
-/**
- * Primeira palavra (sem acento, minúscula) que diz "isso não é uma pessoa".
- * Só vale para agenda SEM "Dr./Dra." na frente — ver `profissionalDaAgenda`.
- */
-const NAO_E_PROFISSIONAL = new Set([
-  'agenda', 'agendamento', 'agendamentos', 'minha', 'meu', 'calendario', 'calendar', 'google', 'principal',
-  'padrao', 'geral', 'pessoal', 'trabalho', 'feriados', 'holidays', 'aniversarios',
-  'birthdays', 'tarefas', 'tasks', 'bloqueio', 'bloqueios',
-  // Agenda de serviço/sala, não de gente (a clínica da Dra. Joyce tem uma
-  // "Radiologia"): "sua consulta com Radiologia" soa quebrado.
-  'radiologia', 'raio', 'sala', 'consultorio', 'recepcao', 'clinica',
-  'avaliacao', 'avaliacoes', 'exame', 'exames', 'procedimento', 'procedimentos',
-  'cirurgia', 'cirurgias', 'laboratorio', 'atendimento', 'atendimentos',
-  // 01/10, revisão: serviço com nome de duas palavras ("Estética Facial",
-  // "Clareamento Dental", "Implantes Dentários") passava como gente.
-  'implante', 'implantes', 'limpeza', 'limpezas', 'ortodontia', 'clareamento', 'clareamentos',
-  'estetica', 'retorno', 'retornos', 'encaixe', 'encaixes', 'contato', 'contatos', 'familia',
-  'profilaxia', 'endodontia', 'periodontia', 'protese', 'proteses', 'harmonizacao', 'odontologia',
-  'odontopediatria', 'pediatria', 'dermatologia', 'fisioterapia', 'psicologia', 'nutricao',
-  'consulta', 'consultas', 'manutencao', 'manutencoes', 'aparelho', 'aparelhos', 'canal',
-  'extracao', 'extracoes', 'restauracao', 'tratamento', 'tratamentos', 'urgencia', 'urgencias',
-  'emergencia', 'plantao', 'triagem', 'orcamento', 'orcamentos', 'tomografia', 'ultrassom',
-  'laser', 'botox', 'reuniao', 'reunioes', 'evento', 'eventos', 'lembrete', 'lembretes',
-])
-
 const semAcento = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
 
 /**
@@ -169,15 +144,10 @@ const semAcento = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLo
  * null quando não dá para afirmar que é gente.
  *
  * 01/10, revisão: era uma lista do que NÃO é gente, e "Implantes", "Limpeza",
- * "Ortodontia" passavam ("Sua consulta com Implantes"). Agora a regra é
- * positiva — só cita quando o nome:
- *   1. começa por Dr/Dra (com ou sem ponto) → com artigo; ou
- *   2. é nome e sobrenome de gente (firstNameForGreeting aceita a primeira
- *      palavra, há pelo menos duas palavras, nenhuma com número, e a primeira
- *      não é serviço/sala) → sem artigo ("com Leticia Ghilardi").
- * Uma palavra só ("Implantes", "Fulana") fica de fora: agenda com um nome só é
- * muito mais vezes serviço do que gente. Na dúvida fica sem: "Sua consulta
- * está confirmada" é sempre verdade; "com Radiologia" não é gente.
+ * "Ortodontia" passavam ("Sua consulta com Implantes"). Na 2ª revisão, nem nome e
+ * sobrenome sem título bastou ("Primeira Consulta", "Convênio Unimed"). Agora só
+ * cita com título — Dr/Dra/Drª/Doutor/Doutora, com ou sem ponto — e com artigo.
+ * Na dúvida fica sem: "Sua consulta está confirmada" é sempre verdade.
  */
 export function profissionalDaAgenda(nome: string | null | undefined): string | null {
   let n = (nome ?? '').replace(/\s+/g, ' ').trim()
@@ -186,21 +156,33 @@ export function profissionalDaAgenda(nome: string | null | undefined): string | 
   n = n.replace(/^agenda(?:\s*[-–:|]\s*|\s+d[aoe]s?\s+|\s+)/i, '').trim()
   if (!n) return null
 
-  // 1. "Dr. Igor Talamoni", "Dra Leticia" → "o Dr. Igor Talamoni", "a Dra. Leticia".
-  const titulo = /^(dra|dr)\b\.?\s*(.*)$/i.exec(n)
+  // "Dr. Igor Talamoni", "Dra Leticia", "Drª Leticia", "Doutora Joyce" →
+  // "o Dr. Igor Talamoni", "a Dra. Leticia". As formas femininas vêm antes:
+  // com \b, "Drª" casava como "Dr" e virava "o Dr. ª Leticia". O lookahead
+  // impede "Drenagem" de virar "Dr. enagem".
+  const titulo = /^(?:(dr\.?\s*ª|dra|doutora)|(dr|doutor))(?!\p{L})\.?\s*(.*)$/iu.exec(n)
   if (titulo) {
-    const resto = (titulo[2] ?? '').trim()
-    if (!/\p{L}/u.test(resto)) return null // "Dr." sozinho não é ninguém
-    return titulo[1].toLowerCase() === 'dra' ? `a Dra. ${resto}` : `o Dr. ${resto}`
+    const resto = (titulo[3] ?? '').trim()
+    // "Dr." sozinho, "Dr(a). Ana" (gênero em aberto): não dá para afirmar.
+    if (!/^\p{L}/u.test(resto)) return null
+    return titulo[1] ? `a Dra. ${resto}` : `o Dr. ${resto}`
   }
+  // 01/10, 2ª revisão: sem título NÃO cita. "Primeira Consulta", "Convênio
+  // Unimed", "Sorriso Perfeito" passavam como nome e sobrenome de gente. Na
+  // dúvida fica sem: "Sua consulta está confirmada" é sempre verdade.
+  return null
+}
 
-  // 2. Nome e sobrenome de gente, sem título.
-  const palavras = n.split(' ')
-  if (palavras.length < 2 || /\d/.test(n)) return null
-  const primeira = semAcento(palavras[0] ?? '').replace(/[^a-z]/g, '')
-  if (!primeira || NAO_E_PROFISSIONAL.has(primeira)) return null
-  if (!firstNameForGreeting(n)) return null
-  return n
+/** Mesmo profissional escrito de dois jeitos ("Dr. Igor" e "Dr. Igor Talamoni")? */
+function mesmoProfissional(a: string, b: string): boolean {
+  const palavras = (s: string) =>
+    semAcento(s)
+      .replace(/^(o|a)\s+dra?\.\s*/, '')
+      .split(/[^a-z]+/)
+      .filter(Boolean)
+  const [x, y] = [palavras(a), palavras(b)]
+  const [curto, longo] = x.length <= y.length ? [x, y] : [y, x]
+  return curto.length > 0 && curto.every((w, i) => longo[i] === w)
 }
 
 /**
@@ -215,7 +197,18 @@ const APELIDO_DE_PERFIL = new Set([
   'bebe', 'baby', 'gatinha', 'gatinho', 'gata', 'gato', 'princesa', 'principe', 'rainha', 'rei',
   'anjo', 'anjinho', 'anjinha', 'linda', 'lindo', 'eu', 'familia', 'vo', 'vovo', 'avo', 'tia', 'tio',
   'irma', 'irmao', 'filha', 'filho', 'esposa', 'esposo', 'marido',
+  'sou', 'serva', 'servo', 'nenem', 'nene', 'madrinha', 'padrinho', 'dinda', 'dindo', 'boneca',
+  'abencoada', 'abencoado', 'dona', 'pastor', 'pastora', 'pr', 'bispo',
 ])
+
+/** Títulos de perfil que vêm ANTES do nome ("Dona Maria", "Pastor João", "Pr. João"). */
+const TITULO_DE_PERFIL = new Set(['dona', 'seu', 'pastor', 'pastora', 'pr', 'bispo', 'missionaria', 'missionario'])
+
+function semTituloDePerfil(nome: string): string {
+  const ws = nome.trim().split(/\s+/)
+  while (ws.length > 1 && TITULO_DE_PERFIL.has(semAcento(ws[0] ?? '').replace(/[^a-z]/g, ''))) ws.shift()
+  return ws.join(' ')
+}
 
 /**
  * O primeiro nome da saudação, ou '' para "Olá!". Regra dos disparos
@@ -224,8 +217,12 @@ const APELIDO_DE_PERFIL = new Set([
  * Nome digitado no CRM ou da agenda do celular é decisão de gente: vale.
  */
 export function nomeParaSaudacao(nome: string | null | undefined, nameSource?: string | null): string {
-  const primeiro = firstNameForGreeting(nome)
-  if (!primeiro || nameSource !== 'whatsapp') return primeiro
+  // Só nome digitado por gente (CRM) ou da agenda do celular vale como está.
+  // Os outros — perfil do WhatsApp e os contatos antigos (name_source null =
+  // legado, também de perfil) — passam pelo filtro de títulos e apelidos.
+  const digitado = nameSource === 'crm' || nameSource === 'phonebook'
+  const primeiro = firstNameForGreeting(digitado ? nome : semTituloDePerfil(nome ?? ''))
+  if (!primeiro || digitado) return primeiro
   // "Dra. Ana" → olha o "Ana", não o título.
   const palavra = primeiro.split(' ').pop() ?? ''
   return APELIDO_DE_PERFIL.has(semAcento(palavra)) ? '' : primeiro

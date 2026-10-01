@@ -743,10 +743,17 @@ export async function sendMessageToConversation(
     console.log(
       `[send-message] Auto-corrected contact phone: ${sanitizedPhone} → ${workingPhone}`
     );
-    await db
-      .update(contacts)
-      .set({ phone: workingPhone })
-      .where(eq(contacts.id, contact.id));
+    // A mensagem JÁ saiu: corrigir o telefone é melhoria, não pode virar erro
+    // do envio (01/10 — a confirmação ao agendar diria "não enviada" e a
+    // recepção mandaria de novo). Índice único com outro contato, banco fora.
+    try {
+      await db
+        .update(contacts)
+        .set({ phone: workingPhone })
+        .where(eq(contacts.id, contact.id));
+    } catch (err) {
+      console.error('[send-message] corrigir o telefone do contato falhou (envio OK):', err);
+    }
   }
 
   // Template sem texto do chamador (envio do sistema: abertura de lead, teste):

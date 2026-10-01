@@ -235,7 +235,7 @@ describe('confirmação ao paciente ao salvar (01/10)', () => {
     connectionId: null,
   }
 
-  it('criar com paciente e a caixa marcada: pede UMA confirmação de marcação, depois de gravar e espelhar', async () => {
+  it('criar com paciente e a caixa marcada: pede UMA confirmação de marcação, depois de gravar e antes do Google', async () => {
     h.state.results.push(AGENDA_GOOGLE, [{ id: 'c-1' }], [{ id: 'ev-novo' }])
 
     const res = await createEvent({
@@ -254,8 +254,9 @@ describe('confirmação ao paciente ao salvar (01/10)', () => {
       tipo: 'marcacao',
       conversationId: 'cv-1',
     })
-    // A mensagem só sai com o compromisso salvo em todo lugar.
-    expect(passos()).toEqual(['insert', 'google:create', 'confirmacao'])
+    // Gravado no CRM primeiro; a confirmação vem ANTES do espelho no Google
+    // para a reserva dos lembretes chegar antes da varredura (2ª revisão).
+    expect(passos()).toEqual(['insert', 'confirmacao', 'google:create'])
   })
 
   it('criar com a caixa desmarcada (ou sem ela): nada sai', async () => {

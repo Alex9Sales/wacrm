@@ -89,8 +89,8 @@ export type ConfirmacaoNaTela = ResultadoConfirmacao | null
 
 /**
  * Manda a confirmação sem NUNCA atrapalhar o salvamento: roda depois de o
- * compromisso estar gravado (e espelhado no Google), e qualquer falha vira
- * aviso, não erro do salvar.
+ * compromisso estar gravado no CRM (antes do espelho no Google — ver
+ * createEvent), e qualquer falha vira aviso, não erro do salvar.
  */
 async function confirmarAoPaciente(args: {
   accountId: string
@@ -321,15 +321,11 @@ export async function createEvent(
         })
         .returning({ id: calendarEvents.id }),
     )
-    // Espelha no Google se a agenda for do Google (best-effort).
-    try {
-      await pushEventToGoogle(ctx.accountId, created.id, 'create')
-    } catch (err) {
-      console.error('[agenda] push create → google:', err)
-    }
     // ✅ Confirmação ao paciente (01/10): só com a caixa do modal marcada e
-    // paciente ligado. Depois do Google, de propósito: o compromisso já está
-    // salvo em todo lugar antes de qualquer mensagem sair.
+    // paciente ligado. ANTES do Google (2ª revisão): o espelho leva 1-2 s, e a
+    // varredura de lembretes que caísse nesse intervalo mandava o lembrete
+    // junto com a confirmação — a reserva dos degraus cobertos tem que chegar
+    // primeiro. O compromisso já está gravado no CRM, que é a agenda oficial.
     const confirmacao =
       input.notifyPatient === true && input.contactId
         ? await confirmarAoPaciente({
@@ -339,6 +335,12 @@ export async function createEvent(
             conversationId: input.conversationId ?? null,
           })
         : null
+    // Espelha no Google se a agenda for do Google (best-effort).
+    try {
+      await pushEventToGoogle(ctx.accountId, created.id, 'create')
+    } catch (err) {
+      console.error('[agenda] push create → google:', err)
+    }
     return { id: created.id, error: null, confirmacao }
   } catch (err) {
     return { id: null, error: err instanceof Error ? err.message : 'Falha ao criar evento' }
@@ -446,6 +448,41 @@ export async function updateEvent(
       .set(set)
       .where(and(eq(calendarEvents.id, id), eq(calendarEvents.accountId, ctx.accountId)))
 
+    // ✅ Confirmação ao paciente (01/10) — logo depois de gravar e ANTES do
+    // Google: a reserva dos lembretes cobertos (confirmacao-envio.ts) tem que
+    // chegar antes da varredura de lembretes, que roda de minuto em minuto.
+    // Só com a caixa marcada E se a edição
+    // mudou o que o paciente precisa saber — dia/hora, o profissional (agenda
+    // de OUTRA pessoa, no mesmo horário: tipo 'profissional') ou o próprio
+    // paciente. Corrigir o título não manda nada. Cancelado e horário passado
+    // são barrados lá dentro (decidirConfirmacao).
+    let confirmacao: ConfirmacaoNaTela = null
+    if (patch.notifyPatient === true) {
+      const agendaNova = plano.trocou ? novaAgenda : null
+      const tipo = tipoDaConfirmacaoNaEdicao({
+        antes: {
+          startsAt: antes.startsAt,
+          calendarId: antes.calendarId,
+          contactId: antes.contactId ?? null,
+          nomeAgenda: antes.calName ?? null,
+        },
+        depois: {
+          startsAt: patch.startsAt ?? antes.startsAt,
+          calendarId: agendaNova ? agendaNova.calendarId : antes.calendarId,
+          contactId: patch.contactId !== undefined ? patch.contactId || null : (antes.contactId ?? null),
+          nomeAgenda: agendaNova ? agendaNova.nome : (antes.calName ?? null),
+        },
+      })
+      if (tipo) {
+        confirmacao = await confirmarAoPaciente({
+          accountId: ctx.accountId,
+          eventId: id,
+          tipo,
+          conversationId: patch.conversationId ?? null,
+        })
+      }
+    }
+
     if (plano.apagarNaAntiga && antes.googleEventId) {
       try {
         await apagarEventoNoGoogle(ctx.accountId, antes.calendarId, antes.googleEventId)
@@ -480,37 +517,6 @@ export async function updateEvent(
       }
     }
 
-    // ✅ Confirmação ao paciente (01/10): só com a caixa marcada E se a edição
-    // mudou o que o paciente precisa saber — dia/hora, o profissional (agenda
-    // de OUTRA pessoa, no mesmo horário: tipo 'profissional') ou o próprio
-    // paciente. Corrigir o título não manda nada. Cancelado e horário passado
-    // são barrados lá dentro (decidirConfirmacao).
-    let confirmacao: ConfirmacaoNaTela = null
-    if (patch.notifyPatient === true) {
-      const agendaNova = plano.trocou ? novaAgenda : null
-      const tipo = tipoDaConfirmacaoNaEdicao({
-        antes: {
-          startsAt: antes.startsAt,
-          calendarId: antes.calendarId,
-          contactId: antes.contactId ?? null,
-          nomeAgenda: antes.calName ?? null,
-        },
-        depois: {
-          startsAt: patch.startsAt ?? antes.startsAt,
-          calendarId: agendaNova ? agendaNova.calendarId : antes.calendarId,
-          contactId: patch.contactId !== undefined ? patch.contactId || null : (antes.contactId ?? null),
-          nomeAgenda: agendaNova ? agendaNova.nome : (antes.calName ?? null),
-        },
-      })
-      if (tipo) {
-        confirmacao = await confirmarAoPaciente({
-          accountId: ctx.accountId,
-          eventId: id,
-          tipo,
-          conversationId: patch.conversationId ?? null,
-        })
-      }
-    }
     return { error: null, confirmacao }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falha ao atualizar evento' }

@@ -418,6 +418,13 @@ describe('depois de enviar: a IA e os lembretes (01/10, revisão)', () => {
     expect(h.cobrir).toHaveBeenCalledWith('cv-1', expect.any(Date))
   })
 
+  it('paciente escreveu agora há pouco: NÃO marca a conversa como atendida (a IA ainda vai responder)', async () => {
+    h.state.results.push([EVENTO], [], WAHA, [{ at: new Date(AGORA.getTime() - 60_000).toISOString() }])
+
+    expect(await enviar()).toBe('enviada')
+    expect(h.cobrir).not.toHaveBeenCalled()
+  })
+
   it('envio recusado: não marca nada', async () => {
     h.state.results.push([EVENTO], [], WAHA)
     h.send.mockRejectedValueOnce(new SendMessageError('send_error', 'Este número não parece estar no WhatsApp.', 502))
@@ -450,8 +457,33 @@ describe('depois de enviar: a IA e os lembretes (01/10, revisão)', () => {
       expect(await enviar()).toBe('enviada')
 
       expect(h.lembretes).toHaveBeenCalledWith('acc-1', 'ev-1')
-      // sqlCarimboDoAtendimento(conta, compromisso, 1): GREATEST, este e as cópias.
-      expect(carimbos()).toEqual([[1, 'ev-1', 'acc-1']])
+      // Reserva ANTES do envio (compromisso, conta, n): GREATEST, este e as cópias.
+      expect(carimbos()).toEqual([['ev-1', 'acc-1', 1]])
+      expect(h.db.execute.mock.invocationCallOrder[0]).toBeLessThan(h.send.mock.invocationCallOrder[0])
+    })
+
+    it('folga: marcada para daqui a 25h, o degrau de 24h (vence em 1h) também fica coberto', async () => {
+      h.lembretes.mockImplementation(async () => DEGRAUS)
+      h.state.results.push([{ ...EVENTO, startsAt: daquiA(25), endsAt: daquiA(26) }], [], WAHA)
+
+      expect(await enviar()).toBe('enviada')
+      expect(carimbos()).toEqual([['ev-1', 'acc-1', 1]])
+    })
+
+    it('a confirmação não saiu: a reserva é desfeita (o lembrete volta a valer)', async () => {
+      h.lembretes.mockImplementation(async () => DEGRAUS)
+      h.db.execute.mockResolvedValueOnce({ rows: [{ id: 'ev-1', antes: 0 }] })
+      h.state.results.push([{ ...EVENTO, startsAt: daquiA(20), endsAt: daquiA(21) }], [], WAHA)
+      h.send.mockRejectedValueOnce(new SendMessageError('send_error', 'Este número não parece estar no WhatsApp.', 502))
+
+      const r = await enviar()
+
+      expect(r).not.toBe('enviada')
+      // 1ª: reserva (n=1). 2ª: devolve para 0, só se ainda estiver em 1 (compare-and-swap).
+      expect(carimbos()).toEqual([
+        ['ev-1', 'acc-1', 1],
+        [0, 'ev-1', 1],
+      ])
     })
 
     it('marcada para daqui a 3 dias: nenhum degrau venceu, nada é carimbado', async () => {
