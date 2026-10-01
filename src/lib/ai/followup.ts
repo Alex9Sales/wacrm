@@ -13,6 +13,7 @@ import {
   decideImpedimento,
   type MeetingReminderBlock,
 } from './meeting-reminder-block'
+import { chaveDoDegrau, decidirLembreteDuplicado } from './meeting-reminder-dedup'
 import { loadAiConfigById } from './config'
 import { buildConversationContext, stripLeadingTimestamp } from './context'
 import { generateReply } from './generate'
@@ -1625,6 +1626,17 @@ interface MeetingCandRow {
   /** Usada só para separar CONSULTA de bloqueio de agenda quando não há contato. */
   description: string | null
   conversation_id: string | null
+  created_at: string
+  /** O mesmo atendimento em outra agenda — ver meeting-reminder-dedup.ts. */
+  duplicados: Array<{
+    id: string
+    account_id: string
+    contact_id: string | null
+    starts_at: string
+    status: string
+    created_at: string
+    reminders_sent: number
+  }> | null
 }
 
 interface ConvMeta {
@@ -1793,6 +1805,9 @@ function buildMeetingReminderPrompt(
  */
 export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
   let sent = 0
+  // chaveDoDegrau → compromisso que ENVIOU nesta varredura. Fica fora do laço
+  // de agentes: dois agentes da mesma conta varrem os mesmos compromissos.
+  const enviadosNestaVarredura = new Map<string, string>()
   const agentsRes = await db.execute(AGENT_SWEEP_SELECT)
   const agents = agentsRes.rows as unknown as AgentRow[]
 
@@ -1823,11 +1838,25 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
 
     const rows = await db.execute(sql`
       SELECT e.id AS event_id, e.starts_at, e.reminders_sent, e.contact_id, e.description,
+             e.created_at,
              COALESCE(dl.conversation_id,
                (SELECT cv.id FROM conversations cv
                   WHERE cv.contact_id = e.contact_id AND cv.account_id = e.account_id
                   ORDER BY cv.last_message_at DESC NULLS LAST LIMIT 1)
-             ) AS conversation_id
+             ) AS conversation_id,
+             -- O mesmo atendimento lançado em outra agenda (mesmo contato, mesmo
+             -- instante, confirmado). Quem envia é decidido no código.
+             (SELECT json_agg(json_build_object(
+                       'id', d.id, 'account_id', d.account_id, 'contact_id', d.contact_id,
+                       'starts_at', d.starts_at, 'status', d.status,
+                       'created_at', d.created_at, 'reminders_sent', d.reminders_sent))
+                FROM calendar_events d
+               WHERE d.account_id = e.account_id
+                 AND d.contact_id = e.contact_id
+                 AND d.starts_at = e.starts_at
+                 AND d.status = 'confirmed'
+                 AND d.id <> e.id
+             ) AS duplicados
       FROM calendar_events e
       LEFT JOIN deals dl ON dl.id = e.deal_id
       WHERE e.account_id = ${agent.account_id}
@@ -1895,6 +1924,53 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
       }
       if (dueIdx < 0) continue // nenhum venceu ainda
       if (e.reminders_sent > dueIdx) continue // já mandou este (e anteriores)
+
+      // 01/10: a recepção lança a mesma consulta na agenda da dona E na do
+      // profissional. Só um compromisso do grupo envia; a cópia espera por ele
+      // e carimba quando ele já resolveu o degrau (meeting-reminder-dedup.ts).
+      const chave = chaveDoDegrau(agent.account_id, e.contact_id, e.starts_at, dueIdx)
+      const enviadoPor = enviadosNestaVarredura.get(chave)
+      if (enviadoPor && enviadoPor !== e.event_id) {
+        console.log(
+          `[meeting-reminder] duplicado: ${e.event_id} carimba o degrau ${dueIdx + 1} — saiu por ${enviadoPor} nesta varredura`,
+        )
+        await stampReminder(e.event_id, dueIdx + 1)
+        continue
+      }
+      const dup = decidirLembreteDuplicado({
+        evento: {
+          id: e.event_id,
+          accountId: agent.account_id,
+          contactId: e.contact_id,
+          startsAt: e.starts_at,
+          status: 'confirmed',
+          createdAt: e.created_at,
+          remindersSent: e.reminders_sent,
+        },
+        outros: (e.duplicados ?? []).map((d) => ({
+          id: d.id,
+          accountId: d.account_id,
+          contactId: d.contact_id,
+          startsAt: d.starts_at,
+          status: d.status,
+          createdAt: d.created_at,
+          remindersSent: Number(d.reminders_sent),
+        })),
+        degrau: dueIdx,
+      })
+      if (dup.decisao === 'espera') {
+        console.log(
+          `[meeting-reminder] duplicado: ${e.event_id} espera ${dup.canonicoId} resolver o degrau ${dueIdx + 1}`,
+        )
+        continue
+      }
+      if (dup.decisao === 'carimba') {
+        console.log(
+          `[meeting-reminder] duplicado: ${e.event_id} carimba o degrau ${dueIdx + 1} — já resolvido no grupo de ${dup.canonicoId} (${dup.duplicados.join(', ')})`,
+        )
+        await stampReminder(e.event_id, dueIdx + 1)
+        continue
+      }
 
       /**
        * O lembrete não conseguiu sair por um motivo reversível. Guarda o porquê
@@ -1990,6 +2066,7 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
             templateParams: params,
           })
           sent += 1
+          enviadosNestaVarredura.set(chave, e.event_id)
           await logFollowUpTask(cfg, agent.account_id, e.conversation_id, `${reminderLabel(r)} — ${r.templateName}`)
           console.log('[meeting-reminder] template:', r.templateName)
           await stampReminder(e.event_id, dueIdx + 1)
@@ -2073,6 +2150,7 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
           text,
         })
         sent += 1
+        enviadosNestaVarredura.set(chave, e.event_id)
         await logFollowUpTask(cfg, agent.account_id, e.conversation_id, reminderLabel(r))
         await stampReminder(e.event_id, dueIdx + 1)
       } catch (err) {
@@ -2084,6 +2162,7 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
         // novo para quem já leu — pior do que não registrar.
         if (jaFoiEntregue(err)) {
           console.error('[meeting-reminder] entregue mas não registrado:', err)
+          enviadosNestaVarredura.set(chave, e.event_id)
           await stampReminder(e.event_id, dueIdx + 1)
         } else {
           // Aí sim o canal recusou (número fora do ar, sessão caída…): a
