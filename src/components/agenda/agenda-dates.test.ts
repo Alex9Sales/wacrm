@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import {
   addDays,
+  capColumns,
+  changeStartInput,
   layoutDayEvents,
   monthGrid,
+  parseDateInput,
   parseLocalInput,
   scheduleError,
   shiftEndWithStart,
@@ -15,8 +18,9 @@ import {
 } from './agenda-dates'
 
 // Tudo aqui é horário LOCAL: os testes valem em qualquer fuso (o `npm test`
-// roda em UTC; rodar também com TZ=America/Sao_Paulo e TZ=America/New_York,
-// que tem horário de verão, para pegar conta feita em milissegundos).
+// roda em UTC; rodar também com TZ=America/Sao_Paulo, TZ=America/New_York e
+// TZ=Europe/Lisbon, que têm horário de verão, para pegar conta feita em
+// milissegundos — Lisboa repete a hora 01:00–01:59 no fim de outubro).
 
 const d = (y: number, m: number, day: number, h = 0, min = 0) => new Date(y, m - 1, day, h, min)
 
@@ -131,24 +135,85 @@ describe('fim acompanha o início', () => {
 
   it('a duração sobrevive a datas de troca de horário de outros fusos', () => {
     // No Brasil não há horário de verão, mas o navegador pode estar em outro
-    // fuso. Datas de troca nos EUA (mar/nov) e na Europa (mar/out).
+    // fuso. Datas de troca nos EUA (mar/nov) e na Europa (mar/out), incluindo
+    // a hora que se REPETE em Lisboa/Londres (25/10 01:30). Vale em qualquer
+    // fuso: o fim fica 1h depois pelo relógio OU pelo tempo real (na troca
+    // de horário os dois não batem e não há como acertar os dois) — e NUNCA
+    // no mesmo horário do início nem antes dele.
+    const relogio = (s: string) => {
+      const [y, mo, dd, h, mi] = s.split(/[-T:]/).map(Number)
+      return Date.UTC(y, mo - 1, dd, h, mi)
+    }
     const inicios = [
       '2026-03-08T01:30',
       '2026-03-08T10:00',
       '2026-03-29T00:30',
+      '2026-10-25T00:30',
       '2026-10-25T01:30',
       '2026-11-01T00:30',
+      '2026-11-01T01:30',
       '2026-11-01T10:00',
     ]
     for (const ini of inicios) {
       const fim = shiftEndWithStart('2026-10-01T09:00', '2026-10-01T10:00', ini, false)
-      const s = parseLocalInput(ini)!
-      const e = parseLocalInput(fim)!
-      expect(e.getTime() - s.getTime()).toBe(3_600_000)
+      const real = parseLocalInput(fim)!.getTime() - parseLocalInput(ini)!.getTime()
+      const peloRelogio = relogio(fim) - relogio(ini)
+      expect(real === 3_600_000 || peloRelogio === 3_600_000, `${ini} → ${fim}`).toBe(true)
+      expect(scheduleError(ini, fim, false), `${ini} → ${fim}`).toBeNull()
     }
     // Dia inteiro atravessando a troca: continua sendo data, sem sobrar hora.
     expect(shiftEndWithStart('2026-10-01', '2026-10-02', '2026-11-01', true)).toBe('2026-11-02')
     expect(shiftEndWithStart('2026-10-01', '2026-10-08', '2026-03-05', true)).toBe('2026-03-12')
+  })
+})
+
+describe('digitar o ano do início pelo teclado', () => {
+  // O Chrome manda o ano parcial a cada tecla: 0002 → 0020 → 0202 → 2026.
+  // Antes, o fim andava junto com 1902/1920/"202-…" e a duração virava 1h.
+  const digitaAno = (start: string, end: string, valores: string[], allDay: boolean) => {
+    let cur = { start, end, lastValidStart: start }
+    const fins: string[] = []
+    for (const v of valores) {
+      cur = changeStartInput(cur, v, allDay)
+      fins.push(cur.end)
+    }
+    return { cur, fins }
+  }
+  const anos = (resto: string, final: string) => ['0002', '0020', '0202', final].map((a) => a + resto)
+
+  it('ano pela metade não é data', () => {
+    expect(parseLocalInput('0002-10-03T11:00')).toBeNull()
+    expect(parseLocalInput('0202-10-03T11:00')).toBeNull()
+    expect(parseDateInput('0020-10-03')).toBeNull()
+    expect(parseLocalInput('2026-10-03T11:00')).not.toBeNull()
+    expect(scheduleError('0202-10-03T11:00', '2026-10-03T12:00', false)).toBe('Preencha o início.')
+  })
+
+  it('consulta de 30 min continua com 30 min', () => {
+    const { cur, fins } = digitaAno('2026-10-03T11:00', '2026-10-03T11:30', anos('-10-03T11:00', '2026'), false)
+    // Enquanto o ano está pela metade, o fim não se mexe.
+    expect(fins.slice(0, 3)).toEqual(['2026-10-03T11:30', '2026-10-03T11:30', '2026-10-03T11:30'])
+    expect(cur).toEqual({
+      start: '2026-10-03T11:00',
+      end: '2026-10-03T11:30',
+      lastValidStart: '2026-10-03T11:00',
+    })
+  })
+
+  it('2h30 continua 2h30, também mudando de ano', () => {
+    const { cur } = digitaAno('2026-12-10T09:00', '2026-12-10T11:30', anos('-12-10T09:00', '2027'), false)
+    expect(cur.end).toBe('2027-12-10T11:30')
+  })
+
+  it('dia inteiro continua com o mesmo nº de dias', () => {
+    const { cur, fins } = digitaAno('2026-10-01', '2026-10-03', anos('-10-01', '2027'), true)
+    expect(fins.slice(0, 3)).toEqual(['2026-10-03', '2026-10-03', '2026-10-03'])
+    expect(cur.end).toBe('2027-10-03')
+  })
+
+  it('o ano sai sempre com 4 dígitos (o campo não aceita "202-…")', () => {
+    expect(toLocalInput(new Date(202, 9, 3, 11, 30))).toBe('0202-10-03T11:30')
+    expect(toDateInput(new Date(202, 9, 3))).toBe('0202-10-03')
   })
 })
 
@@ -162,10 +227,15 @@ describe('erro de início/fim no formulário', () => {
     )
   })
 
-  it('início e fim certos (ou iguais) passam', () => {
+  it('início e fim certos passam; no dia inteiro, igual é um dia só', () => {
     expect(scheduleError('2026-10-03T11:00', '2026-10-03T12:00', false)).toBeNull()
-    expect(scheduleError('2026-10-03T11:00', '2026-10-03T11:00', false)).toBeNull()
     expect(scheduleError('2026-10-03', '2026-10-03', true)).toBeNull()
+  })
+
+  it('com horário, fim igual ao início é erro (o servidor trocaria em silêncio por +1h)', () => {
+    expect(scheduleError('2026-10-03T11:00', '2026-10-03T11:00', false)).toBe(
+      'O fim precisa ser depois do início (03/10 11:00).',
+    )
   })
 
   it('campo vazio pede para preencher', () => {
@@ -226,5 +296,49 @@ describe('posição dos eventos na grade de horas', () => {
 
   it('formato de hora do formulário volta igual', () => {
     expect(toLocalInput(parseLocalInput('2026-10-03T11:05')!)).toBe('2026-10-03T11:05')
+  })
+})
+
+describe('no máximo 3 lado a lado (Semana em "Todas")', () => {
+  const ev = (id: string, ini: Date, fim: Date) => ({
+    id,
+    startsAt: ini.toISOString(),
+    endsAt: fim.toISOString(),
+  })
+  const dia = d(2026, 10, 6)
+  const h = (hora: number, min = 0) => d(2026, 10, 6, hora, min)
+  const ids = (r: ReturnType<typeof capColumns<ReturnType<typeof ev>>>) => ({
+    visiveis: r.visible.map((s) => `${s.event.id}@${s.col}/${s.cols}`),
+    mais: r.hidden.map((x) => `${x.startMin}-${x.endMin}:${x.events.map((e) => e.id).join(',')}`),
+  })
+
+  it('até 3 no mesmo horário: todos aparecem', () => {
+    const slots = layoutDayEvents([ev('a', h(14), h(15)), ev('b', h(14), h(15)), ev('c', h(14), h(15))], dia)
+    expect(ids(capColumns(slots, 3))).toEqual({ visiveis: ['a@0/3', 'b@1/3', 'c@2/3'], mais: [] })
+  })
+
+  it('4 no mesmo horário: 2 aparecem e a 3ª coluna vira "+2"', () => {
+    const slots = layoutDayEvents(
+      [ev('a', h(14), h(15)), ev('b', h(14), h(15)), ev('c', h(14), h(15)), ev('d', h(14), h(15))],
+      dia,
+    )
+    expect(ids(capColumns(slots, 3))).toEqual({ visiveis: ['a@0/3', 'b@1/3'], mais: ['840-900:c,d'] })
+  })
+
+  it('o "+N" só toma a 3ª coluna onde falta lugar; no resto do dia ela continua visível', () => {
+    const slots = layoutDayEvents(
+      [
+        ev('a', h(9), h(15)),
+        ev('b', h(9), h(15)),
+        ev('c', h(9), h(10)), // 3ª coluna de manhã: cabe
+        ev('d', h(14), h(15)), // 3ª coluna à tarde, junto com o 4º
+        ev('e', h(14), h(15)),
+      ],
+      dia,
+    )
+    expect(ids(capColumns(slots, 3))).toEqual({
+      visiveis: ['a@0/3', 'b@1/3', 'c@2/3'],
+      mais: ['840-900:d,e'],
+    })
   })
 })

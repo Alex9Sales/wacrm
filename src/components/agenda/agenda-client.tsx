@@ -37,6 +37,8 @@ import { cn } from '@/lib/utils'
 import {
   WEEKDAYS,
   addDays,
+  capColumns,
+  changeStartInput,
   isSameDay,
   layoutDayEvents,
   monthGrid,
@@ -44,7 +46,6 @@ import {
   parseDateInput,
   parseLocalInput,
   scheduleError,
-  shiftEndWithStart,
   startOfDay,
   toDateInput,
   toLocalInput,
@@ -94,12 +95,33 @@ export function AgendaClient() {
 
   const grid = useMemo(() => monthGrid(anchor), [anchor])
   const week = useMemo(() => weekDays(dayDate), [dayDate])
-  const today = useMemo(() => new Date(), [])
+  // A recepção deixa o CRM aberto de um dia para o outro: "hoje" é refeito
+  // quando a aba volta a ficar visível (01/10), senão a Semana destacava ontem.
+  const [today, setToday] = useState(() => new Date())
+  useEffect(() => {
+    const atualiza = () => {
+      if (document.hidden) return
+      const agora = new Date()
+      setToday((t) => (isSameDay(t, agora) ? t : agora))
+    }
+    window.addEventListener('focus', atualiza)
+    document.addEventListener('visibilitychange', atualiza)
+    return () => {
+      window.removeEventListener('focus', atualiza)
+      document.removeEventListener('visibilitychange', atualiza)
+    }
+  }, [])
 
+  // Só a chamada MAIS RECENTE grava na tela (01/10). Na Semana o mês carregado
+  // troca a cada 4–5 cliques: duas cargas corriam juntas e a mais velha, se
+  // chegasse por último, deixava a semana da tela vazia — parecendo livre.
+  const loadSeq = useRef(0)
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current
     setLoading(true)
     try {
       const cals = await listCalendars()
+      if (seq !== loadSeq.current) return
       setCalendars(cals)
       const from = startOfDay(grid[0]).toISOString()
       const to = new Date(
@@ -111,11 +133,14 @@ export function AgendaClient() {
         59,
       ).toISOString()
       const evs = await listEvents({ from, to })
+      if (seq !== loadSeq.current) return
       setEvents(evs)
     } finally {
-      setLoading(false)
+      if (seq === loadSeq.current) setLoading(false)
     }
   }, [grid])
+  const loadRef = useRef(load)
+  loadRef.current = load
 
   useEffect(() => {
     void load()
@@ -130,11 +155,14 @@ export function AgendaClient() {
     lastAutoSync.current = now
     try {
       const r = await syncGoogleNow()
-      if (!r.error) await load()
+      // O load de AGORA (loadRef), não o da closure de quando o sync começou:
+      // o sync leva segundos e, nesse meio-tempo, a pessoa pode ter ido para
+      // outro mês — o load velho recarregava a grade do mês antigo (01/10).
+      if (!r.error) await loadRef.current()
     } catch {
       /* silencioso */
     }
-  }, [load])
+  }, [])
 
   useEffect(() => {
     if (!google?.connected) return
@@ -246,7 +274,7 @@ export function AgendaClient() {
   const defaultCalendarId = () =>
     (calendars.find((c) => c.source === 'google') ?? calendars[0])?.id ?? ''
 
-  const openNew = (day?: Date, hour?: number, contactId = '') => {
+  const openNew = (day?: Date, hour?: number, contactId = '', calendarId: string | null = null) => {
     const base = day ?? new Date()
     const start = new Date(base)
     if (hour != null) start.setHours(hour, 0, 0, 0)
@@ -257,7 +285,8 @@ export function AgendaClient() {
     setDraft({
       id: null,
       title: '',
-      calendarId: defaultCalendarId(),
+      calendarId:
+        calendarId && calendars.some((c) => c.id === calendarId) ? calendarId : defaultCalendarId(),
       allDay: false,
       start: toLocalInput(start),
       end: toLocalInput(end),
@@ -324,8 +353,15 @@ export function AgendaClient() {
       }
       // Dia do evento (pra pular a visão pra lá e evitar confusão de mês/data).
       const eventDate = new Date(draft.start.slice(0, 10) + 'T12:00:00')
-      if (draft.id) await updateEvent(draft.id, payload)
-      else await createEvent(payload)
+      const r = draft.id ? await updateEvent(draft.id, payload) : await createEvent(payload)
+      if (r.error) {
+        // As actions não lançam: devolvem { error }. Até 01/10 isso era
+        // ignorado — o modal fechava com "Evento criado." e nada tinha sido
+        // gravado. Agora o erro aparece e o modal fica aberto, com o que foi
+        // digitado, para tentar de novo.
+        toast.error(r.error)
+        return
+      }
       setDraft(null)
       if (viewRef.current !== 'month') setDayDate(eventDate)
       const sameMonth =
@@ -624,9 +660,13 @@ export function AgendaClient() {
           days={view === 'week' ? week : [dayDate]}
           today={today}
           eventsForDay={eventsForDay}
-          onNewAt={openNew}
+          // Horário vazio clicado com UMA agenda no filtro → o compromisso nasce
+          // nela (01/10). Antes caía na primeira agenda do Google: filtrando um
+          // profissional, a consulta ia para a agenda de outro e sumia da grade.
+          onNewAt={(day, hour) => openNew(day, hour, '', calendarFilter)}
           onEdit={openEdit}
           onOpenDay={openDay}
+          showCalendar={calendarFilter === null && calendars.length > 1}
         />
       )}
 
@@ -650,14 +690,29 @@ export function AgendaClient() {
 }
 
 const HOUR_H = 48
+/** A grade abre aqui (o começo do expediente da clínica), não à meia-noite. */
+const ABRE_NA_HORA = 8
+/** Semana: no máximo isso lado a lado por dia; o resto vira "+N" (abre o Dia). */
+const MAX_LADO_A_LADO = 3
 
-/** O que aparece ao passar o mouse num compromisso da grade de horas. */
-function eventTooltip(ev: EventRow): string {
-  return ev.reminderBlock
+/**
+ * O que aparece ao passar o mouse num compromisso da grade de horas.
+ * Em "Todas", diz também de QUAL agenda é (01/10): com 12 profissionais e
+ * cores parecidas, a cor sozinha não dizia de quem era o horário.
+ */
+function eventTooltip(ev: EventRow, showCalendar: boolean, continua: boolean): string {
+  const base = ev.reminderBlock
     ? `${ev.title}${ev.contactName ? ` — ${ev.contactName}` : ''}: ${avisoNaAgenda(ev.reminderBlock)}`
     : ev.contactName
       ? `${ev.title} — ${ev.contactName} (recebe a confirmação)`
       : `${ev.title} — sem cliente/paciente: ninguém é avisado`
+  const linhas = [base]
+  if (continua) {
+    const s = new Date(ev.startsAt)
+    linhas.push(`Começou em ${pad(s.getDate())}/${pad(s.getMonth() + 1)} ${pad(s.getHours())}:${pad(s.getMinutes())}`)
+  }
+  if (showCalendar) linhas.push(`Agenda: ${ev.calendarName}`)
+  return linhas.join('\n')
 }
 
 /**
@@ -673,6 +728,7 @@ function TimeGrid({
   onNewAt,
   onEdit,
   onOpenDay,
+  showCalendar,
 }: {
   days: Date[]
   today: Date
@@ -681,31 +737,39 @@ function TimeGrid({
   onEdit: (ev: EventRow) => void
   /** Semana: clicar no cabeçalho (ou no "+N") abre aquele dia. */
   onOpenDay: (day: Date) => void
+  /** Filtro em "Todas" (e há mais de uma agenda): mostra de quem é cada compromisso. */
+  showCalendar: boolean
 }) {
   const isWeek = days.length > 1
   const scrollRef = useRef<HTMLDivElement>(null)
-  const firstDay = days[0].getTime()
-  // Abre já no horário comercial (~7h) em vez da meia-noite.
+  // Abre no começo do expediente. Só ao abrir e ao trocar Dia↔Semana: ao
+  // andar de semana em semana a posição fica onde a pessoa deixou (01/10 —
+  // antes voltava para 07:00 a cada clique).
   useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = 7 * HOUR_H
-  }, [firstDay, days.length])
+    if (scrollRef.current) scrollRef.current.scrollTop = ABRE_NA_HORA * HOUR_H
+  }, [isWeek])
 
   const columns = days.map((day) => {
     const evs = eventsForDay(day)
+    const slots = layoutDayEvents(
+      evs.filter((e) => !e.allDay),
+      day,
+    )
     return {
       day,
       allDay: evs.filter((e) => e.allDay),
-      slots: layoutDayEvents(
-        evs.filter((e) => !e.allDay),
-        day,
-      ),
+      // No Dia a coluna é larga: todos cabem. Na Semana, até 3 lado a lado.
+      ...(isWeek ? capColumns(slots, MAX_LADO_A_LADO) : { visible: slots, hidden: [] }),
     }
   })
   const hasAllDay = columns.some((c) => c.allDay.length > 0)
 
   return (
     <div className="overflow-hidden rounded-xl ring-1 ring-foreground/10">
-      <div ref={scrollRef} className="max-h-[560px] overflow-auto bg-card">
+      {/* Altura da tela (01/10): presa em 560px, a grade mostrava só até ~15h–17h
+          e a clínica atende até 20h. O que sobra (~16rem) é o cabeçalho do
+          CRM, o título da página, a barra e o filtro de agendas. */}
+      <div ref={scrollRef} className="h-[calc(100dvh-16rem)] min-h-[420px] overflow-auto bg-card">
         <div className={isWeek ? 'min-w-[728px]' : undefined}>
           {(isWeek || hasAllDay) && (
             <div className="sticky top-0 z-20 border-b border-border bg-card">
@@ -763,7 +827,7 @@ function TimeGrid({
                           onClick={() => onEdit(ev)}
                           className="max-w-full truncate rounded px-2 py-0.5 text-left text-xs font-medium"
                           style={{ background: ev.calendarColor, color: inkOn(ev.calendarColor) }}
-                          title={ev.title}
+                          title={showCalendar ? `${ev.title}\nAgenda: ${ev.calendarName}` : ev.title}
                         >
                           {ev.title}
                         </button>
@@ -797,7 +861,7 @@ function TimeGrid({
                 </span>
               ))}
             </div>
-            {columns.map(({ day, slots }) => (
+            {columns.map(({ day, visible, hidden }) => (
               <div
                 key={day.getTime()}
                 className={cn(
@@ -817,9 +881,13 @@ function TimeGrid({
                   />
                 ))}
                 {/* eventos posicionados por horário; quem se sobrepõe divide a largura */}
-                {slots.map(({ event: ev, startMin, endMin, col, cols }) => {
+                {visible.map(({ event: ev, startMin, endMin, col, cols }) => {
                   const s = new Date(ev.startsAt)
                   const durMin = Math.max(30, endMin - startMin)
+                  // Pedaço de um compromisso que começou no dia anterior (ex.:
+                  // plantão 22:00–02:00): mostrar "22:00" no topo da coluna das
+                  // 00:00 parecia que começava às 22h DESTE dia (01/10).
+                  const continua = s < startOfDay(day)
                   return (
                     <div
                       key={ev.id}
@@ -836,16 +904,21 @@ function TimeGrid({
                         background: ev.calendarColor,
                         color: inkOn(ev.calendarColor),
                       }}
-                      title={eventTooltip(ev)}
+                      title={eventTooltip(ev, showCalendar, continua)}
                     >
                       {/* Fora do bloco do nome de propósito: uma consulta de 30 min é
                           baixa demais para mostrar o nome, e era justamente nela que
                           o alerta sumia. O aviso não pode depender da duração. */}
                       {ev.reminderBlock && <AlertTriangle className="mr-1 inline h-3 w-3" />}
                       <span className="font-medium tabular-nums">
-                        {pad(s.getHours())}:{pad(s.getMinutes())}
+                        {continua ? '↳' : `${pad(s.getHours())}:${pad(s.getMinutes())}`}
                       </span>{' '}
                       {ev.title}
+                      {/* Em "Todas", de quem é a agenda — antes do paciente: é o que
+                          a recepção procura quando vê dois blocos no mesmo horário. */}
+                      {showCalendar && durMin >= 45 && (
+                        <div className="truncate opacity-80">{ev.calendarName}</div>
+                      )}
                       {/* Com quem é o compromisso, quando há altura pra mostrar. Quem
                           olha a agenda quer ver a PESSOA, não só o título. */}
                       {ev.contactName && durMin >= 45 && (
@@ -855,6 +928,35 @@ function TimeGrid({
                         </div>
                       )}
                     </div>
+                  )
+                })}
+                {/* Semana: o que não coube lado a lado (mais de 3 no mesmo horário)
+                    vira "+N" na última coluna, no horário deles; abre o Dia. */}
+                {hidden.map((run) => {
+                  const lista = run.events
+                    .map((ev) => {
+                      const s = new Date(ev.startsAt)
+                      return `${pad(s.getHours())}:${pad(s.getMinutes())} ${ev.title}${showCalendar ? ` (${ev.calendarName})` : ''}`
+                    })
+                    .join('\n')
+                  const hora = `${pad(Math.floor(run.startMin / 60))}:${pad(run.startMin % 60)}`
+                  return (
+                    <button
+                      key={`mais-${run.startMin}`}
+                      type="button"
+                      onClick={() => onOpenDay(day)}
+                      className="absolute flex items-start justify-center rounded-md border border-dashed border-foreground/30 bg-muted pt-0.5 text-[11px] font-semibold text-foreground shadow-sm transition-colors hover:bg-muted/70"
+                      style={{
+                        top: (run.startMin / 60) * HOUR_H + 1,
+                        height: Math.max(20, ((run.endMin - run.startMin) / 60) * HOUR_H - 2),
+                        left: `calc(${((MAX_LADO_A_LADO - 1) / MAX_LADO_A_LADO) * 100}% + 2px)`,
+                        width: `calc(${100 / MAX_LADO_A_LADO}% - 4px)`,
+                      }}
+                      title={`Mais ${run.events.length} a partir das ${hora} — clique para abrir o dia:\n${lista}`}
+                      aria-label={`Mais ${run.events.length} compromisso(s) a partir das ${hora}: abrir o dia ${day.getDate()}`}
+                    >
+                      +{run.events.length}
+                    </button>
                   )
                 })}
               </div>
@@ -885,15 +987,20 @@ function EventModal({
   onDelete: () => void
   onClose: () => void
 }) {
-  // Mudou o início → o fim anda junto, com a mesma duração (shiftEndWithStart).
-  // O campo devolve "" enquanto a pessoa digita a data; guarda o último
-  // início válido para a duração não se perder no meio da digitação.
+  // Mudou o início → o fim anda junto, com a mesma duração (changeStartInput).
+  // O campo devolve "" (ou um ano pela metade: 0002, 0020, 0202) enquanto a
+  // pessoa digita a data; guarda o último início válido para a duração não se
+  // perder no meio da digitação.
   const lastValidStart = useRef(draft.start)
   const parseStart = draft.allDay ? parseDateInput : parseLocalInput
   const changeStart = (value: string) => {
-    const prev = parseStart(draft.start) ? draft.start : lastValidStart.current
-    if (parseStart(value)) lastValidStart.current = value
-    setDraft({ ...draft, start: value, end: shiftEndWithStart(prev, draft.end, value, draft.allDay) })
+    const next = changeStartInput(
+      { start: draft.start, end: draft.end, lastValidStart: lastValidStart.current },
+      value,
+      draft.allDay,
+    )
+    lastValidStart.current = next.lastValidStart
+    setDraft({ ...draft, start: next.start, end: next.end })
   }
   const timeError = scheduleError(draft.start, draft.end, draft.allDay)
 
@@ -902,8 +1009,11 @@ function EventModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       onClick={onClose}
     >
+      {/* max-h + rolagem (01/10): no celular o painel passava da altura da tela
+          (ainda mais com o aviso de lembrete e a linha de erro do fim) e o
+          Salvar ficava fora, sem como chegar nele. */}
       <div
-        className="w-full max-w-md rounded-xl bg-card p-5 shadow-xl ring-1 ring-foreground/10"
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-xl bg-card p-5 shadow-xl ring-1 ring-foreground/10"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
