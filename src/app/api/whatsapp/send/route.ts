@@ -335,6 +335,8 @@ export async function POST(request: Request) {
         templateParams: template_params,
         templateMessageParams: template_message_params,
         replyToMessageId: reply_to_message_id,
+        // A aba de quem enviou já mostra a bolha (otimista) — ver o parâmetro.
+        skipRealtimeNudge: true,
       })
 
       // Transcribe an agent voice note recorded in the CRM (Alex asked for

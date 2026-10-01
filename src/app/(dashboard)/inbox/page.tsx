@@ -487,6 +487,13 @@ export default function InboxPage() {
       // an already-loaded list still saw the OLD assignee (and the reply
       // lock showed the wrong name). Background-only — the optimistic paint
       // above keeps the click feeling instant.
+      //
+      // ⚠️ unread_count NÃO vem desta busca (01/10, "abro a conversa, some a
+      // bolinha, saio e ela volta"). O Next roda as server actions em FILA, e
+      // esta é chamada aqui, no clique — antes do markConversationRead, que só
+      // sai no efeito do MessageThread depois do render. Então ela SEMPRE lê o
+      // contador antigo, e o merge devolvia a bolinha para a linha da lista:
+      // escondida enquanto a conversa está aberta (isActive), de volta ao sair.
       void getConversationWithContact(conv.id)
         .then((fresh) => {
           if (!fresh) return;
@@ -494,7 +501,12 @@ export default function InboxPage() {
           setConversations((prev) =>
             prev.map((c) =>
               c.id === fresh.id
-                ? { ...c, ...fresh, contact: fresh.contact ?? c.contact }
+                ? {
+                    ...c,
+                    ...fresh,
+                    contact: fresh.contact ?? c.contact,
+                    unread_count: c.unread_count,
+                  }
                 : c,
             ),
           );

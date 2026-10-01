@@ -9,6 +9,7 @@ import { firstOrNull } from '@/db/helpers'
 import { and, eq } from 'drizzle-orm'
 
 import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels'
+import { publishEvent } from '@/lib/events/publish'
 import { getProvider } from '@/lib/channels/registry'
 import { pickProviderTarget } from '@/lib/channels/target'
 import type { ChannelCtx } from '@/lib/channels/provider'
@@ -151,6 +152,22 @@ async function dispatchWithRetry(
 }
 
 /**
+ * Avisa a caixa de entrada aberta que saiu mensagem nesta conversa.
+ *
+ * 01/10 (Alex): "a resposta da IA chega no celular e no CRM não aparece até
+ * atualizar a página". Tudo o que sai por aqui — IA, follow-up, lembrete,
+ * CSAT, fluxo, automação — gravava a mensagem e não avisava ninguém: a tela só
+ * descobria num F5 ou ao voltar para a aba. No WAHA o eco do próprio envio
+ * também não avisa (o webhook vê a linha já gravada e para ali).
+ *
+ * `fromMe`: atualiza a lista e a conversa, mas sem som de mensagem nova.
+ * Nunca lança — publishEvent engole o erro do Redis.
+ */
+async function avisarTela(accountId: string, conversationId: string): Promise<void> {
+  await publishEvent(accountId, { type: 'message.received', conversationId, fromMe: true })
+}
+
+/**
  * Send a plain-text WhatsApp message from the Flows engine.
  *
  * Used by the runner's `send_message` and `collect_input` nodes.
@@ -194,6 +211,7 @@ export async function engineSendText(
       updatedAt: new Date().toISOString(),
     })
     .where(eq(conversations.id, args.conversationId))
+  await avisarTela(args.accountId, args.conversationId)
 
   return { whatsapp_message_id: waMessageId }
 }
@@ -309,6 +327,7 @@ export async function engineSendMedia(
       updatedAt: new Date().toISOString(),
     })
     .where(eq(conversations.id, args.conversationId))
+  await avisarTela(args.accountId, args.conversationId)
 
   return { whatsapp_message_id: waMessageId }
 }
@@ -474,6 +493,7 @@ async function sendInteractiveViaProvider(
       updatedAt: new Date().toISOString(),
     })
     .where(eq(conversations.id, input.conversationId))
+  await avisarTela(input.accountId, input.conversationId)
 
   return { whatsapp_message_id: waMessageId }
 }

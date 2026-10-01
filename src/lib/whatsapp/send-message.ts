@@ -46,6 +46,7 @@ import {
 } from '@/lib/whatsapp/group';
 import { firstOrNull, firstOrThrow } from '@/db/helpers';
 import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels';
+import { publishEvent } from '@/lib/events/publish';
 import { getProvider } from '@/lib/channels/registry';
 import { pickProviderTarget } from '@/lib/channels/target';
 import type { OutboundMedia, ChannelCtx } from '@/lib/channels/provider';
@@ -138,6 +139,13 @@ export interface SendMessageParams {
    * tem, SEM gravá-lo no contato (14/09).
    */
   emailTo?: string | null;
+  /**
+   * Não avisar a caixa de entrada em tempo real. Só o composer do inbox usa:
+   * a aba de quem digitou já pintou a bolha otimista (`temp-…`) e só troca pelo
+   * id real quando o envio responde — um refetch disparado pelo aviso, se
+   * chegasse antes, deixava as duas bolhas na tela com o mesmo id.
+   */
+  skipRealtimeNudge?: boolean;
 }
 
 export interface SendMessageResult {
@@ -852,6 +860,13 @@ export async function sendMessageToConversation(
       '[flows] pause-on-agent-send failed:',
       err instanceof Error ? err.message : err
     );
+  }
+
+  // 01/10: o que sai por aqui sem ninguém digitando (lembrete de consulta,
+  // follow-up, cobrança, aniversário) só aparecia no CRM depois de um F5.
+  // fromMe = atualiza a tela sem tocar o som de mensagem nova.
+  if (!params.skipRealtimeNudge) {
+    await publishEvent(accountId, { type: 'message.received', conversationId, fromMe: true });
   }
 
   return { messageId: messageRecord.id, whatsappMessageId: waMessageId };

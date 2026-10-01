@@ -522,6 +522,13 @@ export function ConversationList({
   const handleSelect = useCallback(
     (conv: Conversation) => {
       onSelect(conv);
+      // O pai zera a bolinha na lista paginada, mas os resultados da BUSCA são
+      // outra cópia: aberta pela busca, a conversa voltava "não lida" ao sair.
+      setSearchResults((prev) =>
+        prev?.some((c) => c.id === conv.id && c.unread_count > 0)
+          ? prev.map((c) => (c.id === conv.id ? { ...c, unread_count: 0 } : c))
+          : prev,
+      );
     },
     [onSelect]
   );
