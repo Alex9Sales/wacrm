@@ -826,6 +826,17 @@ export async function dispatchInboundToAiReply(
       console.error('[ai auto-reply] dívida em aberto falhou:', err instanceof Error ? err.message : err)
     }
 
+    // 🔑 Cliente do FluxiaCRM com a conta suspensa escrevendo para a própria
+    // Fluxia: o agente recebe a situação e o link para regularizar. Só existe na
+    // conta da plataforma — em qualquer outra devolve null sem consultar nada.
+    let contaSuspensa: string | null = null
+    try {
+      const { contextoDeContaSuspensa } = await import('@/lib/billing/platform-client-context')
+      contaSuspensa = await contextoDeContaSuspensa(accountId, contactId)
+    } catch (err) {
+      console.error('[ai auto-reply] contexto de conta suspensa falhou (segue sem):', err instanceof Error ? err.message : err)
+    }
+
     // 📅 Agenda: a IA só oferece horário que não bate com reunião já marcada.
     // Puxa o Google antes de ler (o tick do worker é de 5 min; um compromisso
     // marcado no celular agorinha ainda não estaria aqui). Tem carência e prazo
@@ -876,6 +887,7 @@ export async function dispatchInboundToAiReply(
       agendasDaEquipe,
       extraInstructions: (() => {
         const extra: string[] = []
+        if (contaSuspensa) extra.push(contaSuspensa)
         if (openDebt) extra.push(collectionInstruction(openDebt))
         // 🧾 criar_cobranca: a regra só entra no prompt do agente que tem a
         // ferramenta LIGADA — nos outros nem existe a palavra cobrança.
