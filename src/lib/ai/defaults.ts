@@ -371,15 +371,21 @@ export function scheduleInstruction(opts: { approval?: boolean; busySlots?: stri
   // 18/09 (Zelo): sem saber que a reunião do lead já estava marcada, a IA
   // re-emitia [[AGENDAR]] a cada resposta e chegou a "ajustar" o horário.
   const booked = opts.booked
-    ? ` THIS customer ALREADY HAS a meeting booked: ${opts.booked} (business timezone). That slot is taken by THIS meeting, not by a conflict — do not offer other times because of it, do not say you need to adjust it, and do NOT emit [[AGENDAR]] again unless the customer explicitly asks to change the day or time.`
+    ? ` THIS customer ALREADY HAS a meeting booked: ${opts.booked} (business timezone). That slot is taken by THIS meeting, not by a conflict — do not offer other times because of it, do not say you need to adjust it, and do NOT emit [[AGENDAR]] again unless the customer explicitly asks to change the day or time. For this customer, [[AGENDAR]] MOVES that existing meeting — it never creates a second one. If they want an ADDITIONAL appointment, or one for another person, do not emit [[AGENDAR]]: hand it to a human.`
     : ''
   // 30/09 (clínica da Dra. Joyce, 10 profissionais): a lista única de horários
   // ocupados não dizia DE QUEM era cada um, então um compromisso de uma dentista
   // tirava aquele horário de todas as outras. Com uma agenda por profissional a
   // IA passa a oferecer o horário de quem ESTÁ livre — e a marcar na agenda
   // certa, pelo 3º campo do marcador.
+  // 01/10: "livre" aqui é só "não ocupado". Dentista que vem duas terças por mês
+  // aparece "sem compromissos" justamente nos dias em que não está — o
+  // expediente mora no prompt da conta, e esta instrução manda respeitá-lo.
+  // E para quem já tem compromisso, o [[AGENDAR]] MOVE o que existe
+  // (scheduleEventFromAi deduplica por contato): pedir "mais uma consulta"
+  // moveria a outra.
   const equipe = opts.agendasDaEquipe
-    ? ` THIS BUSINESS HAS SEVERAL CALENDARS, one per professional. Each one has its OWN availability — a time booked in one calendar does NOT block the others. Here is who exists and when each is busy (business timezone):\n${opts.agendasDaEquipe}\nWhen the customer asks for a specific professional, check THAT professional's line and offer only times that do not overlap it. When the customer has no preference, offer a time from whoever is free. When you book, put the professional's name in the THIRD field of the marker: "[[AGENDAR:YYYY-MM-DDTHH:MM|<short title>|<professional name>]]", copying the name EXACTLY as written in the list above. If the customer did not name a professional and you did not pick one, leave the third field out. NEVER invent a professional who is not in the list, and never promise a time that overlaps that professional's busy list.`
+    ? ` THIS BUSINESS HAS SEVERAL CALENDARS, one per professional. Each one has its OWN availability — a time booked in one calendar does NOT block the others. Here is who exists and when each is busy (business timezone):\n${opts.agendasDaEquipe}\nThis list shows only BUSY times: an empty line does NOT mean the professional is working. Offer only times inside that professional's working hours as given in your instructions — outside them the professional is simply not there. When the customer asks for a specific professional, check THAT professional's line and offer only times that do not overlap it. When the customer has no preference, follow your instructions on whom to offer. When you book, put the professional's name in the THIRD field of the marker: "[[AGENDAR:YYYY-MM-DDTHH:MM|<short title>|<professional name>]]", copying the name EXACTLY as written in the list above. If the customer did not name a professional and you did not pick one, leave the third field out. NEVER invent a professional who is not in the list, and never promise a time that overlaps that professional's busy list.`
     : ''
   return (
     'Scheduling: when you and the customer clearly AGREE on a specific date and time for a meeting, call, or appointment, emit ONCE the marker "[[AGENDAR:YYYY-MM-DDTHH:MM|<short title>]]" — computing the ABSOLUTE date/time from the current date/time given above (business timezone). Resolve relative times ("tomorrow at 3pm", "friday morning") to the real date, use 24h time (e.g. 15:00), and put a short title after the "|" (e.g. the customer name and topic). Emit it ONLY when a concrete time is actually agreed — never for a vague "sometime". ' +
