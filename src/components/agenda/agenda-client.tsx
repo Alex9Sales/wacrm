@@ -19,19 +19,27 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   listCalendars,
   listEvents,
   createEvent,
   updateEvent,
   deleteEvent,
+  getAgendaPrefs,
   getGoogleStatus,
   syncGoogleNow,
   disconnectGoogle,
   type CalendarRow,
+  type ConfirmacaoNaTela,
   type EventRow,
   type GoogleStatus,
 } from '@/app/(dashboard)/agenda/actions'
+import {
+  fraseDaConsulta,
+  tipoDaConfirmacaoNaEdicao,
+  type TipoConfirmacao,
+} from '@/lib/agenda/confirmacao-agendamento'
 import { inkOn } from '@/lib/ui/ink-on'
 import { cn } from '@/lib/utils'
 import {
@@ -74,6 +82,44 @@ type Draft = {
   contactId: string
   /** Só leitura: por que o lembrete deste compromisso não saiu (null = saiu ou não travou). */
   reminderBlock: MeetingReminderBlock | null
+  /**
+   * Caixa "Enviar confirmação ao paciente pelo WhatsApp" (01/10, pedido da
+   * Dra. Joyce). Nasce marcada; só aparece quando a conta ligou a opção e o
+   * salvamento muda algo que o paciente precisa saber.
+   */
+  notifyPatient: boolean
+  /** Conversa de onde a recepção clicou "Agendar": a confirmação sai por ela. */
+  conversationId: string | null
+  /** Como o compromisso estava ao abrir (edição). null = compromisso novo. */
+  original: { startsAt: string; calendarId: string; contactId: string | null } | null
+}
+
+/** Preferências da conta para o modal (getAgendaPrefs). */
+type AgendaPrefs = { confirmacaoAoAgendar: boolean; timezone: string }
+
+/** Início/fim do rascunho em ISO — o que vai para a action. null = data inválida. */
+function draftIso(d: Pick<Draft, 'allDay' | 'start' | 'end'>): { startsAt: string; endsAt: string } | null {
+  const s = d.allDay ? new Date(d.start + 'T00:00') : new Date(d.start)
+  const e = d.allDay ? new Date(d.end + 'T23:59') : new Date(d.end)
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return null
+  return { startsAt: s.toISOString(), endsAt: e.toISOString() }
+}
+
+/**
+ * Salvar este rascunho pede confirmação ao paciente? Mesma regra da action
+ * (tipoDaConfirmacaoNaEdicao): novo com paciente → marcação; edição só se
+ * mudou dia/hora, agenda ou paciente. Horário que já passou não oferece.
+ */
+function confirmacaoDoRascunho(d: Draft): TipoConfirmacao | null {
+  if (!d.contactId) return null
+  const iso = draftIso(d)
+  if (!iso) return null
+  if (new Date(d.allDay ? iso.endsAt : iso.startsAt).getTime() <= Date.now()) return null
+  if (!d.original) return 'marcacao'
+  return tipoDaConfirmacaoNaEdicao({
+    antes: d.original,
+    depois: { startsAt: iso.startsAt, calendarId: d.calendarId, contactId: d.contactId },
+  })
 }
 
 /**
@@ -86,6 +132,19 @@ function erroLegivel(msg: string, padrao: string): string {
     : msg
 }
 
+/** Diz o que aconteceu com a confirmação. Não enviada nunca passa calada. */
+function avisarConfirmacao(c: ConfirmacaoNaTela | undefined): void {
+  if (!c) return
+  if (c === 'enviada') {
+    toast.success('Confirmação enviada ao paciente.')
+    return
+  }
+  toast.warning(`Confirmação não enviada: ${c.naoEnviada}.`, {
+    description: 'O compromisso foi salvo. Se precisar, avise o paciente pela conversa.',
+    duration: 12_000,
+  })
+}
+
 export function AgendaClient() {
   const [anchor, setAnchor] = useState(() => new Date())
   const [calendars, setCalendars] = useState<CalendarRow[]>([])
@@ -94,6 +153,9 @@ export function AgendaClient() {
   const [draft, setDraft] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)
   const [google, setGoogle] = useState<GoogleStatus | null>(null)
+  // null enquanto carrega: sem saber se a conta ligou a confirmação, a caixa
+  // não aparece (e nada é enviado).
+  const [prefs, setPrefs] = useState<AgendaPrefs | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [view, setView] = useState<View>('month')
   /** Ver só UMA agenda (id) ou todas (null). Escolha da sessão, não é salva. */
@@ -202,6 +264,9 @@ export function AgendaClient() {
   // Estado da conexão Google + feedback do retorno do OAuth (?google=...).
   useEffect(() => {
     void getGoogleStatus().then(setGoogle).catch(() => {})
+    void getAgendaPrefs()
+      .then(setPrefs)
+      .catch((err) => console.error('[agenda] preferências da conta:', err))
     const params = new URLSearchParams(window.location.search)
     const g = params.get('google')
     if (g === 'connected') {
@@ -216,14 +281,16 @@ export function AgendaClient() {
   // Vindo da conversa ("Marcar compromisso"): /agenda?contato=<id> abre o modal
   // já com a pessoa escolhida. Espera as agendas carregarem, senão o evento
   // nasceria na agenda local e a Dra. não veria no Google.
+  // &conversa=<id> (01/10): a confirmação ao paciente sai por essa conversa.
   const veioDaConversa = useRef(false)
   useEffect(() => {
     if (veioDaConversa.current || calendars.length === 0) return
-    const contato = new URLSearchParams(window.location.search).get('contato')
+    const params = new URLSearchParams(window.location.search)
+    const contato = params.get('contato')
     if (!contato) return
     veioDaConversa.current = true
     window.history.replaceState(null, '', '/agenda')
-    openNew(undefined, undefined, contato)
+    openNew(undefined, undefined, contato, null, params.get('conversa'))
     // openNew só depende de `calendars` (via defaultCalendarId).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [calendars])
@@ -285,7 +352,13 @@ export function AgendaClient() {
   const defaultCalendarId = () =>
     (calendars.find((c) => c.source === 'google') ?? calendars[0])?.id ?? ''
 
-  const openNew = (day?: Date, hour?: number, contactId = '', calendarId: string | null = null) => {
+  const openNew = (
+    day?: Date,
+    hour?: number,
+    contactId = '',
+    calendarId: string | null = null,
+    conversationId: string | null = null,
+  ) => {
     const base = day ?? new Date()
     const start = new Date(base)
     if (hour != null) start.setHours(hour, 0, 0, 0)
@@ -305,23 +378,40 @@ export function AgendaClient() {
       description: '',
       contactId,
       reminderBlock: null,
+      notifyPatient: true,
+      conversationId,
+      original: null,
     })
   }
 
   const openEdit = (ev: EventRow) => {
     const s = new Date(ev.startsAt)
     const e = new Date(ev.endsAt)
+    const start = ev.allDay ? toDateInput(s) : toLocalInput(s)
+    const end = ev.allDay ? toDateInput(e) : toLocalInput(e)
     setDraft({
       id: ev.id,
       title: ev.title,
       calendarId: ev.calendarId,
       allDay: ev.allDay,
-      start: ev.allDay ? toDateInput(s) : toLocalInput(s),
-      end: ev.allDay ? toDateInput(e) : toLocalInput(e),
+      start,
+      end,
       location: ev.location ?? '',
       description: ev.description ?? '',
       contactId: ev.contactId ?? '',
       reminderBlock: ev.reminderBlock,
+      // Marcada: se a edição mudar dia/hora, a caixa já aparece ligada.
+      notifyPatient: true,
+      conversationId: null,
+      // O início "de antes" passa pelo MESMO caminho do salvar (campo da tela →
+      // ISO): abrir e salvar sem mexer dá o mesmo valor, mesmo com segundos
+      // vindos do Google ou dia inteiro gravado no fuso da conta. Comparar com
+      // o valor cru do banco ofereceria "remarcação" sem ninguém ter remarcado.
+      original: {
+        startsAt: draftIso({ allDay: ev.allDay, start, end })?.startsAt ?? ev.startsAt,
+        calendarId: ev.calendarId,
+        contactId: ev.contactId,
+      },
     })
   }
 
@@ -341,17 +431,14 @@ export function AgendaClient() {
     if (!draft || !draft.title.trim()) return
     // O botão já fica desligado e o erro aparece no formulário; isto é a trava.
     if (scheduleError(draft.start, draft.end, draft.allDay)) return
+    const iso = draftIso(draft)
+    if (!iso) return
     setSaving(true)
     try {
-      let startsAt: string
-      let endsAt: string
-      if (draft.allDay) {
-        startsAt = new Date(draft.start + 'T00:00').toISOString()
-        endsAt = new Date(draft.end + 'T23:59').toISOString()
-      } else {
-        startsAt = new Date(draft.start).toISOString()
-        endsAt = new Date(draft.end).toISOString()
-      }
+      const { startsAt, endsAt } = iso
+      // Só manda pedir a confirmação quando a caixa está NA TELA e marcada.
+      const confirmar =
+        prefs?.confirmacaoAoAgendar === true && confirmacaoDoRascunho(draft) !== null && draft.notifyPatient
       const payload = {
         title: draft.title,
         calendarId: draft.calendarId || null,
@@ -361,6 +448,8 @@ export function AgendaClient() {
         location: draft.location,
         description: draft.description,
         contactId: draft.contactId || null,
+        notifyPatient: confirmar,
+        conversationId: draft.conversationId,
       }
       // Dia do evento (pra pular a visão pra lá e evitar confusão de mês/data).
       const eventDate = new Date(draft.start.slice(0, 10) + 'T12:00:00')
@@ -374,17 +463,23 @@ export function AgendaClient() {
         return
       }
       setDraft(null)
+      // Ditos ANTES de recarregar a grade (01/10): o compromisso já está salvo
+      // e a confirmação já saiu (ou não). Uma recarga que falhasse caía no
+      // catch abaixo e dizia "Não foi possível salvar" — a recepção salvaria
+      // de novo, e o paciente receberia duas vezes.
+      toast.success(draft.id ? 'Evento atualizado.' : 'Evento criado.')
+      avisarConfirmacao(r.confirmacao)
       if (viewRef.current !== 'month') setDayDate(eventDate)
       const sameMonth =
         eventDate.getMonth() === anchor.getMonth() &&
         eventDate.getFullYear() === anchor.getFullYear()
       if (sameMonth) {
-        await load() // mês não muda → recarrega a visão atual
+        // mês não muda → recarrega a visão atual
+        await load().catch((err) => console.error('[agenda] recarregar depois de salvar:', err))
       } else {
         // muda o mês → o efeito de load dispara sozinho e mostra o evento
         setAnchor(new Date(eventDate.getFullYear(), eventDate.getMonth(), 1))
       }
-      toast.success(draft.id ? 'Evento atualizado.' : 'Evento criado.')
     } catch (err) {
       // Era try/finally SEM catch: falhando, o modal ficava aberto e nada
       // explicava (em produção o erro de Server Action chega sanitizado).
@@ -693,6 +788,7 @@ export function AgendaClient() {
           draft={draft}
           setDraft={setDraft}
           calendars={calendars}
+          prefs={prefs}
           saving={saving}
           onToggleAllDay={onToggleAllDay}
           onSave={save}
@@ -719,7 +815,7 @@ function eventTooltip(ev: EventRow, showCalendar: boolean, continua: boolean): s
   const base = ev.reminderBlock
     ? `${ev.title}${ev.contactName ? ` — ${ev.contactName}` : ''}: ${avisoNaAgenda(ev.reminderBlock)}`
     : ev.contactName
-      ? `${ev.title} — ${ev.contactName} (recebe a confirmação)`
+      ? `${ev.title} — ${ev.contactName} (recebe os lembretes)`
       : `${ev.title} — sem cliente/paciente: ninguém é avisado`
   const linhas = [base]
   if (continua) {
@@ -987,6 +1083,7 @@ function EventModal({
   draft,
   setDraft,
   calendars,
+  prefs,
   saving,
   onToggleAllDay,
   onSave,
@@ -996,6 +1093,7 @@ function EventModal({
   draft: Draft
   setDraft: (d: Draft) => void
   calendars: CalendarRow[]
+  prefs: AgendaPrefs | null
   saving: boolean
   onToggleAllDay: (v: boolean) => void
   onSave: () => void
@@ -1018,6 +1116,22 @@ function EventModal({
     setDraft({ ...draft, start: next.start, end: next.end })
   }
   const timeError = scheduleError(draft.start, draft.end, draft.allDay)
+  // A caixa da confirmação: só com a opção da conta ligada e um salvamento que
+  // muda algo para o paciente. A prévia mostra o miolo da mensagem, no fuso
+  // da conta, com o profissional da agenda escolhida.
+  const tipoConfirmacao =
+    prefs?.confirmacaoAoAgendar && !timeError ? confirmacaoDoRascunho(draft) : null
+  const isoRascunho = tipoConfirmacao ? draftIso(draft) : null
+  const previaConfirmacao =
+    tipoConfirmacao && isoRascunho && prefs
+      ? fraseDaConsulta({
+          tipo: tipoConfirmacao,
+          nomeAgenda: calendars.find((c) => c.id === draft.calendarId)?.name,
+          startsAt: isoRascunho.startsAt,
+          allDay: draft.allDay,
+          tz: prefs.timezone,
+        })
+      : null
 
   return (
     <div
@@ -1091,11 +1205,13 @@ function EventModal({
               placeholder="Buscar por nome ou telefone..."
             />
             {/* Campo que, em branco, desliga o lembrete em silêncio: diz isso aqui,
-                no lugar, e não num toast que some. */}
+                no lugar, e não num toast que some. 01/10: dizia "recebe a
+                confirmação", mas salvar não mandava nada — só os lembretes do
+                agente, perto da consulta. A confirmação NA HORA é a caixa abaixo. */}
             <p className="mt-1 text-[11px] text-muted-foreground">
               {draft.contactId ? (
                 <>
-                  Quem estiver aqui <strong>recebe a confirmação</strong> da consulta pelo
+                  Quem estiver aqui <strong>recebe os lembretes</strong> da consulta pelo
                   WhatsApp, se os lembretes do agente estiverem ligados.
                 </>
               ) : (
@@ -1190,6 +1306,33 @@ function EventModal({
               placeholder="Opcional"
             />
           </div>
+
+          {/* ✅ 01/10, Dra. Joyce: "no momento que eu fiz o agendamento, ele
+              recebe". Junto do Salvar porque é o que acontece AO salvar.
+              Marcada por padrão; a prévia diz exatamente o que vai. */}
+          {previaConfirmacao && (
+            <label className="flex items-start gap-3 rounded-lg border border-border px-3 py-2.5">
+              <Checkbox
+                checked={draft.notifyPatient}
+                onCheckedChange={(v) => setDraft({ ...draft, notifyPatient: v === true })}
+                aria-label="Enviar confirmação ao paciente pelo WhatsApp"
+                className="mt-0.5"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm text-foreground">
+                  Enviar confirmação ao paciente pelo WhatsApp
+                </span>
+                <span className="block text-[11px] text-muted-foreground">
+                  {draft.notifyPatient ? 'Sai ao salvar' : 'Não vai nada ao salvar'}
+                  {draft.notifyPatient && (
+                    <>
+                      , na conversa do paciente: “{previaConfirmacao}”
+                    </>
+                  )}
+                </span>
+              </span>
+            </label>
+          )}
         </div>
 
         <div className="mt-5 flex items-center justify-between">

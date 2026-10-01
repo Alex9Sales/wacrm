@@ -17,6 +17,14 @@ import {
 } from '@/lib/ai/meeting-reminder-block'
 import { apagarEventoNoGoogle, importGoogleEvents, pushEventToGoogle } from '@/lib/google/sync'
 import { planoDaEdicao } from '@/lib/google/event-move'
+import { getAccountSettings } from '@/lib/settings/account-settings'
+import {
+  FUSO_PADRAO,
+  tipoDaConfirmacaoNaEdicao,
+  type ResultadoConfirmacao,
+  type TipoConfirmacao,
+} from '@/lib/agenda/confirmacao-agendamento'
+import { enviarConfirmacaoDoAgendamento } from '@/lib/agenda/confirmacao-envio'
 
 export type CalendarRow = {
   id: string
@@ -65,6 +73,51 @@ export type EventInput = {
   location?: string | null
   contactId?: string | null
   dealId?: string | null
+  /**
+   * A caixa "Enviar confirmação ao paciente pelo WhatsApp" do modal (01/10).
+   * Só `true` manda; sem ela (qualquer outro caminho) nada sai. Na edição, só
+   * vale se mudou dia/hora, agenda ou paciente — a action confere.
+   */
+  notifyPatient?: boolean
+  /** Conversa de onde a recepção clicou "Agendar": a confirmação sai por ela. */
+  conversationId?: string | null
+}
+
+/** O que vai para o modal depois de salvar. Ver lib/agenda/confirmacao-agendamento.ts. */
+export type ConfirmacaoNaTela = ResultadoConfirmacao | null
+
+/**
+ * Manda a confirmação sem NUNCA atrapalhar o salvamento: roda depois de o
+ * compromisso estar gravado (e espelhado no Google), e qualquer falha vira
+ * aviso, não erro do salvar.
+ */
+async function confirmarAoPaciente(args: {
+  accountId: string
+  eventId: string
+  tipo: TipoConfirmacao
+  conversationId?: string | null
+}): Promise<ConfirmacaoNaTela> {
+  try {
+    return await enviarConfirmacaoDoAgendamento(args)
+  } catch (err) {
+    console.error('[agenda] confirmação ao paciente:', err)
+    return { naoEnviada: 'não foi possível enviar a confirmação agora' }
+  }
+}
+
+/** Preferências da conta que o modal da Agenda precisa saber. */
+export async function getAgendaPrefs(): Promise<{
+  /** A conta ligou a confirmação ao agendar (bookingConfirmation). */
+  confirmacaoAoAgendar: boolean
+  /** Fuso da conta — a prévia da confirmação mostra o horário nele. */
+  timezone: string
+}> {
+  const ctx = await getCurrentAccount()
+  const s = await getAccountSettings(ctx.accountId)
+  return {
+    confirmacaoAoAgendar: s.bookingConfirmation === true,
+    timezone: s.businessTimezone || FUSO_PADRAO,
+  }
 }
 
 /** Garante (e devolve) uma agenda padrão do usuário; cria "Minha agenda" se faltar. */
@@ -210,7 +263,7 @@ export async function listEvents(range: {
 
 export async function createEvent(
   input: EventInput,
-): Promise<{ id: string | null; error: string | null }> {
+): Promise<{ id: string | null; error: string | null; confirmacao?: ConfirmacaoNaTela }> {
   try {
     const ctx = await getCurrentAccount()
     const title = input.title?.trim()
@@ -265,7 +318,19 @@ export async function createEvent(
     } catch (err) {
       console.error('[agenda] push create → google:', err)
     }
-    return { id: created.id, error: null }
+    // ✅ Confirmação ao paciente (01/10): só com a caixa do modal marcada e
+    // paciente ligado. Depois do Google, de propósito: o compromisso já está
+    // salvo em todo lugar antes de qualquer mensagem sair.
+    const confirmacao =
+      input.notifyPatient === true && input.contactId
+        ? await confirmarAoPaciente({
+            accountId: ctx.accountId,
+            eventId: created.id,
+            tipo: 'marcacao',
+            conversationId: input.conversationId ?? null,
+          })
+        : null
+    return { id: created.id, error: null, confirmacao }
   } catch (err) {
     return { id: null, error: err instanceof Error ? err.message : 'Falha ao criar evento' }
   }
@@ -274,7 +339,7 @@ export async function createEvent(
 export async function updateEvent(
   id: string,
   patch: Partial<EventInput> & { status?: 'confirmed' | 'cancelled' },
-): Promise<{ error: string | null }> {
+): Promise<{ error: string | null; confirmacao?: ConfirmacaoNaTela }> {
   try {
     const ctx = await getCurrentAccount()
     const set: Record<string, unknown> = { updatedAt: sql`now()` }
@@ -299,6 +364,8 @@ export async function updateEvent(
         .select({
           startsAt: calendarEvents.startsAt,
           calendarId: calendarEvents.calendarId,
+          // Para a confirmação: paciente ligado agora é consulta nova para ele.
+          contactId: calendarEvents.contactId,
           googleEventId: calendarEvents.googleEventId,
           calGoogleId: calendars.googleCalendarId,
           connectionId: calendars.connectionId,
@@ -401,7 +468,35 @@ export async function updateEvent(
         console.error(`[agenda] push ${plano.pushDepois} → google:`, err)
       }
     }
-    return { error: null }
+
+    // ✅ Confirmação ao paciente (01/10): só com a caixa marcada E se a edição
+    // mudou o que o paciente precisa saber — dia/hora, agenda (profissional)
+    // ou o próprio paciente. Corrigir o título não manda nada. Cancelado e
+    // horário passado são barrados lá dentro (decidirConfirmacao).
+    let confirmacao: ConfirmacaoNaTela = null
+    if (patch.notifyPatient === true) {
+      const tipo = tipoDaConfirmacaoNaEdicao({
+        antes: {
+          startsAt: antes.startsAt,
+          calendarId: antes.calendarId,
+          contactId: antes.contactId ?? null,
+        },
+        depois: {
+          startsAt: patch.startsAt ?? antes.startsAt,
+          calendarId: plano.trocou && novaAgenda ? novaAgenda.calendarId : antes.calendarId,
+          contactId: patch.contactId !== undefined ? patch.contactId || null : (antes.contactId ?? null),
+        },
+      })
+      if (tipo) {
+        confirmacao = await confirmarAoPaciente({
+          accountId: ctx.accountId,
+          eventId: id,
+          tipo,
+          conversationId: patch.conversationId ?? null,
+        })
+      }
+    }
+    return { error: null, confirmacao }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falha ao atualizar evento' }
   }

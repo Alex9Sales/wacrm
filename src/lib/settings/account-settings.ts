@@ -164,6 +164,13 @@ export interface AccountSettings {
    *  ser compartilhada é decisão da conta (01/10, pedido de uma clínica). Nunca
    *  vale para reunião com convidados. Ver lib/google/event-patient.ts. */
   googlePatientInfo: boolean
+  /** ✅ Confirmação ao paciente NA HORA de agendar pela Agenda do CRM: o modal
+   *  ganha a caixa "Enviar confirmação ao paciente pelo WhatsApp" (marcada por
+   *  padrão) e, ao salvar, sai "Sua consulta com {agenda} está confirmada para
+   *  …" (ou "foi remarcada para …"). OFF por padrão — manda mensagem real.
+   *  Pedido da Dra. Joyce (01/10). Sem tela; liga-se por SQL, como o
+   *  googlePatientInfo. Ver lib/agenda/confirmacao-agendamento.ts. */
+  bookingConfirmation: boolean
 }
 
 /** Mon–Fri 08:00–18:00, weekend closed. Index 0=Sunday … 6=Saturday. */
@@ -247,6 +254,7 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   aiMeetingOnline: false,
   aiMeetingInvitees: [],
   googlePatientInfo: false,
+  bookingConfirmation: false,
 }
 
 /** Read an account's settings, merged over the defaults. */

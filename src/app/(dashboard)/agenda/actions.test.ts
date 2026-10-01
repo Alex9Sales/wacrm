@@ -58,6 +58,12 @@ const h = vi.hoisted(() => {
     apagar: vi.fn(async () => {
       state.calls.push({ op: 'google:apagar-na-antiga' })
     }),
+    // Confirmação ao paciente (01/10): o envio de verdade é testado em
+    // lib/agenda/confirmacao-envio.test.ts; aqui importa QUANDO a action pede.
+    confirmar: vi.fn<(args: Record<string, unknown>) => Promise<unknown>>(async () => {
+      state.calls.push({ op: 'confirmacao' })
+      return 'enviada'
+    }),
   }
 })
 
@@ -74,6 +80,7 @@ vi.mock('@/lib/google/sync', () => ({
   importGoogleEvents: vi.fn(),
 }))
 vi.mock('@/lib/google/calendar', () => ({ googleConfigured: () => true }))
+vi.mock('@/lib/agenda/confirmacao-envio', () => ({ enviarConfirmacaoDoAgendamento: h.confirmar }))
 
 import { createEvent, updateEvent } from './actions'
 
@@ -98,6 +105,7 @@ beforeEach(() => {
   h.state.updateFalha = false
   h.push.mockClear()
   h.apagar.mockClear()
+  h.confirmar.mockClear()
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 
@@ -107,7 +115,7 @@ describe('trocar o compromisso de agenda', () => {
 
     const res = await updateEvent('ev-1', { ...INPUT, calendarId: 'cal-b' })
 
-    expect(res).toEqual({ error: null })
+    expect(res).toEqual({ error: null, confirmacao: null })
     // O 2º update cancela a cópia que o import pode ter trazido da agenda antiga.
     expect(passos()).toEqual(['update', 'google:apagar-na-antiga', 'update', 'google:create'])
     expect(gravado()).toMatchObject({ calendarId: 'cal-b', googleEventId: null, source: 'local' })
@@ -155,7 +163,7 @@ describe('trocar o compromisso de agenda', () => {
 
     const res = await updateEvent('ev-1', { ...INPUT, calendarId: 'cal-b' })
 
-    expect(res).toEqual({ error: null })
+    expect(res).toEqual({ error: null, confirmacao: null })
     expect(passos()).toEqual(['update', 'google:create'])
   })
 })
@@ -184,7 +192,7 @@ describe('o que vem da tela tem que ser desta conta', () => {
 
     const res = await createEvent({ ...INPUT, calendarId: 'cal-b', contactId: 'c-1' })
 
-    expect(res).toEqual({ id: 'ev-novo', error: null })
+    expect(res).toEqual({ id: 'ev-novo', error: null, confirmacao: null })
     expect(passos()).toEqual(['insert', 'google:create'])
   })
 
@@ -213,5 +221,165 @@ describe('o que vem da tela tem que ser desta conta', () => {
 
     expect(res).toEqual({ error: 'Compromisso não encontrado.' })
     expect(passos()).toEqual([])
+  })
+})
+
+describe('confirmação ao paciente ao salvar (01/10)', () => {
+  // O compromisso como estava: com paciente, na agenda local.
+  const ANTES_COM_PACIENTE = {
+    startsAt: '2026-10-05 14:00:00+00',
+    calendarId: 'cal-a',
+    contactId: 'c-1',
+    googleEventId: null,
+    calGoogleId: null,
+    connectionId: null,
+  }
+
+  it('criar com paciente e a caixa marcada: pede UMA confirmação de marcação, depois de gravar e espelhar', async () => {
+    h.state.results.push(AGENDA_GOOGLE, [{ id: 'c-1' }], [{ id: 'ev-novo' }])
+
+    const res = await createEvent({
+      ...INPUT,
+      calendarId: 'cal-b',
+      contactId: 'c-1',
+      notifyPatient: true,
+      conversationId: 'cv-1',
+    })
+
+    expect(res).toEqual({ id: 'ev-novo', error: null, confirmacao: 'enviada' })
+    expect(h.confirmar).toHaveBeenCalledTimes(1)
+    expect(h.confirmar).toHaveBeenCalledWith({
+      accountId: 'acc-1',
+      eventId: 'ev-novo',
+      tipo: 'marcacao',
+      conversationId: 'cv-1',
+    })
+    // A mensagem só sai com o compromisso salvo em todo lugar.
+    expect(passos()).toEqual(['insert', 'google:create', 'confirmacao'])
+  })
+
+  it('criar com a caixa desmarcada (ou sem ela): nada sai', async () => {
+    h.state.results.push(AGENDA_GOOGLE, [{ id: 'c-1' }], [{ id: 'ev-novo' }])
+
+    const res = await createEvent({ ...INPUT, calendarId: 'cal-b', contactId: 'c-1', notifyPatient: false })
+
+    expect(res.confirmacao).toBeNull()
+    expect(h.confirmar).not.toHaveBeenCalled()
+  })
+
+  it('criar sem paciente: nada sai, mesmo com a caixa', async () => {
+    h.state.results.push(AGENDA_GOOGLE, [{ id: 'ev-novo' }])
+
+    await createEvent({ ...INPUT, calendarId: 'cal-b', notifyPatient: true })
+
+    expect(h.confirmar).not.toHaveBeenCalled()
+  })
+
+  it('a confirmação falhou (até lançou): o compromisso fica salvo e o aviso volta para a tela', async () => {
+    h.state.results.push(AGENDA_GOOGLE, [{ id: 'c-1' }], [{ id: 'ev-novo' }])
+    h.confirmar.mockImplementationOnce(async () => {
+      throw new Error('socket hang up')
+    })
+
+    const res = await createEvent({ ...INPUT, calendarId: 'cal-b', contactId: 'c-1', notifyPatient: true })
+
+    expect(res.id).toBe('ev-novo')
+    expect(res.error).toBeNull()
+    expect(res.confirmacao).toEqual({ naoEnviada: 'não foi possível enviar a confirmação agora' })
+    expect(passos()).toContain('insert')
+  })
+
+  it('editar só o título (o modal manda o mesmo horário e a mesma agenda): nada sai', async () => {
+    h.state.results.push([ANTES_COM_PACIENTE], AGENDA_LOCAL, [{ id: 'c-1' }])
+
+    const res = await updateEvent('ev-1', {
+      ...INPUT,
+      title: 'Outro título',
+      startsAt: '2026-10-05T14:00:00.000Z',
+      calendarId: 'cal-a',
+      contactId: 'c-1',
+      notifyPatient: true,
+    })
+
+    expect(res).toEqual({ error: null, confirmacao: null })
+    expect(h.confirmar).not.toHaveBeenCalled()
+  })
+
+  it('mudar o horário: pede a confirmação de REMARCAÇÃO', async () => {
+    h.state.results.push([ANTES_COM_PACIENTE], AGENDA_LOCAL, [{ id: 'c-1' }])
+
+    const res = await updateEvent('ev-1', {
+      ...INPUT,
+      startsAt: '2026-10-06T17:00:00.000Z',
+      endsAt: '2026-10-06T18:00:00.000Z',
+      calendarId: 'cal-a',
+      contactId: 'c-1',
+      notifyPatient: true,
+    })
+
+    expect(res).toEqual({ error: null, confirmacao: 'enviada' })
+    expect(h.confirmar).toHaveBeenCalledTimes(1)
+    expect(h.confirmar).toHaveBeenCalledWith({
+      accountId: 'acc-1',
+      eventId: 'ev-1',
+      tipo: 'remarcacao',
+      conversationId: null,
+    })
+  })
+
+  it('mudar o horário com a caixa desmarcada: nada sai', async () => {
+    h.state.results.push([ANTES_COM_PACIENTE], AGENDA_LOCAL, [{ id: 'c-1' }])
+
+    await updateEvent('ev-1', {
+      ...INPUT,
+      startsAt: '2026-10-06T17:00:00.000Z',
+      calendarId: 'cal-a',
+      contactId: 'c-1',
+      notifyPatient: false,
+    })
+
+    expect(h.confirmar).not.toHaveBeenCalled()
+  })
+
+  it('ligar o paciente num compromisso que não tinha: é marcação para ele', async () => {
+    h.state.results.push([{ ...ANTES_COM_PACIENTE, contactId: null }], AGENDA_LOCAL, [{ id: 'c-1' }])
+
+    await updateEvent('ev-1', {
+      ...INPUT,
+      calendarId: 'cal-a',
+      contactId: 'c-1',
+      notifyPatient: true,
+    })
+
+    expect(h.confirmar).toHaveBeenCalledWith(expect.objectContaining({ tipo: 'marcacao' }))
+  })
+
+  it('trocar de agenda (outro profissional): remarcação', async () => {
+    h.state.results.push([ANTES_COM_PACIENTE], AGENDA_LOCAL, [{ id: 'c-1' }])
+
+    await updateEvent('ev-1', {
+      ...INPUT,
+      calendarId: 'cal-b',
+      contactId: 'c-1',
+      notifyPatient: true,
+    })
+
+    expect(h.confirmar).toHaveBeenCalledWith(expect.objectContaining({ tipo: 'remarcacao' }))
+  })
+
+  it('o salvar falhou: nenhuma confirmação sai', async () => {
+    h.state.results.push([ANTES_COM_PACIENTE], AGENDA_LOCAL, [{ id: 'c-1' }])
+    h.state.updateFalha = true
+
+    const res = await updateEvent('ev-1', {
+      ...INPUT,
+      startsAt: '2026-10-06T17:00:00.000Z',
+      calendarId: 'cal-a',
+      contactId: 'c-1',
+      notifyPatient: true,
+    })
+
+    expect(res.error).toBeTruthy()
+    expect(h.confirmar).not.toHaveBeenCalled()
   })
 })

@@ -2189,10 +2189,12 @@ export function MessageThread({
           {/* 30/09 (Rafael: "a ideia é marcar tudo pelo CRM"). Marcar daqui leva
               a pessoa junto, e é o vínculo com o contato que faz o lembrete de
               consulta sair — marcar na agenda "na mão", sem contato, agenda em
-              silêncio. Em grupo não aparece: não há uma pessoa pra confirmar. */}
+              silêncio. Em grupo não aparece: não há uma pessoa pra confirmar.
+              01/10: leva também a conversa — a confirmação ao paciente (Agenda)
+              sai por ESTA conversa, não por outra do mesmo contato. */}
           {contact?.id && !isGroupConversation && (
             <Link
-              href={`/agenda?contato=${contact.id}`}
+              href={`/agenda?contato=${contact.id}${conversation?.id ? `&conversa=${conversation.id}` : ""}`}
               className="inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted"
               title={`Marcar compromisso com ${contact.name || "este contato"}`}
             >

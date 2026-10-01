@@ -146,6 +146,13 @@ export interface SendMessageParams {
    * (`temp-…`). Essa aba não recarrega o thread; os colegas sim (01/10).
    */
   skipRealtimeNudge?: boolean;
+  /**
+   * Quem "fala" na mensagem gravada. Padrão 'agent' (atendente). 'bot' é para
+   * mensagem automática que ninguém digitou — a confirmação da Agenda (01/10):
+   * como 'agent', a IA leria um atendente respondendo (barge-in) e o fluxo
+   * ativo do contato seria pausado. É como o lembrete de consulta já grava.
+   */
+  senderType?: 'agent' | 'bot';
 }
 
 export interface SendMessageResult {
@@ -775,7 +782,7 @@ export async function sendMessageToConversation(
         .insert(messages)
         .values({
           conversationId,
-          senderType: 'agent',
+          senderType: params.senderType === 'bot' ? 'bot' : 'agent',
           contentType: messageType,
           contentText: storedText || null,
           mediaUrl: mediaUrl || null,
@@ -840,26 +847,29 @@ export async function sendMessageToConversation(
 
   // Pause any active Flow run for this contact — the agent stepping in
   // is the strongest "yield, human is here" signal. Best-effort.
-  try {
-    await db
-      .update(flowRuns)
-      .set({
-        status: 'paused_by_agent',
-        endedAt: new Date().toISOString(),
-        endReason: 'agent_replied',
-      })
-      .where(
-        and(
-          eq(flowRuns.accountId, accountId),
-          eq(flowRuns.contactId, contact.id),
-          eq(flowRuns.status, 'active')
-        )
+  // Mensagem automática ('bot') não é atendente entrando: o fluxo segue.
+  if (params.senderType !== 'bot') {
+    try {
+      await db
+        .update(flowRuns)
+        .set({
+          status: 'paused_by_agent',
+          endedAt: new Date().toISOString(),
+          endReason: 'agent_replied',
+        })
+        .where(
+          and(
+            eq(flowRuns.accountId, accountId),
+            eq(flowRuns.contactId, contact.id),
+            eq(flowRuns.status, 'active')
+          )
+        );
+    } catch (err) {
+      console.error(
+        '[flows] pause-on-agent-send failed:',
+        err instanceof Error ? err.message : err
       );
-  } catch (err) {
-    console.error(
-      '[flows] pause-on-agent-send failed:',
-      err instanceof Error ? err.message : err
-    );
+    }
   }
 
   // 01/10: o que sai por aqui sem ninguém digitando (lembrete de consulta,
