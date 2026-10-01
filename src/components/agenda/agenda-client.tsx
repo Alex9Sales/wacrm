@@ -34,31 +34,25 @@ import {
 } from '@/app/(dashboard)/agenda/actions'
 import { inkOn } from '@/lib/ui/ink-on'
 import { cn } from '@/lib/utils'
+import {
+  WEEKDAYS,
+  addDays,
+  isSameDay,
+  layoutDayEvents,
+  monthGrid,
+  pad,
+  parseDateInput,
+  parseLocalInput,
+  scheduleError,
+  shiftEndWithStart,
+  startOfDay,
+  toDateInput,
+  toLocalInput,
+  weekDays,
+  weekRangeLabel,
+} from './agenda-dates'
 
-const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
-
-const pad = (n: number) => String(n).padStart(2, '0')
-const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
-const isSameDay = (a: Date, b: Date) =>
-  a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
-
-function toLocalInput(d: Date): string {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-function toDateInput(d: Date): string {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-}
-
-function monthGrid(anchor: Date): Date[] {
-  const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1)
-  const start = new Date(first)
-  start.setDate(1 - first.getDay()) // volta até o domingo
-  return Array.from({ length: 42 }, (_, i) => {
-    const d = new Date(start)
-    d.setDate(start.getDate() + i)
-    return d
-  })
-}
+type View = 'month' | 'week' | 'day'
 
 type Draft = {
   id: string | null
@@ -90,14 +84,16 @@ export function AgendaClient() {
   const [saving, setSaving] = useState(false)
   const [google, setGoogle] = useState<GoogleStatus | null>(null)
   const [syncing, setSyncing] = useState(false)
-  const [view, setView] = useState<'month' | 'day'>('month')
+  const [view, setView] = useState<View>('month')
   /** Ver só UMA agenda (id) ou todas (null). Escolha da sessão, não é salva. */
   const [calendarFilter, setCalendarFilter] = useState<string | null>(null)
+  /** Dia em foco nas visões Dia e Semana (a Semana mostra a semana dele). */
   const [dayDate, setDayDate] = useState<Date>(() => new Date())
   const viewRef = useRef(view)
   viewRef.current = view
 
   const grid = useMemo(() => monthGrid(anchor), [anchor])
+  const week = useMemo(() => weekDays(dayDate), [dayDate])
   const today = useMemo(() => new Date(), [])
 
   const load = useCallback(async () => {
@@ -156,10 +152,10 @@ export function AgendaClient() {
     }
   }, [google?.connected, autoSync])
 
-  // Voltar do navegador na visão de Dia retorna pro Mês (em vez de sair da página).
+  // Voltar do navegador no Dia ou na Semana retorna pro Mês (em vez de sair da página).
   useEffect(() => {
     const onPop = () => {
-      if (viewRef.current === 'day') setView('month')
+      if (viewRef.current !== 'month') setView('month')
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
@@ -303,6 +299,8 @@ export function AgendaClient() {
 
   const save = async () => {
     if (!draft || !draft.title.trim()) return
+    // O botão já fica desligado e o erro aparece no formulário; isto é a trava.
+    if (scheduleError(draft.start, draft.end, draft.allDay)) return
     setSaving(true)
     try {
       let startsAt: string
@@ -329,7 +327,7 @@ export function AgendaClient() {
       if (draft.id) await updateEvent(draft.id, payload)
       else await createEvent(payload)
       setDraft(null)
-      if (viewRef.current === 'day') setDayDate(eventDate)
+      if (viewRef.current !== 'month') setDayDate(eventDate)
       const sameMonth =
         eventDate.getMonth() === anchor.getMonth() &&
         eventDate.getFullYear() === anchor.getFullYear()
@@ -370,74 +368,86 @@ export function AgendaClient() {
 
   const monthLabel = anchor.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
 
-  // Abre a visão de Dia (e garante que o mês carregado cobre esse dia).
-  const openDay = (day: Date) => {
+  // Abre a visão de Dia ou de Semana focada em `day`. O carregamento é o do
+  // mês do dia focado: a grade de 42 dias desse mês sempre contém a semana
+  // inteira dele (testado em agenda-dates.test.ts), então basta trocar o mês.
+  const openTimeView = (next: 'day' | 'week', day: Date) => {
     setDayDate(day)
     if (day.getMonth() !== anchor.getMonth() || day.getFullYear() !== anchor.getFullYear()) {
       setAnchor(new Date(day.getFullYear(), day.getMonth(), 1))
     }
-    // Empilha 1x ao entrar no Dia (não a cada troca de dia) → back volta pro Mês.
-    if (viewRef.current !== 'day') window.history.pushState({ agendaDay: true }, '')
-    setView('day')
+    // Empilha 1x ao SAIR do Mês (trocar Dia↔Semana ou de dia não empilha) →
+    // o voltar do navegador sempre leva de volta pro Mês.
+    if (viewRef.current === 'month') window.history.pushState({ agendaView: true }, '')
+    setView(next)
   }
+  const openDay = (day: Date) => openTimeView('day', day)
+  const openWeek = (day: Date) => openTimeView('week', day)
   const backToMonth = () => {
-    if (view === 'day') window.history.back()
+    if (view !== 'month') window.history.back()
     else setView('month')
   }
-  const shiftDay = (delta: number) => {
-    const d = new Date(dayDate)
-    d.setDate(d.getDate() + delta)
-    openDay(d)
+  const shift = (delta: number) => {
+    if (view === 'month') setAnchor(new Date(anchor.getFullYear(), anchor.getMonth() + delta, 1))
+    else openTimeView(view, addDays(dayDate, view === 'week' ? 7 * delta : delta))
   }
-  const navPrev = () =>
-    view === 'month'
-      ? setAnchor(new Date(anchor.getFullYear(), anchor.getMonth() - 1, 1))
-      : shiftDay(-1)
-  const navNext = () =>
-    view === 'month'
-      ? setAnchor(new Date(anchor.getFullYear(), anchor.getMonth() + 1, 1))
-      : shiftDay(1)
   const navToday = () => {
     const now = new Date()
     if (view === 'month') setAnchor(now)
-    else openDay(now)
+    else openTimeView(view, now)
   }
   const headerLabel =
     view === 'month'
       ? monthLabel
-      : dayDate.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
+      : view === 'week'
+        ? weekRangeLabel(dayDate)
+        : dayDate.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
+  const viewButton = (active: boolean) =>
+    cn(
+      'px-3 py-1 text-xs font-medium',
+      active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted',
+    )
 
   return (
     <div className="flex flex-col gap-4">
       {/* Barra de navegação */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-1">
-          <Button variant="outline" size="sm" onClick={navPrev} aria-label="Anterior">
+          <Button variant="outline" size="sm" onClick={() => shift(-1)} aria-label="Anterior">
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <Button variant="outline" size="sm" onClick={navToday}>
             Hoje
           </Button>
-          <Button variant="outline" size="sm" onClick={navNext} aria-label="Próximo">
+          <Button variant="outline" size="sm" onClick={() => shift(1)} aria-label="Próximo">
             <ChevronRight className="h-4 w-4" />
           </Button>
         </div>
-        <h2 className="font-heading text-lg font-semibold capitalize text-foreground">
+        <h2
+          className={cn(
+            'font-heading text-lg font-semibold text-foreground',
+            view !== 'week' && 'capitalize',
+          )}
+        >
           {headerLabel}
         </h2>
-        {/* Alternância Mês / Dia */}
+        {/* Alternância Mês / Semana / Dia. 01/10: a clínica pediu a Semana para
+            ver a semana toda de uma vez, com as agendas dos profissionais. */}
         <div className="flex overflow-hidden rounded-lg ring-1 ring-border">
-          <button
-            type="button"
-            onClick={backToMonth}
-            className={`px-3 py-1 text-xs font-medium ${view === 'month' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}
-          >
+          <button type="button" onClick={backToMonth} className={viewButton(view === 'month')}>
             Mês
           </button>
           <button
             type="button"
+            onClick={() => openWeek(view === 'month' ? new Date() : dayDate)}
+            className={viewButton(view === 'week')}
+          >
+            Semana
+          </button>
+          <button
+            type="button"
             onClick={() => openDay(view === 'month' ? new Date() : dayDate)}
-            className={`px-3 py-1 text-xs font-medium ${view === 'day' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}
+            className={viewButton(view === 'day')}
           >
             Dia
           </button>
@@ -608,13 +618,15 @@ export function AgendaClient() {
       </div>
       )}
 
-      {/* Visão de dia (horários) */}
-      {view === 'day' && (
-        <DayView
-          date={dayDate}
-          events={eventsForDay(dayDate)}
-          onNewAt={(hour) => openNew(dayDate, hour)}
+      {/* Visões de dia e de semana (grade de horários) */}
+      {view !== 'month' && (
+        <TimeGrid
+          days={view === 'week' ? week : [dayDate]}
+          today={today}
+          eventsForDay={eventsForDay}
+          onNewAt={openNew}
           onEdit={openEdit}
+          onOpenDay={openDay}
         />
       )}
 
@@ -637,105 +649,217 @@ export function AgendaClient() {
   )
 }
 
-function DayView({
-  date,
-  events,
+const HOUR_H = 48
+
+/** O que aparece ao passar o mouse num compromisso da grade de horas. */
+function eventTooltip(ev: EventRow): string {
+  return ev.reminderBlock
+    ? `${ev.title}${ev.contactName ? ` — ${ev.contactName}` : ''}: ${avisoNaAgenda(ev.reminderBlock)}`
+    : ev.contactName
+      ? `${ev.title} — ${ev.contactName} (recebe a confirmação)`
+      : `${ev.title} — sem cliente/paciente: ninguém é avisado`
+}
+
+/**
+ * Grade de horas das visões Dia (1 coluna) e Semana (7 colunas).
+ * Uma rolagem só, nos dois sentidos: no celular a Semana rola de lado DENTRO
+ * da grade (a página não), com a coluna das horas e o cabeçalho dos dias
+ * grudados na borda.
+ */
+function TimeGrid({
+  days,
+  today,
+  eventsForDay,
   onNewAt,
   onEdit,
+  onOpenDay,
 }: {
-  date: Date
-  events: EventRow[]
-  onNewAt: (hour: number) => void
+  days: Date[]
+  today: Date
+  eventsForDay: (day: Date) => EventRow[]
+  onNewAt: (day: Date, hour: number) => void
   onEdit: (ev: EventRow) => void
+  /** Semana: clicar no cabeçalho (ou no "+N") abre aquele dia. */
+  onOpenDay: (day: Date) => void
 }) {
-  const HOUR_H = 48
+  const isWeek = days.length > 1
   const scrollRef = useRef<HTMLDivElement>(null)
+  const firstDay = days[0].getTime()
   // Abre já no horário comercial (~7h) em vez da meia-noite.
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 7 * HOUR_H
-  }, [date])
+  }, [firstDay, days.length])
 
-  const allDay = events.filter((e) => e.allDay)
-  const timed = events.filter((e) => !e.allDay)
+  const columns = days.map((day) => {
+    const evs = eventsForDay(day)
+    return {
+      day,
+      allDay: evs.filter((e) => e.allDay),
+      slots: layoutDayEvents(
+        evs.filter((e) => !e.allDay),
+        day,
+      ),
+    }
+  })
+  const hasAllDay = columns.some((c) => c.allDay.length > 0)
 
   return (
     <div className="overflow-hidden rounded-xl ring-1 ring-foreground/10">
-      {allDay.length > 0 && (
-        <div className="flex flex-wrap gap-1 border-b border-border bg-muted/20 p-2">
-          {allDay.map((ev) => (
-            <span
-              key={ev.id}
-              onClick={() => onEdit(ev)}
-              className="cursor-pointer truncate rounded px-2 py-0.5 text-xs font-medium"
-              style={{ background: ev.calendarColor, color: inkOn(ev.calendarColor) }}
-              title={ev.title}
-            >
-              {ev.title}
-            </span>
-          ))}
-        </div>
-      )}
-      <div ref={scrollRef} className="max-h-[560px] overflow-y-auto">
-        <div className="relative" style={{ height: 24 * HOUR_H }}>
-          {/* faixas de hora (clique cria evento naquele horário) */}
-          {Array.from({ length: 24 }, (_, h) => (
-            <button
-              key={h}
-              type="button"
-              onClick={() => onNewAt(h)}
-              className="absolute inset-x-0 border-b border-border/50 transition-colors hover:bg-muted/40"
-              style={{ top: h * HOUR_H, height: HOUR_H }}
-              aria-label={`Criar às ${pad(h)}:00`}
-            >
-              <span className="absolute left-1.5 top-0.5 text-[11px] tabular-nums text-muted-foreground">
-                {pad(h)}:00
-              </span>
-            </button>
-          ))}
-          {/* eventos posicionados por horário */}
-          {timed.map((ev) => {
-            const s = new Date(ev.startsAt)
-            const e = new Date(ev.endsAt)
-            const startH = s.getHours() + s.getMinutes() / 60
-            const durH = Math.max(0.5, (e.getTime() - s.getTime()) / 3_600_000)
-            return (
-              <div
-                key={ev.id}
-                onClick={() => onEdit(ev)}
-                className="absolute left-14 right-2 cursor-pointer overflow-hidden rounded-md px-2 py-1 text-xs shadow-sm"
-                style={{
-                  top: startH * HOUR_H + 1,
-                  height: Math.max(20, durH * HOUR_H - 2),
-                  background: ev.calendarColor,
-                  color: inkOn(ev.calendarColor),
-                }}
-                title={
-                  ev.reminderBlock
-                    ? `${ev.title}${ev.contactName ? ` — ${ev.contactName}` : ''}: ${avisoNaAgenda(ev.reminderBlock)}`
-                    : ev.contactName
-                      ? `${ev.title} — ${ev.contactName} (recebe a confirmação)`
-                      : `${ev.title} — sem cliente/paciente: ninguém é avisado`
-                }
-              >
-                {/* Fora do bloco do nome de propósito: uma consulta de 30 min é
-                    baixa demais para mostrar o nome, e era justamente nela que
-                    o alerta sumia. O aviso não pode depender da duração. */}
-                {ev.reminderBlock && <AlertTriangle className="mr-1 inline h-3 w-3" />}
-                <span className="font-medium tabular-nums">
-                  {pad(s.getHours())}:{pad(s.getMinutes())}
-                </span>{' '}
-                {ev.title}
-                {/* Com quem é o compromisso, quando há altura pra mostrar. Quem
-                    olha a agenda quer ver a PESSOA, não só o título. */}
-                {ev.contactName && durH >= 0.75 && (
-                  <div className="truncate opacity-80">
-                    <User className="mr-1 inline h-3 w-3" />
-                    {ev.contactName}
+      <div ref={scrollRef} className="max-h-[560px] overflow-auto bg-card">
+        <div className={isWeek ? 'min-w-[728px]' : undefined}>
+          {(isWeek || hasAllDay) && (
+            <div className="sticky top-0 z-20 border-b border-border bg-card">
+              {isWeek && (
+                <div className="flex">
+                  <div className="sticky left-0 z-10 w-14 shrink-0 bg-card" />
+                  {days.map((day) => {
+                    const isToday = isSameDay(day, today)
+                    return (
+                      <button
+                        key={day.getTime()}
+                        type="button"
+                        onClick={() => onOpenDay(day)}
+                        title={`Abrir ${day.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}`}
+                        className="flex min-w-0 flex-1 flex-col items-center gap-0.5 border-l border-border/50 py-1.5 transition-colors hover:bg-muted/40"
+                      >
+                        <span
+                          className={cn(
+                            'text-[11px] font-medium',
+                            isToday ? 'text-primary' : 'text-muted-foreground',
+                          )}
+                        >
+                          {WEEKDAYS[day.getDay()]}
+                        </span>
+                        <span
+                          className={cn(
+                            'inline-flex h-7 w-7 items-center justify-center rounded-full text-sm tabular-nums',
+                            isToday ? 'bg-primary font-semibold text-primary-foreground' : 'text-foreground',
+                          )}
+                        >
+                          {day.getDate()}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+              {hasAllDay && (
+                <div className={cn('flex', isWeek && 'border-t border-border/50')}>
+                  <div className="sticky left-0 z-10 flex w-14 shrink-0 items-center bg-card px-1.5 text-[10px] leading-tight text-muted-foreground">
+                    dia todo
                   </div>
+                  {columns.map(({ day, allDay }) => (
+                    <div
+                      key={day.getTime()}
+                      className={cn(
+                        'flex min-w-0 flex-1 gap-1 border-l border-border/50 p-1',
+                        isWeek ? 'flex-col' : 'flex-wrap',
+                      )}
+                    >
+                      {(isWeek ? allDay.slice(0, 3) : allDay).map((ev) => (
+                        <button
+                          key={ev.id}
+                          type="button"
+                          onClick={() => onEdit(ev)}
+                          className="max-w-full truncate rounded px-2 py-0.5 text-left text-xs font-medium"
+                          style={{ background: ev.calendarColor, color: inkOn(ev.calendarColor) }}
+                          title={ev.title}
+                        >
+                          {ev.title}
+                        </button>
+                      ))}
+                      {isWeek && allDay.length > 3 && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenDay(day)}
+                          className="px-1 text-left text-[11px] text-muted-foreground hover:text-foreground"
+                        >
+                          +{allDay.length - 3} mais
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex" style={{ height: 24 * HOUR_H }}>
+            {/* coluna das horas */}
+            <div className="sticky left-0 z-10 w-14 shrink-0 bg-card">
+              {Array.from({ length: 24 }, (_, h) => (
+                <span
+                  key={h}
+                  className="absolute left-1.5 text-[11px] tabular-nums text-muted-foreground"
+                  style={{ top: h * HOUR_H + 2 }}
+                >
+                  {pad(h)}:00
+                </span>
+              ))}
+            </div>
+            {columns.map(({ day, slots }) => (
+              <div
+                key={day.getTime()}
+                className={cn(
+                  'relative min-w-0 flex-1 border-l border-border/50',
+                  isWeek && isSameDay(day, today) && 'bg-primary/5',
                 )}
+              >
+                {/* faixas de hora (clique cria evento naquele dia e horário) */}
+                {Array.from({ length: 24 }, (_, h) => (
+                  <button
+                    key={h}
+                    type="button"
+                    onClick={() => onNewAt(day, h)}
+                    className="absolute inset-x-0 border-b border-border/50 transition-colors hover:bg-muted/40"
+                    style={{ top: h * HOUR_H, height: HOUR_H }}
+                    aria-label={`Criar ${isWeek ? `${WEEKDAYS[day.getDay()]} ${day.getDate()} ` : ''}às ${pad(h)}:00`}
+                  />
+                ))}
+                {/* eventos posicionados por horário; quem se sobrepõe divide a largura */}
+                {slots.map(({ event: ev, startMin, endMin, col, cols }) => {
+                  const s = new Date(ev.startsAt)
+                  const durMin = Math.max(30, endMin - startMin)
+                  return (
+                    <div
+                      key={ev.id}
+                      onClick={() => onEdit(ev)}
+                      className={cn(
+                        'absolute cursor-pointer overflow-hidden rounded-md shadow-sm',
+                        isWeek ? 'px-1.5 py-0.5 text-[11px] leading-tight' : 'px-2 py-1 text-xs',
+                      )}
+                      style={{
+                        top: (startMin / 60) * HOUR_H + 1,
+                        height: Math.max(20, (durMin / 60) * HOUR_H - 2),
+                        left: `calc(${(col / cols) * 100}% + 2px)`,
+                        width: `calc(${100 / cols}% - 4px)`,
+                        background: ev.calendarColor,
+                        color: inkOn(ev.calendarColor),
+                      }}
+                      title={eventTooltip(ev)}
+                    >
+                      {/* Fora do bloco do nome de propósito: uma consulta de 30 min é
+                          baixa demais para mostrar o nome, e era justamente nela que
+                          o alerta sumia. O aviso não pode depender da duração. */}
+                      {ev.reminderBlock && <AlertTriangle className="mr-1 inline h-3 w-3" />}
+                      <span className="font-medium tabular-nums">
+                        {pad(s.getHours())}:{pad(s.getMinutes())}
+                      </span>{' '}
+                      {ev.title}
+                      {/* Com quem é o compromisso, quando há altura pra mostrar. Quem
+                          olha a agenda quer ver a PESSOA, não só o título. */}
+                      {ev.contactName && durMin >= 45 && (
+                        <div className="truncate opacity-80">
+                          <User className="mr-1 inline h-3 w-3" />
+                          {ev.contactName}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
-            )
-          })}
+            ))}
+          </div>
         </div>
       </div>
     </div>
@@ -761,6 +885,18 @@ function EventModal({
   onDelete: () => void
   onClose: () => void
 }) {
+  // Mudou o início → o fim anda junto, com a mesma duração (shiftEndWithStart).
+  // O campo devolve "" enquanto a pessoa digita a data; guarda o último
+  // início válido para a duração não se perder no meio da digitação.
+  const lastValidStart = useRef(draft.start)
+  const parseStart = draft.allDay ? parseDateInput : parseLocalInput
+  const changeStart = (value: string) => {
+    const prev = parseStart(draft.start) ? draft.start : lastValidStart.current
+    if (parseStart(value)) lastValidStart.current = value
+    setDraft({ ...draft, start: value, end: shiftEndWithStart(prev, draft.end, value, draft.allDay) })
+  }
+  const timeError = scheduleError(draft.start, draft.end, draft.allDay)
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
@@ -877,7 +1013,10 @@ function EventModal({
               <input
                 type={draft.allDay ? 'date' : 'datetime-local'}
                 value={draft.start}
-                onChange={(e) => setDraft({ ...draft, start: e.target.value })}
+                onFocus={() => {
+                  if (parseStart(draft.start)) lastValidStart.current = draft.start
+                }}
+                onChange={(e) => changeStart(e.target.value)}
                 className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
               />
             </div>
@@ -886,11 +1025,24 @@ function EventModal({
               <input
                 type={draft.allDay ? 'date' : 'datetime-local'}
                 value={draft.end}
+                min={draft.start || undefined}
+                aria-invalid={timeError ? true : undefined}
                 onChange={(e) => setDraft({ ...draft, end: e.target.value })}
-                className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
+                className={cn(
+                  'h-9 w-full rounded-md border border-border bg-background px-2 text-sm',
+                  timeError && 'border-destructive',
+                )}
               />
             </div>
           </div>
+          {/* No lugar, e não num toast que some: sem isso o Salvar só fica
+              cinza e ninguém sabe por quê. */}
+          {timeError && (
+            <p role="alert" className="-mt-1 flex items-start gap-1 text-xs text-destructive">
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+              {timeError}
+            </p>
+          )}
 
           <div>
             <Label className="mb-1 block text-xs">
@@ -927,7 +1079,7 @@ function EventModal({
             <Button variant="outline" onClick={onClose} disabled={saving}>
               Cancelar
             </Button>
-            <Button onClick={onSave} disabled={saving || !draft.title.trim()}>
+            <Button onClick={onSave} disabled={saving || !draft.title.trim() || !!timeError}>
               {saving ? 'Salvando…' : 'Salvar'}
             </Button>
           </div>
