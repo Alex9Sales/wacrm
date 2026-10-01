@@ -355,8 +355,15 @@ export function scheduleInstruction(opts: { approval?: boolean; busySlots?: stri
     : 'Confirm the agreed day and time ONCE, in the SAME reply where you schedule it. After it is scheduled, do NOT restate the full appointment confirmation again in later messages (the meeting is already booked in the history) — a brief mention is fine, but never re-send the whole "confirmed for <day> at <time>" block again unless the customer explicitly asks to change or reconfirm it.'
   // 17/09 (Limpeza com Zelo): sem enxergar a agenda, a IA oferecia horário que
   // já tinha reunião. undefined = não consultado (texto de sempre).
+  // ⚠️ A lista ÚNICA só vale quando a conta tem UMA agenda. Com várias, ela
+  // mente: achata os profissionais todos e transforma o bloqueio de expediente
+  // de um dentista em "a clínica está ocupada". Na clínica da Dra. Joyce a
+  // lista começava com "30/09 00:00–23:59", "06:15–23:00", "05:30–22:00" — e a
+  // instrução manda nunca oferecer nada que bata com aquilo. Obedecendo, não
+  // existe um horário livre em 14 dias, e a IA diz não para todo paciente.
+  // Quando há o bloco por profissional, ele é a única fonte de verdade.
   const busy =
-    opts.busySlots === undefined
+    opts.agendasDaEquipe || opts.busySlots === undefined
       ? ''
       : opts.busySlots.length
         ? ` Times ALREADY BOOKED in the calendar (next days, business timezone) — never offer, accept or book a time that overlaps any of these; offer other times instead: ${opts.busySlots.join('; ')}.`
