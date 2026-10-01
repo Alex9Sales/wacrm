@@ -6,7 +6,7 @@
 // comercial. As regras moram em suspension.ts; aqui é só banco e Asaas.
 //
 // Três portas antes de trancar alguém:
-//   1. calendário (decideCalendario): ativo, ligado ao Asaas, 6º dia de atraso;
+//   1. calendário (decideCalendario): ativo, ligado ao Asaas, já venceu;
 //   2. Asaas (situacaoDaCobranca): existe cobrança VENCIDA naquele vínculo;
 //   3. compare-and-swap: só suspende quem AINDA está ativo — se o webhook do
 //      pagamento chegou um segundo antes, o UPDATE não pega ninguém.
@@ -22,7 +22,6 @@ import { and, eq, isNotNull, isNull, lt, or, sql } from 'drizzle-orm'
 import { db, billingEvents, organization, organizationBilling } from '@/db'
 import { decideCalendario, decideComAsaas, DIAS_DE_TOLERANCIA } from './suspension'
 import { canSendNow } from './reminders'
-import { dueKey, stepsFor } from './reminder-run'
 
 export type SuspensionResult = {
   candidatas: number
@@ -44,9 +43,9 @@ export async function runBillingSuspensions(now = new Date()): Promise<Suspensio
   // boleto pago na véspera ganha a manhã para compensar.
   if (!canSendNow(now)) return result
 
-  // Pré-filtro barato e GENEROSO no SQL (um dia a menos que a tolerância): a
-  // conta exata, no fuso de SP, é de decideCalendario. Aqui só não traz quem
-  // obviamente não está em atraso.
+  // Pré-filtro barato e GENEROSO no SQL (vencimento até amanhã): a conta
+  // exata, no fuso de SP, é de decideCalendario. Aqui só não traz quem
+  // obviamente ainda não venceu.
   const corte = new Date(now.getTime() - (DIAS_DE_TOLERANCIA - 1) * 86_400_000).toISOString()
   let rows: {
     orgId: string
@@ -57,7 +56,6 @@ export async function runBillingSuspensions(now = new Date()): Promise<Suspensio
     deletedAt: string | null
     asaasSubscriptionId: string | null
     asaasPaymentId: string | null
-    remindersSent: unknown
     suspendReason: string | null
     suspendedAt: string | null
   }[]
@@ -72,7 +70,6 @@ export async function runBillingSuspensions(now = new Date()): Promise<Suspensio
         deletedAt: organizationBilling.deletedAt,
         asaasSubscriptionId: organizationBilling.asaasSubscriptionId,
         asaasPaymentId: organizationBilling.asaasPaymentId,
-        remindersSent: organizationBilling.remindersSent,
         suspendReason: organizationBilling.suspendReason,
         suspendedAt: organizationBilling.suspendedAt,
       })
@@ -97,19 +94,8 @@ export async function runBillingSuspensions(now = new Date()): Promise<Suspensio
   }
 
   for (const row of rows) {
-    const cal = decideCalendario(
-      {
-        ...row,
-        avisoEmAbertoEnviado: row.dueAt
-          ? stepsFor(row.remindersSent, dueKey(row.dueAt)).includes(3)
-          : false,
-      },
-      now,
-    )
-    if (!cal.suspender) {
-      if (cal.motivo.includes('aviso')) console.warn(`[billing-suspensions] "${row.name}": ${cal.motivo}`)
-      continue
-    }
+    const cal = decideCalendario(row, now)
+    if (!cal.suspender) continue
     result.candidatas++
 
     try {

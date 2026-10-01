@@ -1,18 +1,20 @@
 // ============================================================
 // 🔒 Trava por inadimplência — as regras, sem banco e sem Asaas.
 //
-// 30/09/2026. O Alex pediu: "não pagou, passou de 5 dias após o vencimento,
-// suspende o acesso à conta e só libera após o pagamento; feito o pagamento,
-// já libera."
+// 30/09/2026. A regra é a do Rafael, que o Alex confirmou: "venceu, não
+// debitou, tchau". Não há dias de tolerância: venceu e não pagou, no dia
+// seguinte a conta é suspensa, e a tela mostra como regularizar e o contato do
+// time. Pagou → libera sozinho.
 //
-// "Passou de 5 dias" = o 6º dia de atraso. Vencimento numa quinta (01/10)
-// suspende na quarta seguinte (07/10). Os dias 1 a 5 são tolerância — é neles
-// que sai o aviso de "em aberto" (degrau +3 com folga até o 5º dia, ver
-// reminders.ts), para ninguém ser trancado sem ter sido avisado.
+// (A primeira versão dava 5 dias de tolerância. O Alex abortou: tolerância é o
+// que ensina o cliente a atrasar.)
+//
+// "Venceu" = passou o dia do vencimento. Vencimento numa terça (30/09) suspende
+// na quarta (01/10) — no horário comercial, ver suspension-run.ts.
 //
 // ⚠️ A data é a de São Paulo, não a de UTC. A rotina roda de hora em hora; às
-// 22h de terça em Brasília já é quarta em UTC, e uma conta em UTC suspenderia
-// um dia antes do combinado.
+// 22h do dia do vencimento em Brasília já é o dia seguinte em UTC, e uma conta
+// em UTC suspenderia a pessoa no próprio dia em que a fatura vence.
 //
 // Esta camada só decide pelo CALENDÁRIO. Quem suspende de verdade é
 // suspension-run.ts, e só depois de confirmar no Asaas que a cobrança daquele
@@ -20,8 +22,12 @@
 // relação ao pagamento (webhook perdido, boleto compensando).
 // ============================================================
 
-/** Dias de tolerância depois do vencimento. Suspende no dia seguinte a eles. */
-export const DIAS_DE_TOLERANCIA = 5
+/**
+ * Dias de tolerância depois do vencimento. ZERO: venceu, no dia seguinte
+ * suspende. Ficou como constante porque a regra é de negócio e pode mudar —
+ * os testes descrevem o comportamento em função dela.
+ */
+export const DIAS_DE_TOLERANCIA = 0
 
 /** Fuso em que "o dia" é contado. A operação é brasileira. */
 export const FUSO_DA_TRAVA = 'America/Sao_Paulo'
@@ -64,13 +70,6 @@ export type CandidatoTrava = {
   /** Vínculo com o Asaas: sem ele não há como confirmar a dívida. */
   asaasSubscriptionId: string | null
   asaasPaymentId: string | null
-  /**
-   * O aviso de "em aberto" (degrau +3) DESTE vencimento já saiu? Sem ele, não
-   * tranca: ninguém é suspenso sem ter sido avisado de que estava em atraso.
-   * Conta sem telefone de cobrança nunca recebe o +3 — e por isso nunca é
-   * suspensa sozinha; fica no log para alguém olhar.
-   */
-  avisoEmAbertoEnviado: boolean
 }
 
 export type DecisaoCalendario =
@@ -99,9 +98,6 @@ export function decideCalendario(c: CandidatoTrava, agora: Date): DecisaoCalenda
   const dias = diasDeAtraso(c.dueAt, agora)
   if (Number.isNaN(dias)) return { suspender: false, motivo: 'vencimento inválido' }
   if (dias <= DIAS_DE_TOLERANCIA) return { suspender: false, motivo: `${dias} dia(s) de atraso` }
-  if (!c.avisoEmAbertoEnviado) {
-    return { suspender: false, motivo: `${dias} dias de atraso, mas o aviso de "em aberto" não saiu — não tranco sem avisar` }
-  }
   return { suspender: true, diasDeAtraso: dias }
 }
 

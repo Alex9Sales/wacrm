@@ -14,7 +14,7 @@ import { dueStep, type ReminderCandidate } from './reminders'
  * quem não deve, idem. Quase todo caso aqui é sobre NÃO suspender.
  */
 
-// Vencimento real do João (GoLink): quinta-feira, 01/10/2026.
+// Vencimento de exemplo: quinta-feira, 01/10/2026.
 const VENC_MEIO_DIA = '2026-10-01T12:00:00Z' // como a assinatura grava
 const VENC_MEIA_NOITE = '2026-10-01T00:00:00Z' // como o PATCH do /admin grava
 
@@ -28,7 +28,6 @@ const ATIVA: CandidatoTrava = {
   deletedAt: null,
   asaasSubscriptionId: 'sub_123',
   asaasPaymentId: null,
-  avisoEmAbertoEnviado: true,
 }
 
 describe('contar os dias de atraso', () => {
@@ -60,11 +59,17 @@ describe('contar os dias de atraso', () => {
 })
 
 describe('pelo calendário: entrou na zona de suspensão?', () => {
-  it('"passou de 5 dias" = suspende no 6º dia, nunca antes', () => {
-    // Vence quinta 01/10 → tolerância até terça 06/10 → suspende quarta 07/10.
-    expect(decideCalendario(ATIVA, sp('2026-10-06T17:00:00')).suspender).toBe(false)
-    expect(decideCalendario(ATIVA, sp('2026-10-06T23:59:00')).suspender).toBe(false)
-    expect(decideCalendario(ATIVA, sp('2026-10-07T00:30:00')).suspender).toBe(true)
+  it('"venceu, não pagou, bloqueia": no DIA SEGUINTE ao vencimento, nunca no próprio dia', () => {
+    // Vence quinta 01/10 → a quinta inteira ainda é dia de pagar → sexta 02/10 suspende.
+    expect(decideCalendario(ATIVA, sp('2026-10-01T10:00:00')).suspender).toBe(false)
+    expect(decideCalendario(ATIVA, sp('2026-10-01T23:59:00')).suspender).toBe(false)
+    expect(decideCalendario(ATIVA, sp('2026-10-02T00:30:00')).suspender).toBe(true)
+  })
+
+  it('às 22h do dia do vencimento NÃO suspende — UTC já virou, São Paulo não', () => {
+    // 01/10 22h em SP = 02/10 01h em UTC. Contando em UTC, a pessoa seria
+    // trancada no próprio dia em que a fatura vence.
+    expect(decideCalendario(ATIVA, sp('2026-10-01T22:00:00')).suspender).toBe(false)
   })
 
   it('NÃO suspende quem não tem cobrança no Asaas', () => {
@@ -107,7 +112,7 @@ describe('com a palavra do Asaas', () => {
     expect(decideComAsaas({ tipo: 'nada_em_aberto' }, quarta).suspender).toBe(false)
   })
 
-  it('vencida de verdade há 6 dias: suspende', () => {
+  it('vencida de verdade (venceu ontem ou antes): suspende', () => {
     const r = decideComAsaas(
       { tipo: 'vencida', dueDate: '2026-10-01', invoiceUrl: 'https://x', paymentId: 'pay_1' },
       quarta,
@@ -115,17 +120,21 @@ describe('com a palavra do Asaas', () => {
     expect(r.suspender).toBe(true)
   })
 
-  it('o banco diz 6 dias, mas a vencida do Asaas tem só 2: NÃO suspende', () => {
-    // O vencimento do banco pode estar errado; o do Asaas manda.
+  it('o Asaas diz que a mais antiga vence HOJE: NÃO suspende', () => {
+    // O vencimento do banco pode estar errado; o do Asaas manda — e o dia do
+    // vencimento ainda é dia de pagar.
     const r = decideComAsaas(
-      { tipo: 'vencida', dueDate: '2026-10-05', invoiceUrl: null, paymentId: 'pay_2' },
+      { tipo: 'vencida', dueDate: '2026-10-07', invoiceUrl: null, paymentId: 'pay_2' },
       quarta,
     )
     expect(r.suspender).toBe(false)
   })
 })
 
-describe('o aviso de "em aberto" sai ANTES da trava, mesmo caindo no fim de semana', () => {
+describe('o aviso de "em aberto" (+3) não morre no fim de semana', () => {
+  // Vale para quem NÃO está sob a trava (contas sem assinatura no Asaas, que
+  // pagam por fora): quem tem assinatura e não pagou já foi suspenso no dia
+  // seguinte ao vencimento, e o lembrete só roda para conta ativa.
   const candidato = (dueAt: string, sent: number[] = []): ReminderCandidate => ({
     orgId: 'o',
     name: 'GoLink',
@@ -149,21 +158,12 @@ describe('o aviso de "em aberto" sai ANTES da trava, mesmo caindo no fim de sema
     expect(dueStep(candidato(VENC_MEIO_DIA, [3]), sp('2026-10-05T10:00:00'))).toBeNull()
   })
 
-  it('no 6º dia o aviso não sai mais: é dia de trava, não de lembrete', () => {
+  it('do 6º dia em diante o +3 não sai mais', () => {
     expect(dueStep(candidato(VENC_MEIO_DIA), sp('2026-10-07T10:00:00'))).toBeNull()
   })
 
   it('o 2º dia de atraso continua sem lembrete', () => {
     expect(dueStep(candidato(VENC_MEIO_DIA), sp('2026-10-03T10:00:00'))).toBeNull()
-  })
-})
-
-describe('ninguém é trancado sem ter sido avisado', () => {
-  it('sem o aviso de "em aberto" registrado, NÃO suspende', () => {
-    // Conta sem telefone de cobrança nunca recebe o +3 — e não pode ser
-    // trancada por um atraso do qual não foi avisada.
-    const semAviso = { ...ATIVA, avisoEmAbertoEnviado: false }
-    expect(decideCalendario(semAviso, sp('2026-10-07T10:00:00')).suspender).toBe(false)
   })
 })
 

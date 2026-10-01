@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Ban, LogOut, Clock3, Gift, RotateCw, CreditCard } from "lucide-react";
+import { Ban, LogOut, Clock3, Gift, RotateCw, CreditCard, MessageCircle } from "lucide-react";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
@@ -137,10 +137,10 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
               automática viraria um chamado para cada cliente suspenso. */}
           {suspendReason === "inadimplencia" ? (
             <p className="text-sm text-muted-foreground">
-              A mensalidade está em aberto há mais de 5 dias, e por isso o
-              acesso foi pausado. Ele volta sozinho quando o pagamento for
-              confirmado: pelo Pix, em poucos minutos; pelo boleto, quando o
-              banco compensar (até 3 dias úteis). Se você já pagou o boleto,
+              A mensalidade venceu e ainda não identificamos o pagamento, por
+              isso o acesso foi pausado. Ele volta sozinho quando o pagamento
+              for confirmado: pelo Pix, em poucos minutos; pelo boleto, quando
+              o banco compensar (até 3 dias úteis). Se você já pagou o boleto,
               não pague de novo.
             </p>
           ) : (
@@ -158,9 +158,20 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
             className="inline-flex h-10 items-center gap-2 rounded-full bg-primary px-5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
           >
             <CreditCard className="size-4" />
-            Pagar agora
+            Regularizar pagamento
           </a>
         )}
+        {/* O time, para quem tem dúvida, já pagou por outro meio ou precisa
+            negociar. Mesmo número das outras telas de bloqueio. */}
+        <a
+          href="https://wa.me/556791806048?text=Ol%C3%A1!%20Minha%20conta%20no%20FluxiaCRM%20est%C3%A1%20suspensa%20e%20preciso%20de%20ajuda."
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+        >
+          <MessageCircle className="size-4" />
+          Falar com o time — (67) 9180-6048
+        </a>
         {suspendInvoiceUrl && (
           <div className="flex flex-col items-center gap-1">
             <button
