@@ -12,6 +12,8 @@ import { db, calendarEvents, calendars } from '@/db'
 /** Quantos dias à frente a IA enxerga. */
 export const BUSY_SLOTS_DAYS = 14
 const MAX_SLOTS = 40
+/** Teto da lista por profissional (várias agendas dividem o mesmo bolo). */
+const TETO_AGENDAS_DA_EQUIPE = 600
 
 /**
  * "qua 23/09 14:00–14:45" no fuso da conta.
@@ -142,7 +144,16 @@ export async function loadBusyByCalendar(
       // Teto maior que o da lista única: são várias agendas dividindo o mesmo
       // bolo, e cortar cedo demais faria a IA achar que um dentista está livre
       // num horário que já tem paciente.
-      .limit(MAX_SLOTS * 6)
+      // 01/10: era MAX_SLOTS * 6 (240). Clínica com 12 agendas tinha 128 em 14
+      // dias, mas o corte é por DATA e em silêncio: passou do teto, os últimos
+      // dias chegam vazios para todos os profissionais e a IA lê "livre".
+      .limit(TETO_AGENDAS_DA_EQUIPE)
+
+    if (rows.length >= TETO_AGENDAS_DA_EQUIPE) {
+      console.warn(
+        `[ai busy-slots] ${accountId}: ${rows.length} compromissos em ${BUSY_SLOTS_DAYS} dias — a lista foi cortada no teto`,
+      )
+    }
 
     const ocupados = new Map<string, string[]>()
     for (const r of rows) {
