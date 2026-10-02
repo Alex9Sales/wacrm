@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // 01/10 — revisão do "paciente vai junto para o Google". Banco falso: cada
 // SELECT (ou escrita com RETURNING) consome a próxima resposta da fila; as
@@ -91,7 +91,8 @@ vi.mock('@/lib/agenda/confirmacao-fila', () => ({
   descartarConfirmacaoPendente: h.descartar,
 }))
 
-import { createEvent, updateEvent } from './actions'
+import { createEvent, listarConsultasFuturasDoContato, updateEvent } from './actions'
+import { ERRO_REMARCACAO_INDISPONIVEL } from '@/lib/agenda/remarcacao'
 
 const INPUT = { title: 'RSC', startsAt: '2026-10-05T14:00:00.000Z', endsAt: '2026-10-05T15:00:00.000Z' }
 const ANTES_GOOGLE_A = {
@@ -416,5 +417,205 @@ describe('confirmação ao paciente ao salvar — vai para a FILA (01/10; fila d
     expect(res.error).toBeTruthy()
     expect(h.agendar).not.toHaveBeenCalled()
     expect(h.descartar).not.toHaveBeenCalled()
+  })
+})
+
+describe('remarcação no modal de compromisso NOVO (02/10)', () => {
+  // A recepção marca para quem já tem consulta futura e responde "é a
+  // remarcação da consulta X": nada é criado, X é editada pelo caminho do
+  // updateEvent. O servidor confere X antes de gravar qualquer coisa.
+  const X = '11111111-1111-4111-8111-111111111111'
+  // "Agora" é 02/10 12:00Z; X é dia 13, a remarcação vai para o dia 14.
+  const X_DE_PE = {
+    status: 'confirmed',
+    contactId: 'c-1',
+    startsAt: '2026-10-13 12:30:00+00',
+    endsAt: '2026-10-13 13:30:00+00',
+    allDay: false,
+  }
+  // Como X estava, lida pelo updateEvent (o "antes" da edição).
+  const ANTES_X = {
+    startsAt: '2026-10-13 12:30:00+00',
+    calendarId: 'cal-a',
+    contactId: 'c-1',
+    googleEventId: 'g-x',
+    calGoogleId: 'a@group.calendar.google.com',
+    connectionId: 'conn-1',
+  }
+  const NOVA = {
+    title: 'Retorno · Davi',
+    startsAt: '2026-10-14T12:00:00.000Z',
+    endsAt: '2026-10-14T13:00:00.000Z',
+    contactId: 'c-1',
+    location: 'Sala 2',
+    description: 'Trazer exames',
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-02T12:00:00.000Z'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('X válida: edita X com o formulário (não insere) e devolve o id dela', async () => {
+    h.state.results.push(
+      [X_DE_PE], // a conferência de X
+      [ANTES_X], // updateEvent: como X estava
+      [{ googleCalendarId: 'a@group.calendar.google.com', connectionId: 'conn-1' }], // mesma agenda
+      [{ id: 'c-1' }], // o paciente é da conta
+    )
+
+    const res = await createEvent({ ...NOVA, calendarId: 'cal-a', remarcaEventoId: X })
+
+    expect(res).toEqual({ id: X, error: null, confirmacao: null })
+    expect(passos()).toEqual(['update', 'google:update'])
+    expect(passos()).not.toContain('insert')
+    expect(gravado()).toMatchObject({
+      title: 'Retorno · Davi',
+      startsAt: '2026-10-14T12:00:00.000Z',
+      endsAt: '2026-10-14T13:00:00.000Z',
+      location: 'Sala 2',
+      description: 'Trazer exames',
+      // Data nova: os lembretes recomeçam do zero.
+      remindersSent: 0,
+    })
+    expect(h.push).toHaveBeenCalledWith('acc-1', X, 'update')
+  })
+
+  it('X válida em outra agenda: troca de agenda pelo caminho da edição (apaga na antiga, cria na nova)', async () => {
+    h.state.results.push([X_DE_PE], [ANTES_X], AGENDA_GOOGLE, [{ id: 'c-1' }])
+
+    const res = await createEvent({ ...NOVA, calendarId: 'cal-b', remarcaEventoId: X })
+
+    expect(res.id).toBe(X)
+    expect(passos()).toEqual(['update', 'google:apagar-na-antiga', 'update', 'google:create'])
+    expect(gravado()).toMatchObject({ calendarId: 'cal-b', googleEventId: null })
+    expect(h.apagar).toHaveBeenCalledWith('acc-1', 'cal-a', 'g-x')
+  })
+
+  it('X válida com a caixa marcada: a fila recebe X com o "antes" dela (sai como remarcada)', async () => {
+    h.state.results.push([X_DE_PE], [ANTES_X], AGENDA_GOOGLE, [{ id: 'c-1' }])
+
+    const res = await createEvent({
+      ...NOVA,
+      calendarId: 'cal-a',
+      remarcaEventoId: X,
+      notifyPatient: true,
+      conversationId: 'cv-1',
+    })
+
+    expect(res).toEqual({ id: X, error: null, confirmacao: { agendada: '2026-10-02T13:08:00.000Z' } })
+    expect(h.agendar).toHaveBeenCalledWith({
+      accountId: 'acc-1',
+      eventId: X,
+      antes: { startsAt: '2026-10-13 12:30:00+00', calendarId: 'cal-a', contactId: 'c-1' },
+      conversationId: 'cv-1',
+    })
+    expect(passos()).toEqual(['update', 'confirmacao', 'google:update'])
+  })
+
+  it.each([
+    ['de outro paciente', [{ ...X_DE_PE, contactId: 'c-2' }]],
+    ['de outra conta (não achou)', []],
+    ['cancelada', [{ ...X_DE_PE, status: 'cancelled' }]],
+    ['que já passou', [{ ...X_DE_PE, startsAt: '2026-10-02 11:00:00+00', endsAt: '2026-10-02 11:30:00+00' }]],
+  ])('X %s: erro legível, nada gravado, nada no Google nem na fila', async (_caso, linhaDeX) => {
+    h.state.results.push(linhaDeX, [ANTES_X], AGENDA_GOOGLE, [{ id: 'c-1' }], [{ id: 'ev-novo' }])
+
+    const res = await createEvent({ ...NOVA, calendarId: 'cal-a', remarcaEventoId: X, notifyPatient: true })
+
+    expect(res).toEqual({ id: null, error: ERRO_REMARCACAO_INDISPONIVEL })
+    expect(passos()).toEqual([])
+    expect(h.push).not.toHaveBeenCalled()
+    expect(h.agendar).not.toHaveBeenCalled()
+  })
+
+  it('sem paciente no formulário ou id que não é UUID: recusa sem nem procurar', async () => {
+    const semPaciente = await createEvent({ ...NOVA, contactId: null, calendarId: 'cal-a', remarcaEventoId: X })
+    const idTorto = await createEvent({ ...NOVA, calendarId: 'cal-a', remarcaEventoId: "x' OR 1=1" })
+
+    expect(semPaciente.error).toBe(ERRO_REMARCACAO_INDISPONIVEL)
+    expect(idTorto.error).toBe(ERRO_REMARCACAO_INDISPONIVEL)
+    expect(h.state.calls).toEqual([])
+  })
+
+  it('sem o campo (consulta nova, mesmo com outra já marcada): cria como antes', async () => {
+    h.state.results.push(AGENDA_GOOGLE, [{ id: 'c-1' }], [{ id: 'ev-novo' }])
+
+    const res = await createEvent({ ...NOVA, calendarId: 'cal-a', remarcaEventoId: null })
+
+    expect(res).toEqual({ id: 'ev-novo', error: null, confirmacao: null })
+    expect(passos()).toEqual(['insert', 'google:create'])
+  })
+
+  it('a edição de X falhou: devolve o erro, sem id', async () => {
+    h.state.results.push([X_DE_PE], [ANTES_X], AGENDA_GOOGLE, [{ id: 'c-1' }])
+    h.state.updateFalha = true
+
+    const res = await createEvent({ ...NOVA, calendarId: 'cal-a', remarcaEventoId: X })
+
+    expect(res.id).toBeNull()
+    expect(res.error).toBeTruthy()
+    expect(h.push).not.toHaveBeenCalled()
+  })
+})
+
+describe('consultas futuras do paciente (a pergunta do modal, 02/10)', () => {
+  it('datas em ISO, base do que o paciente sabe validada, e só o que ainda vai acontecer', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-02T12:00:00.000Z'))
+    try {
+      h.state.results.push([
+        {
+          id: 'ev-1',
+          startsAt: '2026-10-13 12:30:00+00',
+          endsAt: '2026-10-13 13:30:00+00',
+          allDay: false,
+          calendarId: 'cal-a',
+          calendarName: 'Dra. Helena Prado',
+          title: 'Avaliação · Davi',
+          confirmationDueAt: '2026-10-02 12:03:00+00',
+          confirmationKnown: { startsAt: '2026-10-12 12:30:00+00', calendarId: 'cal-a', contactId: 'c-1' },
+        },
+        {
+          // Começou há pouco (o banco filtra por now(); aqui vale a mesma régua).
+          id: 'ev-2',
+          startsAt: '2026-10-02 11:30:00+00',
+          endsAt: '2026-10-02 12:30:00+00',
+          allDay: false,
+          calendarId: 'cal-a',
+          calendarName: 'Dra. Helena Prado',
+          title: 'Retorno · Bianca',
+          confirmationDueAt: null,
+          confirmationKnown: { lixo: true },
+        },
+      ])
+
+      const lista = await listarConsultasFuturasDoContato('22222222-2222-4222-8222-222222222222')
+
+      expect(lista).toEqual([
+        {
+          id: 'ev-1',
+          startsAt: '2026-10-13T12:30:00.000Z',
+          endsAt: '2026-10-13T13:30:00.000Z',
+          allDay: false,
+          calendarId: 'cal-a',
+          calendarName: 'Dra. Helena Prado',
+          title: 'Avaliação · Davi',
+          confirmationDueAt: '2026-10-02T12:03:00.000Z',
+          confirmationKnown: { startsAt: '2026-10-12 12:30:00+00', calendarId: 'cal-a', contactId: 'c-1' },
+        },
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sem contato (ou id torto): lista vazia sem ir ao banco', async () => {
+    expect(await listarConsultasFuturasDoContato('')).toEqual([])
+    expect(await listarConsultasFuturasDoContato('nao-e-uuid')).toEqual([])
+    expect(h.state.calls).toEqual([])
   })
 })

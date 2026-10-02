@@ -6,7 +6,7 @@
 // v1: escopo por conta (time vê a agenda da conta); owner_user_id marca o dono.
 // ============================================================
 
-import { and, asc, eq, gte, lte, ne, sql } from 'drizzle-orm'
+import { and, asc, eq, gt, gte, lte, ne, or, sql } from 'drizzle-orm'
 import { db, calendars, calendarEvents, calendarConnections, contacts, deals, user } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
@@ -27,6 +27,7 @@ import {
   type DesfechoDaConfirmacao,
 } from '@/lib/agenda/confirmacao-agendamento'
 import { agendarConfirmacao, descartarConfirmacaoPendente } from '@/lib/agenda/confirmacao-fila'
+import { aindaVaiAcontecer, ERRO_REMARCACAO_INDISPONIVEL, podeRemarcar } from '@/lib/agenda/remarcacao'
 
 export type CalendarRow = {
   id: string
@@ -102,6 +103,48 @@ export type EventInput = {
   /** Conversa de onde a recepção clicou "Agendar": a confirmação sai por ela. */
   conversationId?: string | null
 }
+
+/**
+ * Compromisso NOVO no modal (createEvent). 02/10: o paciente já tinha consulta
+ * futura e a recepção respondeu "é remarcação da consulta X" — ver
+ * lib/agenda/remarcacao.ts.
+ */
+export type NovoEventoInput = EventInput & {
+  /**
+   * A consulta que este salvar REMARCA. Presente: nada é criado — a consulta X
+   * é editada (updateEvent) com o que está no formulário, depois de o servidor
+   * conferir que ela é desta conta, do MESMO paciente, está de pé e é futura.
+   */
+  remarcaEventoId?: string | null
+}
+
+/**
+ * Uma consulta futura do paciente, para a pergunta "remarcação ou consulta
+ * nova?" do modal (02/10).
+ *
+ * Sem "marcada pela IA": scheduleEventFromAi (lib/ai/schedule-actions.ts) grava
+ * created_by = dono da configuração da IA (um usuário de verdade) e source
+ * 'local' — igualzinho a um compromisso criado pela recepção. Não há como
+ * afirmar com segurança quem marcou, então a tela não afirma.
+ */
+export type ConsultaFutura = {
+  id: string
+  startsAt: string
+  endsAt: string
+  allDay: boolean
+  calendarId: string
+  calendarName: string
+  title: string
+  /** Confirmação dela na fila (ISO) — a caixa do modal diz "já está na fila". */
+  confirmationDueAt: string | null
+  /** O que o paciente já sabe dela: a prévia "remarcada" compara com isso (baseDaConfirmacao). */
+  confirmationKnown: ConfirmacaoConhecida | null
+}
+
+/** Quantas consultas futuras a pergunta mostra (famílias têm 2-3 no mesmo contato). */
+const MAX_CONSULTAS_FUTURAS = 5
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** O que vai para o modal depois de salvar. Ver lib/agenda/confirmacao-agendamento.ts. */
 export type ConfirmacaoNaTela = ConfirmacaoNaTelaDaFila
@@ -316,8 +359,60 @@ export async function listEvents(range: {
   })) as EventRow[]
 }
 
+/**
+ * As consultas futuras do paciente (02/10), para o modal de compromisso NOVO
+ * perguntar "remarcação ou consulta nova?". De pé ('confirmed'), que ainda vão
+ * acontecer (com hora: começa no futuro; dia inteiro: termina no futuro — a
+ * régua de aindaVaiAcontecer), da mais próxima para a mais distante, até
+ * MAX_CONSULTAS_FUTURAS. Escopo da conta. Erro LANÇA: o modal diz "não deu
+ * para conferir" em vez de tratar como "não tem nenhuma".
+ */
+export async function listarConsultasFuturasDoContato(contactId: string): Promise<ConsultaFutura[]> {
+  const ctx = await getCurrentAccount()
+  if (!contactId || !UUID.test(contactId)) return []
+  const rows = await db
+    .select({
+      id: calendarEvents.id,
+      startsAt: calendarEvents.startsAt,
+      endsAt: calendarEvents.endsAt,
+      allDay: calendarEvents.allDay,
+      calendarId: calendarEvents.calendarId,
+      calendarName: calendars.name,
+      title: calendarEvents.title,
+      confirmationDueAt: calendarEvents.confirmationDueAt,
+      confirmationKnown: calendarEvents.confirmationKnown,
+    })
+    .from(calendarEvents)
+    .innerJoin(calendars, and(eq(calendars.id, calendarEvents.calendarId), eq(calendars.accountId, ctx.accountId)))
+    .where(
+      and(
+        eq(calendarEvents.accountId, ctx.accountId),
+        eq(calendarEvents.contactId, contactId),
+        eq(calendarEvents.status, 'confirmed'),
+        or(
+          and(eq(calendarEvents.allDay, false), gt(calendarEvents.startsAt, sql`now()`)),
+          and(eq(calendarEvents.allDay, true), gt(calendarEvents.endsAt, sql`now()`)),
+        ),
+      ),
+    )
+    .orderBy(asc(calendarEvents.startsAt))
+    .limit(MAX_CONSULTAS_FUTURAS)
+  // Datas em ISO, como no listEvents: o texto cru do Postgres nem todo
+  // navegador lê. O filtro de novo aqui é a mesma régua do servidor ao salvar.
+  const agora = new Date()
+  return rows
+    .map((r) => ({
+      ...r,
+      startsAt: new Date(r.startsAt).toISOString(),
+      endsAt: new Date(r.endsAt).toISOString(),
+      confirmationDueAt: r.confirmationDueAt ? new Date(r.confirmationDueAt).toISOString() : null,
+      confirmationKnown: isConfirmacaoConhecida(r.confirmationKnown) ? r.confirmationKnown : null,
+    }))
+    .filter((r) => aindaVaiAcontecer(r, agora))
+}
+
 export async function createEvent(
-  input: EventInput,
+  input: NovoEventoInput,
 ): Promise<{ id: string | null; error: string | null; confirmacao?: ConfirmacaoNaTela }> {
   try {
     const ctx = await getCurrentAccount()
@@ -325,6 +420,44 @@ export async function createEvent(
     if (!title) return { id: null, error: 'Título é obrigatório' }
     if (!input.startsAt || !input.endsAt)
       return { id: null, error: 'Início e fim são obrigatórios' }
+
+    // 🔁 Remarcação (02/10): a recepção respondeu no modal que esta consulta
+    // é a consulta X remarcada. Nada é criado — X é EDITADA com o que está no
+    // formulário, pelo MESMO caminho da edição (updateEvent): o histórico
+    // fica, o Google move (inclusive trocando de agenda — planoDaEdicao), os
+    // lembretes zeram com a data nova e a confirmação ao paciente sai como
+    // "remarcada" (ou "agora é com", se só trocou o profissional) pela fila.
+    // Antes, a consulta nova nascia ao lado e a antiga ficava de pé: lembrete
+    // do horário errado e uma cadeira ocupada à toa.
+    //
+    // O servidor confere X ANTES de gravar qualquer coisa: desta conta, do
+    // MESMO paciente do formulário, de pé e futura. Entre abrir o modal e
+    // salvar, X pode ter sido cancelada (no Google, por outra pessoa).
+    const { remarcaEventoId, ...doFormulario } = input
+    if (remarcaEventoId) {
+      const alvo =
+        UUID.test(remarcaEventoId) && input.contactId
+          ? firstOrNull(
+              await db
+                .select({
+                  status: calendarEvents.status,
+                  contactId: calendarEvents.contactId,
+                  startsAt: calendarEvents.startsAt,
+                  endsAt: calendarEvents.endsAt,
+                  allDay: calendarEvents.allDay,
+                })
+                .from(calendarEvents)
+                .where(and(eq(calendarEvents.id, remarcaEventoId), eq(calendarEvents.accountId, ctx.accountId)))
+                .limit(1),
+            )
+          : null
+      if (!podeRemarcar(alvo, input.contactId, new Date())) {
+        return { id: null, error: ERRO_REMARCACAO_INDISPONIVEL }
+      }
+      const r = await updateEvent(remarcaEventoId, doFormulario)
+      if (r.error) return { id: null, error: r.error }
+      return { id: remarcaEventoId, error: null, confirmacao: r.confirmacao }
+    }
 
     // Garante fim > início (senão o Google recusa com timeRangeEmpty).
     let endsAt = input.endsAt
