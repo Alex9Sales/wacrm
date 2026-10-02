@@ -1382,7 +1382,9 @@ export const deals = pgTable("deals", {
 			columns: [table.conversationId],
 			foreignColumns: [conversations.id],
 			name: "deals_conversation_id_fkey"
-		}),
+		// SET NULL (migração 0205, 02/10): apagar a conversa — ou o CANAL, que
+		// apaga as conversas em cascata — não pode travar por causa do card.
+		}).onDelete("set null"),
 	foreignKey({
 			columns: [table.assignedTo],
 			foreignColumns: [user.id],
