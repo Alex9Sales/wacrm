@@ -21,12 +21,17 @@ import { getAccountSettings } from '@/lib/settings/account-settings'
 import {
   FUSO_PADRAO,
   isConfirmacaoConhecida,
+  isConfirmacaoEnviando,
   isDesfechoDaConfirmacao,
   type ConfirmacaoConhecida,
   type ConfirmacaoNaTela as ConfirmacaoNaTelaDaFila,
   type DesfechoDaConfirmacao,
 } from '@/lib/agenda/confirmacao-agendamento'
-import { agendarConfirmacao, descartarConfirmacaoPendente } from '@/lib/agenda/confirmacao-fila'
+import {
+  agendarConfirmacao,
+  conferirEdicaoSemCaixa,
+  descartarConfirmacaoPendente,
+} from '@/lib/agenda/confirmacao-fila'
 import { aindaVaiAcontecer, ERRO_REMARCACAO_INDISPONIVEL, podeRemarcar } from '@/lib/agenda/remarcacao'
 
 export type CalendarRow = {
@@ -156,6 +161,12 @@ export type ConfirmacaoNaTela = ConfirmacaoNaTelaDaFila
  *
  * 02/10: não envia mais nada aqui. Caixa marcada → põe na fila (sai uns
  * minutos depois, só a versão final); caixa desmarcada na tela → tira da fila.
+ *
+ * Edição SEM a caixa na tela (02/10, revisão): o modal decide mostrar a caixa
+ * com o que a grade diz que o paciente sabe, e a grade pode estar velha (sem
+ * Google próprio ela não recarrega sozinha). O servidor relê o que o paciente
+ * sabe de verdade e, se esta mudança pede aviso, faz o que a caixa marcada
+ * faria — ver conferirEdicaoSemCaixa. Compromisso novo sem a caixa: nada.
  */
 async function confirmacaoDoSalvar(args: {
   accountId: string
@@ -177,6 +188,14 @@ async function confirmacaoDoSalvar(args: {
     }
     if (args.descartar === true) {
       return await descartarConfirmacaoPendente({ accountId: args.accountId, eventId: args.eventId })
+    }
+    if (args.antes) {
+      return await conferirEdicaoSemCaixa({
+        accountId: args.accountId,
+        eventId: args.eventId,
+        antes: args.antes,
+        conversationId: args.conversationId ?? null,
+      })
     }
     return null
   } catch (err) {
@@ -348,15 +367,63 @@ export async function listEvents(range: {
     .orderBy(asc(calendarEvents.startsAt))
   // A coluna é texto livre: valida antes de entregar para a tela, senão um
   // valor antigo/desconhecido viraria um aviso sem rótulo. As da confirmação
-  // (jsonb, 02/10) também; o vencimento vai em ISO — o texto cru do Postgres
-  // ("2026-10-02 14:05:00+00") nem todo navegador lê.
+  // (jsonb, 02/10) também — ver confirmacaoParaTela.
   return rows.map((r) => ({
     ...r,
     reminderBlock: isMeetingReminderBlock(r.reminderBlock) ? r.reminderBlock : null,
-    confirmationDueAt: r.confirmationDueAt ? new Date(r.confirmationDueAt).toISOString() : null,
+    ...confirmacaoParaTela(r),
+  })) as EventRow[]
+}
+
+/** As colunas da confirmação como a tela lê (listEvents e estadoDaConfirmacao). */
+export type EstadoDaConfirmacao = Pick<EventRow, 'confirmationDueAt' | 'confirmationKnown' | 'confirmationResult'>
+
+/**
+ * jsonb validado e vencimento em ISO — o texto cru do Postgres ("2026-10-02
+ * 14:05:00+00") nem todo navegador lê.
+ *
+ * O marcador 'enviando' (02/10, revisão) não é desfecho e não vai como tal.
+ * Enquanto o worker envia, o vencimento gravado é o lease (agora + 10 min),
+ * que não é quando a confirmação sai: a tela recebe a hora do marcador, já
+ * passada, e diz "saindo agora".
+ */
+function confirmacaoParaTela(r: {
+  confirmationDueAt: string | null
+  confirmationKnown: unknown
+  confirmationResult: unknown
+}): EstadoDaConfirmacao {
+  const saindo = isConfirmacaoEnviando(r.confirmationResult) && r.confirmationDueAt ? r.confirmationResult.at : null
+  const due = saindo ?? r.confirmationDueAt
+  return {
+    confirmationDueAt: due ? new Date(due).toISOString() : null,
     confirmationKnown: isConfirmacaoConhecida(r.confirmationKnown) ? r.confirmationKnown : null,
     confirmationResult: isDesfechoDaConfirmacao(r.confirmationResult) ? r.confirmationResult : null,
-  })) as EventRow[]
+  }
+}
+
+/**
+ * O estado da confirmação de UM compromisso, fresco do banco (02/10, revisão).
+ * O modal pede ao abrir a edição: a grade só recarrega sozinha com o Google
+ * conectado, e o que o worker gravou depois (a "remarcada" que saiu, o "não
+ * enviada") não estava nela — o modal comparava com o que o paciente sabia
+ * ANTES e escondia a caixa de uma mudança que precisava de aviso.
+ * Escopo da conta; null = não achou. Erro lança (o modal fica com a grade).
+ */
+export async function estadoDaConfirmacao(eventId: string): Promise<EstadoDaConfirmacao | null> {
+  const ctx = await getCurrentAccount()
+  if (!eventId || !UUID.test(eventId)) return null
+  const r = firstOrNull(
+    await db
+      .select({
+        confirmationDueAt: calendarEvents.confirmationDueAt,
+        confirmationKnown: calendarEvents.confirmationKnown,
+        confirmationResult: calendarEvents.confirmationResult,
+      })
+      .from(calendarEvents)
+      .where(and(eq(calendarEvents.id, eventId), eq(calendarEvents.accountId, ctx.accountId)))
+      .limit(1),
+  )
+  return r ? confirmacaoParaTela(r) : null
 }
 
 /**

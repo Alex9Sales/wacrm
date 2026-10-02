@@ -3,8 +3,9 @@ import { PgDialect } from 'drizzle-orm/pg-core'
 import type { SQL } from 'drizzle-orm'
 
 // 01/10 — envio da confirmação ao paciente. Desde 02/10 quem chama é a fila
-// (confirmacao-fila.ts, worker booking-confirmation), com o tipo já decidido
-// contra o que o paciente sabe; o envio em si é o mesmo. Banco falso: cada SELECT consome a
+// (confirmacao-fila.ts, worker booking-confirmation), com o que o paciente já
+// sabe; desde a revisão de 02/10 o tipo, o texto e o retrato devolvido saem da
+// MESMA leitura, feita aqui. Banco falso: cada SELECT consome a
 // próxima resposta da fila, na ordem em que o envio pergunta (compromisso →
 // cópia no mesmo horário → conversa pedida → conversa mais recente → [sem
 // conversa: canais de WhatsApp → números da IA] → [oficial: janela de 24h]).
@@ -97,6 +98,7 @@ const EVENTO = {
   startsAt: '2026-10-08 17:00:00+00', // quinta 08/10, 14h em São Paulo
   endsAt: '2026-10-08 18:00:00+00',
   allDay: false,
+  calendarId: 'cal-1',
   contactId: 'c-1',
   calendarName: 'Dr. Exemplo',
   contactName: 'Maria Exemplo',
@@ -114,15 +116,21 @@ const CANAL = (id: string, extra: Record<string, unknown> = {}) => ({
   ...extra,
 })
 
-const enviar = (extra: Partial<Parameters<typeof enviarConfirmacaoDoAgendamento>[0]> = {}) =>
+const enviarCompleto = (extra: Partial<Parameters<typeof enviarConfirmacaoDoAgendamento>[0]> = {}) =>
   enviarConfirmacaoDoAgendamento({
     accountId: 'acc-1',
     eventId: 'ev-1',
-    tipo: 'marcacao',
+    // Nada que o paciente já saiba: marcação.
+    conhecido: null,
     conversationId: 'cv-1',
     agora: AGORA,
     ...extra,
   })
+/** Só o resultado (o retrato é conferido à parte). */
+const enviar = async (extra: Partial<Parameters<typeof enviarConfirmacaoDoAgendamento>[0]> = {}) =>
+  (await enviarCompleto(extra)).resultado
+/** O que o paciente sabe: outro horário, mesma agenda. */
+const SABIA_OUTRO_HORARIO = { startsAt: '2026-10-07 17:00:00+00', calendarId: 'cal-1', contactId: 'c-1' }
 
 const dialect = new PgDialect()
 /** Os parâmetros de cada UPDATE que o envio mandou ao banco (carimbo dos lembretes). */
@@ -157,18 +165,18 @@ describe('confirmação ao paciente — envio', () => {
     })
   })
 
-  it('remarcação: "foi remarcada para"', async () => {
+  it('remarcação: o paciente sabia de outro horário → "foi remarcada para"', async () => {
     h.state.results.push([EVENTO], [], WAHA)
 
-    await enviar({ tipo: 'remarcacao' })
+    await enviar({ conhecido: SABIA_OUTRO_HORARIO })
 
     expect(h.send.mock.calls[0]?.[1]?.contentText).toContain('foi remarcada para quinta-feira, 08/10/2026, às 14h')
   })
 
   it('só trocou o profissional: "agora é com", sem "remarcada"', async () => {
-    h.state.results.push([{ ...EVENTO, calendarName: 'Dra. Fulana Teste' }], [], WAHA)
+    h.state.results.push([{ ...EVENTO, calendarId: 'cal-2', calendarName: 'Dra. Fulana Teste' }], [], WAHA)
 
-    await enviar({ tipo: 'profissional' })
+    await enviar({ conhecido: { startsAt: EVENTO.startsAt, calendarId: 'cal-1', contactId: 'c-1', nomeAgenda: 'Dr. Exemplo' } })
 
     const texto = h.send.mock.calls[0]?.[1]?.contentText as string
     expect(texto).toContain('Sua consulta de quinta-feira, 08/10/2026, às 14h, agora é com a Dra. Fulana Teste.')
@@ -234,6 +242,10 @@ describe('confirmação ao paciente — envio', () => {
 
     const daCopia = dialect.sqlToQuery(h.state.wheres[1] as SQL).sql
     expect(daCopia).toContain('"calendar_events"."confirmation_due_at" is null')
+    // A linha que o import do Google ACABOU de criar não conta (revisão de 02/10).
+    expect(daCopia).toContain(
+      `NOT ("calendar_events"."source" = 'google' AND "calendar_events"."created_at" > now() - interval '10 minutes')`,
+    )
     // E continua sendo a mesma consulta: mesmo contato, mesmo instante, confirmada, outra linha.
     expect(daCopia).toContain('"calendar_events"."contact_id" = $')
     expect(daCopia).toContain('"calendar_events"."starts_at" = $')
@@ -536,5 +548,60 @@ describe('depois de enviar: a IA e os lembretes (01/10, revisão)', () => {
 
       expect(await enviar()).toBe('enviada')
     })
+  })
+})
+
+describe('UMA leitura: o tipo, o texto e o retrato saem da mesma (revisão de 02/10)', () => {
+  it('enviada: devolve o retrato que o texto usou — é ele que a fila grava como base', async () => {
+    h.state.results.push([{ ...EVENTO, startsAt: '2026-10-08 18:30:00+00', endsAt: '2026-10-08 19:30:00+00' }], [], WAHA)
+
+    const r = await enviarCompleto({ conhecido: SABIA_OUTRO_HORARIO })
+
+    expect(r).toEqual({
+      resultado: 'enviada',
+      retrato: { startsAt: '2026-10-08 18:30:00+00', calendarId: 'cal-1', contactId: 'c-1' },
+    })
+    // O texto é do MESMO horário do retrato.
+    expect(h.send.mock.calls[0]?.[1]?.contentText).toContain('foi remarcada para quinta-feira, 08/10/2026, às 15h30')
+  })
+
+  it('a releitura mostra que nada mudou para o paciente (moveu e voltou no meio): não envia', async () => {
+    h.state.results.push([EVENTO])
+
+    const r = await enviarCompleto({ conhecido: { startsAt: EVENTO.startsAt, calendarId: 'cal-1', contactId: 'c-1' } })
+
+    expect(r).toEqual({
+      resultado: { semMudanca: true },
+      retrato: { startsAt: EVENTO.startsAt, calendarId: 'cal-1', contactId: 'c-1' },
+    })
+    expect(h.send).not.toHaveBeenCalled()
+    expect(h.state.selects).toBe(1) // nem procura cópia nem conversa
+  })
+
+  it('a releitura acha o compromisso cancelado: descarta (sem virar "não enviada" com nota)', async () => {
+    h.state.results.push([{ ...EVENTO, status: 'cancelled' }])
+
+    expect(await enviar()).toEqual({ descartada: 'o compromisso foi cancelado' })
+    expect(h.send).not.toHaveBeenCalled()
+  })
+
+  it('não achou o compromisso: sem retrato', async () => {
+    h.state.results.push([])
+
+    expect(await enviarCompleto()).toEqual({
+      resultado: { naoEnviada: 'o compromisso não foi encontrado' },
+      retrato: null,
+    })
+  })
+
+  it('mesmo profissional em outra agenda (o nome de antes vem da fila): nada a dizer', async () => {
+    h.state.results.push([{ ...EVENTO, calendarId: 'cal-2', calendarName: 'Dr. Exemplo Silva' }])
+
+    const r = await enviar({
+      conhecido: { startsAt: EVENTO.startsAt, calendarId: 'cal-1', contactId: 'c-1', nomeAgenda: 'Dr. Exemplo' },
+    })
+
+    expect(r).toEqual({ semMudanca: true })
+    expect(h.send).not.toHaveBeenCalled()
   })
 })

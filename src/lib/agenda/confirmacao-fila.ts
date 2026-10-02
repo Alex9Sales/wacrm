@@ -13,7 +13,8 @@
 //     confere na hora o que já dá para saber (sem paciente, horário passado,
 //     "não perturbe", grupo) e marca `confirmation_due_at` = agora + 3 min.
 //     Salvar de novo empurra a saída; desmarcar a caixa tira da fila
-//     (`descartarConfirmacaoPendente`);
+//     (`descartarConfirmacaoPendente`); salvar uma edição SEM a caixa na tela
+//     confere no banco se o paciente precisa saber (`conferirEdicaoSemCaixa`);
 //   - o worker booking-confirmation (tick de 30 s) pega as vencidas —
 //     `processarConfirmacoesVencidas` —, lê o estado FINAL do compromisso,
 //     compara com o que o paciente já sabe (`confirmation_known`) e manda UMA
@@ -36,18 +37,21 @@ import { getAccountSettings } from '@/lib/settings/account-settings'
 import {
   ATRASO_DA_CONFIRMACAO_MS,
   FUSO_PADRAO,
+  MOTIVO_INCERTO,
   baseDaConfirmacao,
   decidirConfirmacao,
   decidirNaFila,
   desfechoDoEnvio,
   isConfirmacaoConhecida,
+  isConfirmacaoEnviando,
   notaDaConfirmacaoQueNaoSaiu,
   tipoDaConfirmacaoNaEdicao,
   type ConfirmacaoConhecida,
+  type ConfirmacaoEnviando,
   type ConfirmacaoNaTela,
   type DesfechoDaConfirmacao,
 } from './confirmacao-agendamento'
-import { conversaDoPaciente, enviarConfirmacaoDoAgendamento } from './confirmacao-envio'
+import { conversaDoPaciente, enviarConfirmacaoDoAgendamento, type ResultadoDoEnvio } from './confirmacao-envio'
 
 /** Quantas confirmações vencidas um tick pega. Cada uma é um envio de WhatsApp. */
 export const LOTE_DA_FILA = 20
@@ -57,6 +61,13 @@ export const LOTE_DA_FILA = 20
  * envio). Não vira nota: foi a própria recepção que apagou.
  */
 const MOTIVO_SUMIU = 'o compromisso não foi encontrado'
+
+/**
+ * Espera antes da 2ª tentativa de fechar o item (02/10, revisão): a falha
+ * típica é a conexão caindo, e tentar no mesmo milissegundo pega a mesma
+ * conexão quebrada.
+ */
+export const ESPERA_PARA_FECHAR_DE_NOVO_MS = 1_500
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -93,6 +104,63 @@ async function tirarDaFila(accountId: string, eventId: string, desfecho: Desfech
   }
 }
 
+/**
+ * O compromisso como está gravado AGORA, com o que a confirmação precisa:
+ * horário, agenda (e o nome dela), paciente e as flags dele, e o estado da
+ * fila. O salvar lê isto DEPOIS de gravar.
+ */
+async function lerParaConfirmar(accountId: string, eventId: string) {
+  return firstOrNull(
+    await db
+      .select({
+        status: calendarEvents.status,
+        startsAt: calendarEvents.startsAt,
+        endsAt: calendarEvents.endsAt,
+        allDay: calendarEvents.allDay,
+        calendarId: calendarEvents.calendarId,
+        contactId: calendarEvents.contactId,
+        calendarName: calendars.name,
+        isGroup: contacts.isGroup,
+        optedOut: contacts.optedOut,
+        dueAt: calendarEvents.confirmationDueAt,
+        known: calendarEvents.confirmationKnown,
+      })
+      .from(calendarEvents)
+      .leftJoin(calendars, and(eq(calendars.id, calendarEvents.calendarId), eq(calendars.accountId, accountId)))
+      .leftJoin(contacts, and(eq(contacts.id, calendarEvents.contactId), eq(contacts.accountId, accountId)))
+      .where(and(eq(calendarEvents.id, eventId), eq(calendarEvents.accountId, accountId)))
+      .limit(1),
+  )
+}
+
+type LidoParaConfirmar = NonNullable<Awaited<ReturnType<typeof lerParaConfirmar>>>
+
+/** As flags do paciente para decidirConfirmacao (null = sem paciente, ou o contato sumiu). */
+function contatoDoLido(ev: LidoParaConfirmar): { isGroup: boolean; optedOut: boolean } | null {
+  return ev.contactId && ev.isGroup !== null && ev.optedOut !== null
+    ? { isGroup: ev.isGroup, optedOut: ev.optedOut }
+    : null
+}
+
+/**
+ * Mudou algo que o paciente precisa saber, comparado com `base`? A mesma regra
+ * do modal (tipoDaConfirmacaoNaEdicao), com o nome das duas agendas.
+ */
+async function tipoContraABase(accountId: string, base: ConfirmacaoConhecida, ev: LidoParaConfirmar) {
+  return tipoDaConfirmacaoNaEdicao({
+    antes: {
+      ...base,
+      nomeAgenda: base.calendarId === ev.calendarId ? ev.calendarName : await nomeDaAgenda(accountId, base.calendarId),
+    },
+    depois: {
+      startsAt: ev.startsAt,
+      calendarId: ev.calendarId,
+      contactId: ev.contactId,
+      nomeAgenda: ev.calendarName,
+    },
+  })
+}
+
 // ---------- O lado do salvar (actions da Agenda) ----------
 
 /**
@@ -123,39 +191,12 @@ export async function agendarConfirmacao(args: {
       return { naoEnviada: motivo }
     }
 
-    const ev = firstOrNull(
-      await db
-        .select({
-          status: calendarEvents.status,
-          startsAt: calendarEvents.startsAt,
-          endsAt: calendarEvents.endsAt,
-          allDay: calendarEvents.allDay,
-          calendarId: calendarEvents.calendarId,
-          contactId: calendarEvents.contactId,
-          calendarName: calendars.name,
-          isGroup: contacts.isGroup,
-          optedOut: contacts.optedOut,
-          dueAt: calendarEvents.confirmationDueAt,
-          known: calendarEvents.confirmationKnown,
-        })
-        .from(calendarEvents)
-        .leftJoin(calendars, and(eq(calendars.id, calendarEvents.calendarId), eq(calendars.accountId, accountId)))
-        .leftJoin(contacts, and(eq(contacts.id, calendarEvents.contactId), eq(contacts.accountId, accountId)))
-        .where(and(eq(calendarEvents.id, eventId), eq(calendarEvents.accountId, accountId)))
-        .limit(1),
-    )
+    const ev = await lerParaConfirmar(accountId, eventId)
     if (!ev) return { naoEnviada: MOTIVO_SUMIU }
 
     // O que dá para saber já: sem paciente, cancelado, horário passado, grupo,
     // "não perturbe". Diz no modal, agora, e não deixa nada na fila.
-    const decisao = decidirConfirmacao({
-      evento: ev,
-      contato:
-        ev.contactId && ev.isGroup !== null && ev.optedOut !== null
-          ? { isGroup: ev.isGroup, optedOut: ev.optedOut }
-          : null,
-      agora,
-    })
+    const decisao = decidirConfirmacao({ evento: ev, contato: contatoDoLido(ev), agora })
     if (!decisao.envia) {
       await tirarDaFila(accountId, eventId, { status: 'naoEnviada', motivo: decisao.motivo, at: agora.toISOString() })
       return { naoEnviada: decisao.motivo }
@@ -169,21 +210,7 @@ export async function agendarConfirmacao(args: {
       pendente: ev.dueAt !== null,
       atual: args.antes,
     })
-    if (base) {
-      const tipo = tipoDaConfirmacaoNaEdicao({
-        antes: {
-          ...base,
-          nomeAgenda: base.calendarId === ev.calendarId ? ev.calendarName : await nomeDaAgenda(accountId, base.calendarId),
-        },
-        depois: {
-          startsAt: ev.startsAt,
-          calendarId: ev.calendarId,
-          contactId: ev.contactId,
-          nomeAgenda: ev.calendarName,
-        },
-      })
-      if (!tipo) return null
-    }
+    if (base && !(await tipoContraABase(accountId, base, ev))) return null
 
     const conversa = args.conversationId && UUID.test(args.conversationId) ? args.conversationId : null
     // known: numa EDIÇÃO sem nada pendente e sem base gravada, o paciente sabia
@@ -191,7 +218,10 @@ export async function agendarConfirmacao(args: {
     // supõe). Pendente ou base já gravada: fica como está — o CASE decide no
     // próprio UPDATE, sem janela para o worker gravar no meio. Compromisso
     // novo: `antes` null, fica NULL (marcação).
-    // result: limpo — o que vale agora é o pendente novo.
+    // result: limpo — o que vale agora é o pendente novo. MENOS o marcador
+    // 'enviando' (02/10, revisão): se o worker morreu no meio de um envio, é
+    // ele que impede a próxima passada de mandar de novo o que talvez já
+    // tenha chegado; com o worker vivo, o fechamento dele sobrescreve.
     const res = await db.execute(sql`
       UPDATE calendar_events
          SET confirmation_due_at = now() + ${ATRASO_DA_CONFIRMACAO_MS}::int * interval '1 millisecond',
@@ -201,7 +231,10 @@ export async function agendarConfirmacao(args: {
                  THEN ${args.antes ? JSON.stringify(args.antes) : null}::jsonb
                  ELSE confirmation_known
                END,
-             confirmation_result = NULL
+             confirmation_result = CASE
+                 WHEN confirmation_result->>'status' = 'enviando' THEN confirmation_result
+                 ELSE NULL
+               END
        WHERE id = ${eventId}
          AND account_id = ${accountId}
       RETURNING confirmation_due_at::text AS due_at
@@ -216,12 +249,74 @@ export async function agendarConfirmacao(args: {
 }
 
 /**
+ * Uma EDIÇÃO salva SEM a caixa na tela (02/10, revisão): nem marcada, nem
+ * desmarcada. O modal decide se mostra a caixa comparando com o que ele acha
+ * que o paciente sabe — e esse "acha" vem da grade, que sem Google próprio não
+ * recarrega. Cenário real da revisão: salvar 10h→11h (fila), o worker manda
+ * "remarcada para 11h", a recepção reabre o modal com a grade velha (que ainda
+ * diz que o paciente sabe das 10h) e volta para 10h: para o modal nada mudou,
+ * a caixa nem aparece, e o paciente fica com 11h.
+ *
+ * Aqui o servidor relê o que o paciente sabe DE VERDADE e, se esta mudança
+ * pede aviso e nada está pendente, faz o que a caixa faria no padrão
+ * (marcada): põe na fila. Nunca roda com a caixa na tela desmarcada (aí vem
+ * `descartar`) nem quando o paciente não precisa saber de nada (só título,
+ * moveu e voltou, opção desligada, "não perturbe"…). Com algo pendente não faz
+ * nada: o worker manda o estado final, comparado com a base, de qualquer jeito.
+ *
+ * `antes` = como o compromisso estava antes deste salvar. Nunca lança.
+ */
+export async function conferirEdicaoSemCaixa(args: {
+  accountId: string
+  eventId: string
+  antes: ConfirmacaoConhecida
+  conversationId?: string | null
+  agora?: Date
+}): Promise<ConfirmacaoNaTela> {
+  const { accountId, eventId } = args
+  const agora = args.agora ?? new Date()
+  try {
+    const settings = await getAccountSettings(accountId)
+    if (settings.bookingConfirmation !== true) return null
+    const ev = await lerParaConfirmar(accountId, eventId)
+    if (!ev || ev.dueAt !== null) return null
+    const base = baseDaConfirmacao({
+      conhecido: isConfirmacaoConhecida(ev.known) ? ev.known : null,
+      pendente: false,
+      atual: args.antes,
+    })
+    if (!base || !(await tipoContraABase(accountId, base, ev))) return null
+    if (!decidirConfirmacao({ evento: ev, contato: contatoDoLido(ev), agora }).envia) return null
+    const r = await agendarConfirmacao({
+      accountId,
+      eventId,
+      antes: args.antes,
+      conversationId: args.conversationId ?? null,
+      agora,
+    })
+    // O aviso diz que entrou na fila SEM a caixa, e como desistir.
+    return r && typeof r === 'object' && 'agendada' in r ? { agendada: r.agendada, semCaixa: true } : r
+  } catch (err) {
+    console.error('[agenda] confirmação: conferir a edição sem a caixa falhou:', err)
+    return { naoEnviada: 'não deu para conferir se o paciente precisa ser avisado desta mudança' }
+  }
+}
+
+/**
  * A caixa estava NA TELA e foi desmarcada: a recepção decidiu que esta
  * mudança não vai ao paciente. Tira o que estiver na fila e grava o estado
  * atual como base (`confirmation_known`) — a próxima confirmação fala do que
  * mudar DAQUI em diante, igual ao modal, que compara com o compromisso como
  * ele abre. Sem isso, editar só o título depois traria a caixa de volta,
  * marcada, oferecendo a mensagem que a recepção já recusou.
+ *
+ * O worker JÁ ENVIANDO (02/10, revisão): o lease põe o vencimento em agora +
+ * 10 min, bem além do atraso normal da fila (3 min). Vencimento além do atraso
+ * = o worker pegou e a mensagem está saindo; desmarcar não a segura mais.
+ * Nesse caso NADA é mexido — tirar o pendente e gravar a base fazia a tela
+ * dizer "nada vai ao paciente" enquanto a mensagem saía, e o fechamento do
+ * worker sobrescrevia a base que a recepção tinha aceitado. Devolve `incerta`
+ * para a recepção conferir a conversa.
  *
  * Devolve `{ descartada }` só se havia algo na fila (o modal avisa que não
  * vai mais). Nunca lança.
@@ -236,30 +331,39 @@ export async function descartarConfirmacaoPendente(args: {
     const desfecho: DesfechoDaConfirmacao = { status: 'descartada', motivo: 'a caixa foi desmarcada', at: agora.toISOString() }
     const res = await db.execute(sql`
       WITH antes AS (
-        SELECT id, confirmation_due_at
+        SELECT id, confirmation_due_at,
+               COALESCE(confirmation_due_at > now() + ${ATRASO_DA_CONFIRMACAO_MS}::int * interval '1 millisecond', false) AS saindo
           FROM calendar_events
          WHERE id = ${args.eventId}
            AND account_id = ${args.accountId}
            FOR UPDATE
       )
       UPDATE calendar_events AS u
-         SET confirmation_known = jsonb_build_object(
-               'startsAt', u.starts_at, 'calendarId', u.calendar_id, 'contactId', u.contact_id),
+         SET confirmation_known = CASE
+                 WHEN antes.saindo THEN u.confirmation_known
+                 ELSE jsonb_build_object('startsAt', u.starts_at, 'calendarId', u.calendar_id, 'contactId', u.contact_id)
+               END,
              confirmation_result = CASE
+                 WHEN antes.saindo THEN u.confirmation_result
                  WHEN antes.confirmation_due_at IS NOT NULL THEN ${JSON.stringify(desfecho)}::jsonb
                  ELSE u.confirmation_result
                END,
-             confirmation_due_at = NULL,
-             confirmation_conversation_id = NULL
+             confirmation_due_at = CASE WHEN antes.saindo THEN u.confirmation_due_at ELSE NULL END,
+             confirmation_conversation_id = CASE WHEN antes.saindo THEN u.confirmation_conversation_id ELSE NULL END
         FROM antes
        WHERE u.id = antes.id
-      RETURNING (antes.confirmation_due_at IS NOT NULL) AS havia
+      RETURNING (antes.confirmation_due_at IS NOT NULL) AS havia, antes.saindo AS saindo
     `)
-    const havia = (res.rows[0] as { havia?: boolean } | undefined)?.havia === true
-    return havia ? { descartada: true } : null
+    const linha = res.rows[0] as { havia?: boolean; saindo?: boolean } | undefined
+    if (linha?.saindo === true) {
+      return { incerta: 'a confirmação já estava saindo quando a caixa foi desmarcada; confira a conversa' }
+    }
+    return linha?.havia === true ? { descartada: true } : null
   } catch (err) {
     console.error('[agenda] confirmação: tirar da fila falhou:', err)
-    return { naoEnviada: 'não foi possível cancelar a confirmação que estava na fila' }
+    // Não deu para tirar ≠ não vai sair: ela continua na fila e sai na hora
+    // dela (02/10, revisão — antes a tela dizia "não enviada").
+    return { incerta: 'não deu para cancelar a confirmação que estava na fila: ela ainda pode sair; confira a conversa' }
   }
 }
 
@@ -289,6 +393,23 @@ export function sqlPegarVencidas(limite: number = LOTE_DA_FILA) {
            )
     RETURNING u.id, u.account_id, u.confirmation_due_at::text AS lease,
               u.confirmation_conversation_id AS conversation_id
+  `
+}
+
+/**
+ * O marcador 'enviando', gravado ANTES de enviar (02/10, revisão) e só se o
+ * vencimento AINDA é o do lease (compare-and-swap): se a recepção salvou de
+ * novo ou desmarcou a caixa depois de o worker pegar o item, não afeta linha
+ * nenhuma e o worker não envia — o pendente novo (ou o descarte) é que vale.
+ */
+export function sqlMarcarEnviando(args: { id: string; accountId: string; lease: string; marcador: ConfirmacaoEnviando }) {
+  return sql`
+    UPDATE calendar_events
+       SET confirmation_result = ${JSON.stringify(args.marcador)}::jsonb
+     WHERE id = ${args.id}
+       AND account_id = ${args.accountId}
+       AND confirmation_due_at = ${args.lease}::timestamptz
+    RETURNING id
   `
 }
 
@@ -328,8 +449,11 @@ async function fecharItem(args: Parameters<typeof sqlFecharItem>[0]): Promise<vo
     await db.execute(sqlFecharItem(args))
   } catch (err) {
     // Uma segunda tentativa: se a confirmação SAIU e isto não gravar, o lease
-    // vence em 10 min e o worker mandaria de novo.
+    // vence em 10 min e a linha volta — o marcador 'enviando' segura o reenvio,
+    // mas vira "incerta" quando na verdade saiu. Espera um pouco antes: a
+    // falha típica é a conexão caindo.
     console.error('[booking-confirmation] fechar o item falhou, tentando de novo:', err)
+    await new Promise((ok) => setTimeout(ok, ESPERA_PARA_FECHAR_DE_NOVO_MS))
     await db.execute(sqlFecharItem(args))
   }
 }
@@ -370,6 +494,14 @@ async function anotarNaConversa(args: {
   }
 }
 
+/** O que o envio devolveu, no formato da coluna (inclusive o "nada a mandar" da releitura). */
+function desfechoDoResultado(r: ResultadoDoEnvio, agora: Date): DesfechoDaConfirmacao {
+  if (r === 'enviada') return desfechoDoEnvio(r, agora)
+  if ('semMudanca' in r) return { status: 'semMudanca', at: agora.toISOString() }
+  if ('descartada' in r) return { status: 'descartada', motivo: r.descartada, at: agora.toISOString() }
+  return desfechoDoEnvio(r, agora)
+}
+
 /** Um item da fila: decide, envia (ou não), fecha e, se não saiu, anota. */
 async function processarItem(item: ItemDaFila): Promise<DesfechoDaConfirmacao | null> {
   const ev = firstOrNull(
@@ -382,6 +514,7 @@ async function processarItem(item: ItemDaFila): Promise<DesfechoDaConfirmacao | 
         contactId: calendarEvents.contactId,
         calendarName: calendars.name,
         known: calendarEvents.confirmationKnown,
+        result: calendarEvents.confirmationResult,
       })
       .from(calendarEvents)
       .leftJoin(calendars, and(eq(calendars.id, calendarEvents.calendarId), eq(calendars.accountId, item.accountId)))
@@ -391,35 +524,58 @@ async function processarItem(item: ItemDaFila): Promise<DesfechoDaConfirmacao | 
   // Apagado entre o lease e aqui: a linha sumiu, não há o que fechar.
   if (!ev) return null
 
-  const conhecido = isConfirmacaoConhecida(ev.known) ? ev.known : null
-  const decisao = decidirNaFila({
-    final: { ...ev, nomeAgenda: ev.calendarName },
-    conhecido: conhecido && {
-      ...conhecido,
-      nomeAgenda:
-        conhecido.calendarId === ev.calendarId ? ev.calendarName : await nomeDaAgenda(item.accountId, conhecido.calendarId),
-    },
-  })
-
+  const final: ConfirmacaoConhecida = { startsAt: ev.startsAt, calendarId: ev.calendarId, contactId: ev.contactId }
   let desfecho: DesfechoDaConfirmacao
   let novoConhecido: ConfirmacaoConhecida | null = null
-  if (decisao.acao === 'descartar') {
-    desfecho = { status: 'descartada', motivo: decisao.motivo, at: new Date().toISOString() }
-  } else if (decisao.acao === 'semMudanca') {
-    desfecho = { status: 'semMudanca', at: new Date().toISOString() }
+
+  if (isConfirmacaoEnviando(ev.result)) {
+    // A tentativa anterior marcou 'enviando' e não fechou (o worker morreu, ou
+    // passou dos 10 min do lease): a mensagem pode ter saído. Reenviar
+    // arriscaria o paciente receber duas; fecha como incerta, com nota para a
+    // recepção conferir. O estado final vira base — a próxima mudança manda o
+    // horário inteiro de novo, então o paciente nunca fica com informação
+    // errada por causa disto.
+    desfecho = { status: 'incerta', motivo: MOTIVO_INCERTO, at: new Date().toISOString() }
+    novoConhecido = final
   } else {
-    const r = await enviarConfirmacaoDoAgendamento({
-      accountId: item.accountId,
-      eventId: item.id,
-      tipo: decisao.tipo,
-      conversationId: item.conversationId,
-    })
-    desfecho = desfechoDoEnvio(r, new Date())
-    // Incerta também vira base: a mensagem pode ter chegado, e a próxima
-    // mudança manda o horário inteiro de novo — o paciente nunca fica com
-    // informação errada; tratar como "não sabe" arriscaria mandar duas vezes.
-    if (desfecho.status === 'enviada' || desfecho.status === 'incerta') {
-      novoConhecido = { startsAt: ev.startsAt, calendarId: ev.calendarId, contactId: ev.contactId }
+    const salvo = isConfirmacaoConhecida(ev.known) ? ev.known : null
+    const conhecido = salvo && {
+      ...salvo,
+      nomeAgenda: salvo.calendarId === ev.calendarId ? ev.calendarName : await nomeDaAgenda(item.accountId, salvo.calendarId),
+    }
+    const decisao = decidirNaFila({ final: { ...ev, nomeAgenda: ev.calendarName }, conhecido })
+
+    if (decisao.acao === 'descartar') {
+      desfecho = { status: 'descartada', motivo: decisao.motivo, at: new Date().toISOString() }
+    } else if (decisao.acao === 'semMudanca') {
+      desfecho = { status: 'semMudanca', at: new Date().toISOString() }
+    } else {
+      const marcou = await db.execute(
+        sqlMarcarEnviando({
+          id: item.id,
+          accountId: item.accountId,
+          lease: item.lease,
+          marcador: { status: 'enviando', at: new Date().toISOString() },
+        }),
+      )
+      // A recepção mexeu na fila depois do lease (salvou de novo, desmarcou a
+      // caixa) ou apagou o compromisso: não envia nem fecha — vale o que ela fez.
+      if (marcou.rows.length === 0) return null
+      // O envio relê, decide o tipo e monta o texto sobre a MESMA leitura, e
+      // devolve o retrato que usou: é ele que vira base (02/10, revisão).
+      const r = await enviarConfirmacaoDoAgendamento({
+        accountId: item.accountId,
+        eventId: item.id,
+        conhecido,
+        conversationId: item.conversationId,
+      })
+      desfecho = desfechoDoResultado(r.resultado, new Date())
+      // Incerta também vira base: a mensagem pode ter chegado, e a próxima
+      // mudança manda o horário inteiro de novo — o paciente nunca fica com
+      // informação errada; tratar como "não sabe" arriscaria mandar duas vezes.
+      if (desfecho.status === 'enviada' || desfecho.status === 'incerta') {
+        novoConhecido = r.retrato ?? final
+      }
     }
   }
 

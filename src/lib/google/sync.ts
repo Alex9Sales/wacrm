@@ -69,6 +69,18 @@ async function contatoPeloTelefone(
   }
 }
 
+/**
+ * now() do Postgres, em texto — o mesmo relógio que grava `updated_at` (os
+ * salvares do CRM gravam now() do banco). O relógio do servidor da aplicação
+ * pode estar uns segundos fora.
+ */
+async function agoraNoBanco(): Promise<string> {
+  const res = await db.execute(sql`SELECT now()::text AS agora`)
+  const agora = (res.rows[0] as { agora?: string } | undefined)?.agora
+  if (!agora) throw new Error('o banco não devolveu a hora')
+  return agora
+}
+
 export async function getValidAccessToken(conn: ConnectionRow): Promise<string> {
   const expiryMs = conn.tokenExpiry ? Date.parse(conn.tokenExpiry) : 0
   const stillValid = expiryMs - Date.now() > 60_000
@@ -349,8 +361,19 @@ async function cancelarFantasma(
           sql`${calendarEvents.updatedAt} < now() - ${idadeMin}`,
         ),
       )
-      .returning({ id: calendarEvents.id })
-    if (!res.length) return null
+      // O que passa ao gêmeo sai DAQUI, da linha no instante em que foi
+      // cancelada (02/10, revisão) — não da leitura da varredura, feita ANTES
+      // das perguntas ao Google: nesse meio-tempo o lembrete pode ter saído
+      // (reminders_sent andou) ou a recepção pode ter ligado o paciente.
+      .returning({
+        id: calendarEvents.id,
+        contactId: calendarEvents.contactId,
+        dealId: calendarEvents.dealId,
+        remindersSent: calendarEvents.remindersSent,
+        startsAt: calendarEvents.startsAt,
+      })
+    const fantasma = res[0]
+    if (!fantasma) return null
 
     const gemeos = and(
       eq(calendarEvents.accountId, accountId),
@@ -361,29 +384,29 @@ async function cancelarFantasma(
     const achados = await tx.select({ id: calendarEvents.id }).from(calendarEvents).where(gemeos)
     if (!achados.length) return { gemeos: 0 }
 
-    if (linha.contactId && linha.remindersSent > 0) {
+    if (fantasma.contactId && fantasma.remindersSent > 0) {
       await tx
         .update(calendarEvents)
-        .set({ remindersSent: sql`GREATEST(${calendarEvents.remindersSent}, ${linha.remindersSent})` })
+        .set({ remindersSent: sql`GREATEST(${calendarEvents.remindersSent}, ${fantasma.remindersSent})` })
         .where(
           and(
             gemeos,
-            eq(calendarEvents.startsAt, linha.startsAt),
-            lt(calendarEvents.remindersSent, linha.remindersSent),
-            or(isNull(calendarEvents.contactId), eq(calendarEvents.contactId, linha.contactId)),
+            eq(calendarEvents.startsAt, fantasma.startsAt),
+            lt(calendarEvents.remindersSent, fantasma.remindersSent),
+            or(isNull(calendarEvents.contactId), eq(calendarEvents.contactId, fantasma.contactId)),
           ),
         )
     }
-    if (linha.contactId) {
+    if (fantasma.contactId) {
       await tx
         .update(calendarEvents)
-        .set({ contactId: linha.contactId })
+        .set({ contactId: fantasma.contactId })
         .where(and(gemeos, isNull(calendarEvents.contactId)))
     }
-    if (linha.dealId) {
+    if (fantasma.dealId) {
       await tx
         .update(calendarEvents)
-        .set({ dealId: linha.dealId })
+        .set({ dealId: fantasma.dealId })
         .where(and(gemeos, isNull(calendarEvents.dealId)))
     }
     return { gemeos: achados.length }
@@ -538,6 +561,12 @@ export async function importGoogleEvents(
     const aVarrer: { calendarId: string; calGoogleId: string; idsNaListagem: Set<string> }[] = []
     for (const cal of cals) {
       if (!cal.googleCalendarId) continue
+      // O relógio do BANCO antes de pedir a lista ao Google (02/10, revisão).
+      // A listagem é uma foto desse instante; o que a recepção salvou no CRM
+      // DEPOIS dela (entre a resposta do Google e o UPDATE abaixo, que pode
+      // demorar numa agenda grande) não pode ser desfeito pela foto velha —
+      // a linha fica para a próxima rodada, que já lista com o push dela.
+      const inicioDaListagem = await agoraNoBanco()
       // showDeleted: o apagado precisa CHEGAR aqui pra liberar o horário.
       const listagem = { truncated: false }
       const events = await listGoogleEvents(accessToken, cal.googleCalendarId, timeMin, timeMax, {
@@ -603,6 +632,13 @@ export async function importGoogleEvents(
           // 01/10: arrastou no Google para outro horário = lembrete recomeça,
           // como na Agenda e na IA (ver recomecoDoLembrete). Antes o contador
           // da data antiga seguia valendo e a data nova ficava sem aviso.
+          //
+          // 02/10, revisão: só a linha que ninguém mexeu desde a listagem. Era
+          // um UPDATE incondicional: a recepção salvava 10h→11h no CRM enquanto
+          // a importação processava, e a foto do Google (ainda 10h) desfazia o
+          // salvar. Pulada, a linha volta na próxima rodada; e como o UPDATE
+          // não acontece, o recomeço do lembrete calculado com o horário lido
+          // aqui também não.
           await db
             .update(calendarEvents)
             .set({
@@ -610,7 +646,7 @@ export async function importGoogleEvents(
               ...recomecoDoLembrete(existing.startsAt, values.startsAt),
               updatedAt: sql`now()`,
             })
-            .where(eq(calendarEvents.id, existing.id))
+            .where(and(eq(calendarEvents.id, existing.id), lt(calendarEvents.updatedAt, inicioDaListagem)))
           if (contactId) {
             await db
               .update(calendarEvents)

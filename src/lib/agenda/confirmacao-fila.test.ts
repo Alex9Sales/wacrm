@@ -56,7 +56,8 @@ const h = vi.hoisted(() => {
         },
       }),
     },
-    enviar: vi.fn<(args: Record<string, unknown>) => Promise<unknown>>(async () => 'enviada'),
+    // Desde a revisão de 02/10 o envio devolve o resultado E o retrato que usou.
+    enviar: vi.fn<(args: Record<string, unknown>) => Promise<unknown>>(async () => ({ resultado: 'enviada', retrato: null })),
     conversa: vi.fn<(accountId: string, contactId: string, pedida: string | null) => Promise<unknown>>(async () => ({
       id: 'cv-recente',
       provider: 'waha',
@@ -77,12 +78,16 @@ vi.mock('./confirmacao-envio', () => ({
 }))
 
 import {
+  ESPERA_PARA_FECHAR_DE_NOVO_MS,
   agendarConfirmacao,
+  conferirEdicaoSemCaixa,
   descartarConfirmacaoPendente,
   processarConfirmacoesVencidas,
   sqlFecharItem,
+  sqlMarcarEnviando,
   sqlPegarVencidas,
 } from './confirmacao-fila'
+import { MOTIVO_INCERTO, isConfirmacaoEnviando, isDesfechoDaConfirmacao } from './confirmacao-agendamento'
 
 const dialect = new PgDialect()
 const plano = (s: string) => s.replace(/\s+/g, ' ').trim()
@@ -121,7 +126,7 @@ beforeEach(() => {
   h.state.settings = { bookingConfirmation: true, businessTimezone: 'America/Sao_Paulo' }
   h.db.execute.mockClear()
   h.enviar.mockReset()
-  h.enviar.mockImplementation(async () => 'enviada')
+  h.enviar.mockImplementation(async () => ({ resultado: 'enviada', retrato: null }))
   h.conversa.mockReset()
   h.conversa.mockImplementation(async () => ({ id: 'cv-recente', provider: 'waha' }))
   vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -143,8 +148,12 @@ describe('o salvar põe na fila (agendarConfirmacao)', () => {
     expect(q.sql).toContain(
       'confirmation_known = CASE WHEN confirmation_due_at IS NULL AND confirmation_known IS NULL THEN $3::jsonb ELSE confirmation_known END',
     )
-    // O desfecho antigo não vale mais: o que vale é o pendente novo.
-    expect(q.sql).toContain('confirmation_result = NULL')
+    // O desfecho antigo não vale mais: o que vale é o pendente novo — menos o
+    // marcador 'enviando' de um worker que morreu no meio (revisão de 02/10):
+    // é ele que impede a próxima passada de mandar de novo.
+    expect(q.sql).toContain(
+      "confirmation_result = CASE WHEN confirmation_result->>'status' = 'enviando' THEN confirmation_result ELSE NULL END",
+    )
     expect(q.params).toEqual([180_000, CV, null, 'ev-1', 'acc-1'])
     expect(q.cru).not.toContain('--')
     // Nada sai no salvar.
@@ -259,9 +268,79 @@ describe('o salvar põe na fila (agendarConfirmacao)', () => {
   })
 })
 
+describe('edição salva SEM a caixa na tela (conferirEdicaoSemCaixa) — revisão de 02/10', () => {
+  // O cenário da revisão: salvou 10h→11h (fila), o worker mandou "remarcada
+  // para 11h" (known = 11h), a grade velha ainda dizia que o paciente sabia
+  // das 10h, e a recepção voltou para 10h sem a caixa aparecer.
+  const ONZE = '2026-10-08 18:00:00+00'
+  const DEZ_GRAVADO = { ...LINHA, startsAt: LINHA.startsAt, known: { startsAt: ONZE, calendarId: 'cal-a', contactId: 'c-1' } }
+  const ANTES_ONZE = { ...ANTES, startsAt: ONZE }
+  const conferir = (extra: Partial<Parameters<typeof conferirEdicaoSemCaixa>[0]> = {}) =>
+    conferirEdicaoSemCaixa({ accountId: 'acc-1', eventId: 'ev-1', antes: ANTES_ONZE, agora: AGORA, ...extra })
+
+  it('o paciente sabe de OUTRO horário e nada está pendente: põe na fila (o padrão da caixa) e o aviso diz por quê', async () => {
+    // 1ª leitura: a conferência; 2ª: a do agendarConfirmacao.
+    h.state.results.push([DEZ_GRAVADO], [DEZ_GRAVADO])
+    h.state.execs.push(NA_FILA)
+
+    const r = await conferir()
+
+    expect(r).toEqual({ agendada: '2026-10-02T13:08:00.123Z', semCaixa: true })
+    expect(h.db.execute).toHaveBeenCalledTimes(1)
+    expect(exec(0).sql).toContain("SET confirmation_due_at = now() + $1::int * interval '1 millisecond'")
+    // A base gravada (11h) fica: o CASE só usa o "antes" quando não há base.
+    expect(exec(0).params).toEqual([180_000, null, JSON.stringify(ANTES_ONZE), 'ev-1', 'acc-1'])
+    expect(h.enviar).not.toHaveBeenCalled()
+  })
+
+  it('compromisso antigo sem base e só o título mudou: nada (o paciente não precisa saber)', async () => {
+    h.state.results.push([LINHA])
+
+    expect(await conferir({ antes: ANTES })).toBeNull()
+    expect(h.db.execute).not.toHaveBeenCalled()
+  })
+
+  it('o paciente já sabe deste horário (moveu e voltou): nada', async () => {
+    h.state.results.push([{ ...LINHA, known: { startsAt: '2026-10-08T17:00:00+00:00', calendarId: 'cal-a', contactId: 'c-1' } }])
+
+    expect(await conferir()).toBeNull()
+    expect(h.db.execute).not.toHaveBeenCalled()
+  })
+
+  it('já há uma na fila: não mexe — o worker manda o estado final, comparado com a base', async () => {
+    h.state.results.push([{ ...DEZ_GRAVADO, dueAt: '2026-10-02 13:06:00+00' }])
+
+    expect(await conferir()).toBeNull()
+    expect(h.db.execute).not.toHaveBeenCalled()
+  })
+
+  it('"não perturbe": nada, e NÃO grava "não enviada" (ninguém pediu a confirmação)', async () => {
+    h.state.results.push([{ ...DEZ_GRAVADO, optedOut: true }])
+
+    expect(await conferir()).toBeNull()
+    expect(h.db.execute).not.toHaveBeenCalled()
+  })
+
+  it('opção desligada na conta: nada, e nem lê o compromisso', async () => {
+    h.state.settings = { bookingConfirmation: false }
+    h.state.results.push([DEZ_GRAVADO])
+
+    expect(await conferir()).toBeNull()
+    expect(h.state.results).toHaveLength(1)
+  })
+
+  it('banco fora do ar: não lança, e o aviso não cala', async () => {
+    h.state.results.push(new Error('connection terminated'))
+
+    expect(await conferir()).toEqual({
+      naoEnviada: 'não deu para conferir se o paciente precisa ser avisado desta mudança',
+    })
+  })
+})
+
 describe('caixa desmarcada na tela (descartarConfirmacaoPendente)', () => {
   it('havia uma na fila: tira, grava o estado atual como base e avisa', async () => {
-    h.state.execs.push({ rows: [{ havia: true }] })
+    h.state.execs.push({ rows: [{ havia: true, saindo: false }] })
 
     const r = await descartarConfirmacaoPendente({ accountId: 'acc-1', eventId: 'ev-1', agora: AGORA })
 
@@ -270,26 +349,57 @@ describe('caixa desmarcada na tela (descartarConfirmacaoPendente)', () => {
     // A base passa a ser o compromisso como ficou: editar só o título depois
     // não traz de volta a caixa com a mensagem que a recepção recusou.
     expect(q.sql).toContain(
-      "SET confirmation_known = jsonb_build_object( 'startsAt', u.starts_at, 'calendarId', u.calendar_id, 'contactId', u.contact_id)",
+      "ELSE jsonb_build_object('startsAt', u.starts_at, 'calendarId', u.calendar_id, 'contactId', u.contact_id)",
     )
-    expect(q.sql).toContain('WHEN antes.confirmation_due_at IS NOT NULL THEN $3::jsonb ELSE u.confirmation_result END')
-    expect(q.sql).toContain('confirmation_due_at = NULL, confirmation_conversation_id = NULL')
-    expect(JSON.parse(q.params[2] as string)).toMatchObject({ status: 'descartada' })
+    expect(q.sql).toContain('WHEN antes.confirmation_due_at IS NOT NULL THEN $4::jsonb ELSE u.confirmation_result END')
+    expect(q.sql).toContain('confirmation_due_at = CASE WHEN antes.saindo THEN u.confirmation_due_at ELSE NULL END')
+    expect(q.sql).toContain(
+      'confirmation_conversation_id = CASE WHEN antes.saindo THEN u.confirmation_conversation_id ELSE NULL END',
+    )
+    expect(q.params.slice(0, 3)).toEqual([180_000, 'ev-1', 'acc-1'])
+    expect(JSON.parse(q.params[3] as string)).toMatchObject({ status: 'descartada' })
     expect(q.cru).not.toContain('--')
   })
 
+  it('o worker JÁ está enviando (lease além do atraso da fila): não mexe em nada e manda conferir a conversa', async () => {
+    h.state.execs.push({ rows: [{ havia: true, saindo: true }] })
+
+    const r = await descartarConfirmacaoPendente({ accountId: 'acc-1', eventId: 'ev-1', agora: AGORA })
+
+    expect(r).toEqual({ incerta: 'a confirmação já estava saindo quando a caixa foi desmarcada; confira a conversa' })
+    const q = exec(0)
+    // "Saindo" = vencimento além de agora + 3 min (só o lease, de 10 min, passa disso).
+    expect(q.sql).toContain(
+      "COALESCE(confirmation_due_at > now() + $1::int * interval '1 millisecond', false) AS saindo",
+    )
+    // Cada coluna fica como está quando saindo — inclusive a base, que o
+    // fechamento do worker vai gravar com o que a mensagem disse.
+    expect(q.sql).toContain('confirmation_known = CASE WHEN antes.saindo THEN u.confirmation_known')
+    expect(q.sql).toContain('confirmation_result = CASE WHEN antes.saindo THEN u.confirmation_result')
+  })
+
   it('não havia nada na fila: nada a dizer', async () => {
-    h.state.execs.push({ rows: [{ havia: false }] })
+    h.state.execs.push({ rows: [{ havia: false, saindo: false }] })
 
     expect(await descartarConfirmacaoPendente({ accountId: 'acc-1', eventId: 'ev-1' })).toBeNull()
   })
 
-  it('banco fora do ar: não lança, avisa', async () => {
+  it('banco fora do ar: não lança — e não diz "não enviada", porque ela ainda pode sair', async () => {
     h.state.execs.push(new Error('connection terminated'))
 
     expect(await descartarConfirmacaoPendente({ accountId: 'acc-1', eventId: 'ev-1' })).toEqual({
-      naoEnviada: 'não foi possível cancelar a confirmação que estava na fila',
+      incerta: 'não deu para cancelar a confirmação que estava na fila: ela ainda pode sair; confira a conversa',
     })
+  })
+})
+
+describe('o marcador "enviando" não é desfecho para a tela', () => {
+  it('isDesfechoDaConfirmacao recusa; isConfirmacaoEnviando reconhece', () => {
+    const m = { status: 'enviando', at: AGORA.toISOString() }
+    expect(isDesfechoDaConfirmacao(m)).toBe(false)
+    expect(isConfirmacaoEnviando(m)).toBe(true)
+    expect(isConfirmacaoEnviando({ status: 'enviada', at: AGORA.toISOString() })).toBe(false)
+    expect(isConfirmacaoEnviando(null)).toBe(false)
   })
 })
 
@@ -331,11 +441,26 @@ describe('o worker: SQL da fila', () => {
     ])
     expect(q.sql).not.toContain('--')
   })
+
+  it('o marcador "enviando" só entra se o vencimento AINDA é o do lease (revisão de 02/10)', () => {
+    const marcador = { status: 'enviando' as const, at: AGORA.toISOString() }
+    const q = dialect.sqlToQuery(
+      sqlMarcarEnviando({ id: 'ev-1', accountId: 'acc-1', lease: '2026-10-02 13:18:00.123456+00', marcador }),
+    )
+    const s = plano(q.sql)
+    expect(s).toBe(
+      'UPDATE calendar_events SET confirmation_result = $1::jsonb WHERE id = $2 AND account_id = $3 AND confirmation_due_at = $4::timestamptz RETURNING id',
+    )
+    expect(q.params).toEqual([JSON.stringify(marcador), 'ev-1', 'acc-1', '2026-10-02 13:18:00.123456+00'])
+    expect(q.sql).not.toContain('--')
+  })
 })
 
 describe('o worker: cada confirmação vencida (processarConfirmacoesVencidas)', () => {
   const LEASE = '2026-10-02 13:18:00.123456+00'
   const ITEM = { id: 'ev-1', account_id: 'acc-1', lease: LEASE, conversation_id: 'cv-1' }
+  /** O marcador 'enviando' pegou (o vencimento ainda era o do lease). */
+  const MARCOU = { rows: [{ id: 'ev-1' }] }
   // O estado FINAL (agenda do Dr., quinta 14h).
   const FINAL = {
     status: 'confirmed',
@@ -345,15 +470,29 @@ describe('o worker: cada confirmação vencida (processarConfirmacoesVencidas)',
     contactId: 'c-1',
     calendarName: 'Dr. Beltrano Teste',
     known: null as unknown,
+    result: null as unknown,
   }
+  const RETRATO = { startsAt: FINAL.startsAt, calendarId: 'cal-b', contactId: 'c-1' }
+  /** O envio devolve o resultado e o retrato da leitura DELE (revisão de 02/10). */
+  const devolve = (resultado: unknown, retrato: unknown = RETRATO) => async () => ({ resultado, retrato })
+  /** O UPDATE que fecha o item (é o único com o COALESCE da base). */
   const fechamento = () => {
-    const q = exec(1)
+    const i = h.db.execute.mock.calls.findIndex((c) =>
+      dialect.sqlToQuery(c[0] as SQL).sql.includes('confirmation_known = COALESCE('),
+    )
+    const q = exec(i)
     return {
       conhecido: q.params[0] === null ? null : JSON.parse(q.params[0] as string),
       desfecho: JSON.parse(q.params[1] as string),
       lease: q.params[2],
     }
   }
+  const marcacoes = () =>
+    h.db.execute.mock.calls.filter((c) => dialect.sqlToQuery(c[0] as SQL).sql.includes("RETURNING id"))
+
+  beforeEach(() => {
+    h.enviar.mockImplementation(devolve('enviada'))
+  })
 
   it('nada vencido: um UPDATE só, nada mais', async () => {
     const r = await processarConfirmacoesVencidas()
@@ -363,51 +502,73 @@ describe('o worker: cada confirmação vencida (processarConfirmacoesVencidas)',
     expect(h.enviar).not.toHaveBeenCalled()
   })
 
-  it('sem base: manda a MARCAÇÃO do estado final pela conversa de onde veio; enviada → o paciente passa a saber disso', async () => {
-    h.state.execs.push({ rows: [ITEM] })
+  it('sem base: marca "enviando" ANTES, manda a MARCAÇÃO pela conversa de onde veio; enviada → o paciente passa a saber do retrato do envio', async () => {
+    h.state.execs.push({ rows: [ITEM] }, MARCOU)
     h.state.results.push([FINAL])
 
     const r = await processarConfirmacoesVencidas()
 
     expect(r).toEqual({ lidas: 1, enviadas: 1, naoEnviadas: 0, erros: 0 })
     expect(h.enviar).toHaveBeenCalledTimes(1)
-    expect(h.enviar).toHaveBeenCalledWith({ accountId: 'acc-1', eventId: 'ev-1', tipo: 'marcacao', conversationId: 'cv-1' })
-    expect(fechamento()).toMatchObject({
-      conhecido: { startsAt: FINAL.startsAt, calendarId: 'cal-b', contactId: 'c-1' },
-      desfecho: { status: 'enviada' },
-      lease: LEASE,
-    })
+    // O envio recebe o que o paciente sabe (nada) e decide o tipo na leitura dele.
+    expect(h.enviar).toHaveBeenCalledWith({ accountId: 'acc-1', eventId: 'ev-1', conhecido: null, conversationId: 'cv-1' })
+    const marca = exec(1)
+    expect(marca.sql).toContain('SET confirmation_result = $1::jsonb')
+    expect(JSON.parse(marca.params[0] as string)).toMatchObject({ status: 'enviando' })
+    expect(marca.params[3]).toBe(LEASE)
+    expect(h.db.execute.mock.invocationCallOrder[1]).toBeLessThan(h.enviar.mock.invocationCallOrder[0])
+    expect(fechamento()).toMatchObject({ conhecido: RETRATO, desfecho: { status: 'enviada' }, lease: LEASE })
     expect(h.state.inserts).toEqual([])
   })
 
-  it('o paciente já sabia de outro horário: remarcação', async () => {
-    h.state.execs.push({ rows: [ITEM] })
-    h.state.results.push([{ ...FINAL, known: { startsAt: '2026-10-07T17:00:00+00:00', calendarId: 'cal-b', contactId: 'c-1' } }])
+  it('a base gravada é o retrato que o ENVIO usou, não a leitura do worker (revisão de 02/10)', async () => {
+    h.state.execs.push({ rows: [ITEM] }, MARCOU)
+    h.state.results.push([FINAL])
+    // A recepção mexeu entre a leitura do worker e a do envio: a mensagem
+    // falou do horário que o envio leu — é isso que o paciente sabe.
+    const doEnvio = { startsAt: '2026-10-08 18:30:00+00', calendarId: 'cal-b', contactId: 'c-1' }
+    h.enviar.mockImplementationOnce(devolve('enviada', doEnvio))
 
     await processarConfirmacoesVencidas()
 
-    expect(h.enviar).toHaveBeenCalledWith(expect.objectContaining({ tipo: 'remarcacao' }))
+    expect(fechamento().conhecido).toEqual(doEnvio)
   })
 
-  it('a confirmação saiu "com a Dra." errada e a recepção trocou a agenda: "agora é com" o Dr.', async () => {
-    h.state.execs.push({ rows: [ITEM] })
+  it('o paciente já sabia de outro horário: o envio recebe essa base (com o nome da agenda) e decide "remarcada"', async () => {
+    const known = { startsAt: '2026-10-07T17:00:00+00:00', calendarId: 'cal-b', contactId: 'c-1' }
+    h.state.execs.push({ rows: [ITEM] }, MARCOU)
+    h.state.results.push([{ ...FINAL, known }])
+
+    await processarConfirmacoesVencidas()
+
+    expect(h.enviar).toHaveBeenCalledWith(
+      expect.objectContaining({ conhecido: { ...known, nomeAgenda: 'Dr. Beltrano Teste' } }),
+    )
+  })
+
+  it('a confirmação saiu "com a Dra." errada e a recepção trocou a agenda: o envio recebe o nome da agenda de ANTES', async () => {
+    const known = { startsAt: '2026-10-08T17:00:00+00:00', calendarId: 'cal-a', contactId: 'c-1' }
+    h.state.execs.push({ rows: [ITEM] }, MARCOU)
     h.state.results.push(
-      [{ ...FINAL, known: { startsAt: '2026-10-08T17:00:00+00:00', calendarId: 'cal-a', contactId: 'c-1' } }],
+      [{ ...FINAL, known }],
       [{ name: 'Dra. Fulana Exemplo' }], // o nome da agenda que o paciente conhece
     )
 
     await processarConfirmacoesVencidas()
 
-    expect(h.enviar).toHaveBeenCalledWith(expect.objectContaining({ tipo: 'profissional' }))
+    expect(h.enviar).toHaveBeenCalledWith(
+      expect.objectContaining({ conhecido: { ...known, nomeAgenda: 'Dra. Fulana Exemplo' } }),
+    )
   })
 
-  it('moveu e voltou antes de sair: não manda, grava "sem mudança" e a base fica como estava', async () => {
+  it('moveu e voltou antes de sair: não marca nem manda, grava "sem mudança" e a base fica como estava', async () => {
     h.state.execs.push({ rows: [ITEM] })
     h.state.results.push([{ ...FINAL, known: { startsAt: '2026-10-08T17:00:00+00:00', calendarId: 'cal-b', contactId: 'c-1' } }])
 
     const r = await processarConfirmacoesVencidas()
 
     expect(h.enviar).not.toHaveBeenCalled()
+    expect(marcacoes()).toHaveLength(0)
     expect(fechamento()).toMatchObject({ conhecido: null, desfecho: { status: 'semMudanca' } })
     expect(r.enviadas).toBe(0)
   })
@@ -423,10 +584,63 @@ describe('o worker: cada confirmação vencida (processarConfirmacoesVencidas)',
     expect(h.state.inserts).toEqual([])
   })
 
-  it('não enviada: fica no compromisso E vira nota interna na conversa do paciente', async () => {
-    h.state.execs.push({ rows: [ITEM] })
+  it('a releitura do ENVIO não pede mensagem (moveu e voltou no meio): "sem mudança", sem nota nem base nova', async () => {
+    h.state.execs.push({ rows: [ITEM] }, MARCOU)
     h.state.results.push([FINAL])
-    h.enviar.mockImplementationOnce(async () => ({ naoEnviada: 'nenhum WhatsApp conectado nesta conta' }))
+    h.enviar.mockImplementationOnce(devolve({ semMudanca: true }))
+
+    const r = await processarConfirmacoesVencidas()
+
+    expect(fechamento()).toMatchObject({ conhecido: null, desfecho: { status: 'semMudanca' } })
+    expect(h.state.inserts).toEqual([])
+    expect(r).toEqual({ lidas: 1, enviadas: 0, naoEnviadas: 0, erros: 0 })
+  })
+
+  it('a releitura do ENVIO achou o compromisso cancelado: "descartada", sem nota', async () => {
+    h.state.execs.push({ rows: [ITEM] }, MARCOU)
+    h.state.results.push([FINAL])
+    h.enviar.mockImplementationOnce(devolve({ descartada: 'o compromisso foi cancelado' }))
+
+    await processarConfirmacoesVencidas()
+
+    expect(fechamento().desfecho).toMatchObject({ status: 'descartada', motivo: 'o compromisso foi cancelado' })
+    expect(h.state.inserts).toEqual([])
+  })
+
+  it('a recepção mexeu na fila depois do lease (o marcador não pegou): não envia nem fecha — vale o que ela fez', async () => {
+    h.state.execs.push({ rows: [ITEM] }, { rows: [] })
+    h.state.results.push([FINAL])
+
+    const r = await processarConfirmacoesVencidas()
+
+    expect(h.enviar).not.toHaveBeenCalled()
+    expect(h.db.execute).toHaveBeenCalledTimes(2) // pegar + marcar; nada de fechar
+    expect(r).toEqual({ lidas: 1, enviadas: 0, naoEnviadas: 0, erros: 0 })
+  })
+
+  it('a tentativa anterior morreu depois de marcar "enviando": fecha como incerta, SEM reenviar, com nota e o estado final como base', async () => {
+    h.state.execs.push({ rows: [ITEM] })
+    h.state.results.push([{ ...FINAL, result: { status: 'enviando', at: '2026-10-02T13:05:10.000Z' } }])
+
+    const r = await processarConfirmacoesVencidas()
+
+    expect(h.enviar).not.toHaveBeenCalled()
+    expect(marcacoes()).toHaveLength(0)
+    expect(fechamento()).toMatchObject({
+      conhecido: RETRATO,
+      desfecho: { status: 'incerta', motivo: MOTIVO_INCERTO },
+      lease: LEASE,
+    })
+    expect(h.state.inserts[0]?.contentText).toBe(
+      '⚠️ Confirmação da consulta de quinta-feira, 08/10/2026, às 14h: não deu para confirmar se a mensagem saiu; confira a conversa antes de reenviar.',
+    )
+    expect(r.naoEnviadas).toBe(1)
+  })
+
+  it('não enviada: fica no compromisso E vira nota interna na conversa do paciente', async () => {
+    h.state.execs.push({ rows: [ITEM] }, MARCOU)
+    h.state.results.push([FINAL])
+    h.enviar.mockImplementationOnce(devolve({ naoEnviada: 'nenhum WhatsApp conectado nesta conta' }))
 
     const r = await processarConfirmacoesVencidas()
 
@@ -452,24 +666,22 @@ describe('o worker: cada confirmação vencida (processarConfirmacoesVencidas)',
   })
 
   it('incerta: a nota manda conferir antes de reenviar, e vira base (pode ter chegado)', async () => {
-    h.state.execs.push({ rows: [ITEM] })
+    h.state.execs.push({ rows: [ITEM] }, MARCOU)
     h.state.results.push([FINAL])
-    h.enviar.mockImplementationOnce(async () => ({
-      incerta: 'não deu para confirmar se a mensagem saiu; confira a conversa antes de reenviar',
-    }))
+    h.enviar.mockImplementationOnce(devolve({ incerta: MOTIVO_INCERTO }))
 
     await processarConfirmacoesVencidas()
 
     expect(h.state.inserts[0]?.contentText).toBe(
       '⚠️ Confirmação da consulta de quinta-feira, 08/10/2026, às 14h: não deu para confirmar se a mensagem saiu; confira a conversa antes de reenviar.',
     )
-    expect(fechamento().conhecido).toEqual({ startsAt: FINAL.startsAt, calendarId: 'cal-b', contactId: 'c-1' })
+    expect(fechamento().conhecido).toEqual(RETRATO)
   })
 
   it('não enviada e o paciente sem conversa de WhatsApp: fica só no compromisso', async () => {
-    h.state.execs.push({ rows: [ITEM] })
+    h.state.execs.push({ rows: [ITEM] }, MARCOU)
     h.state.results.push([FINAL])
-    h.enviar.mockImplementationOnce(async () => ({ naoEnviada: 'o paciente não tem conversa de WhatsApp' }))
+    h.enviar.mockImplementationOnce(devolve({ naoEnviada: 'o paciente não tem conversa de WhatsApp' }))
     h.conversa.mockImplementationOnce(async () => null)
 
     await processarConfirmacoesVencidas()
@@ -479,9 +691,9 @@ describe('o worker: cada confirmação vencida (processarConfirmacoesVencidas)',
   })
 
   it('apagado no meio do envio ("não encontrado"): sem nota', async () => {
-    h.state.execs.push({ rows: [ITEM] })
+    h.state.execs.push({ rows: [ITEM] }, MARCOU)
     h.state.results.push([FINAL])
-    h.enviar.mockImplementationOnce(async () => ({ naoEnviada: 'o compromisso não foi encontrado' }))
+    h.enviar.mockImplementationOnce(devolve({ naoEnviada: 'o compromisso não foi encontrado' }, null))
 
     await processarConfirmacoesVencidas()
 
@@ -500,7 +712,7 @@ describe('o worker: cada confirmação vencida (processarConfirmacoesVencidas)',
   })
 
   it('erro num item não derruba os outros: ele fica com o lease e volta em 10 min', async () => {
-    h.state.execs.push({ rows: [ITEM, { ...ITEM, id: 'ev-2' }] })
+    h.state.execs.push({ rows: [ITEM, { ...ITEM, id: 'ev-2' }] }, { rows: [{ id: 'ev-2' }] })
     h.state.results.push(new Error('connection terminated'), [FINAL])
 
     const r = await processarConfirmacoesVencidas()
@@ -509,14 +721,29 @@ describe('o worker: cada confirmação vencida (processarConfirmacoesVencidas)',
     expect(h.enviar).toHaveBeenCalledWith(expect.objectContaining({ eventId: 'ev-2' }))
   })
 
-  it('fechar falhou uma vez: tenta de novo — senão o lease vence e a mensagem sairia duas vezes', async () => {
-    h.state.execs.push({ rows: [ITEM] }, new Error('connection terminated'), { rows: [] })
-    h.state.results.push([FINAL])
+  it('fechar falhou uma vez: espera um pouco e tenta de novo — senão o lease vence e a linha volta', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+    try {
+      h.state.execs.push({ rows: [ITEM] }, MARCOU, new Error('connection terminated'), { rows: [] })
+      h.state.results.push([FINAL])
 
-    const r = await processarConfirmacoesVencidas()
+      const p = processarConfirmacoesVencidas()
+      // A 1ª tentativa de fechar falhou e a espera foi armada. (Sem vi.waitFor:
+      // com relógio falso ele adianta o relógio a cada checagem.)
+      for (let i = 0; i < 1_000 && vi.getTimerCount() === 0; i++) await Promise.resolve()
+      expect(vi.getTimerCount()).toBe(1)
+      expect(h.db.execute).toHaveBeenCalledTimes(3)
+      // Antes de a espera acabar, nada de 2ª tentativa.
+      await vi.advanceTimersByTimeAsync(ESPERA_PARA_FECHAR_DE_NOVO_MS - 1)
+      expect(h.db.execute).toHaveBeenCalledTimes(3)
+      await vi.advanceTimersByTimeAsync(1)
+      const r = await p
 
-    expect(h.db.execute).toHaveBeenCalledTimes(3)
-    expect(exec(2).sql).toBe(exec(1).sql)
-    expect(r.enviadas).toBe(1)
+      expect(h.db.execute).toHaveBeenCalledTimes(4)
+      expect(exec(3).sql).toBe(exec(2).sql)
+      expect(r.enviadas).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
