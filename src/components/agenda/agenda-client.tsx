@@ -23,6 +23,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import {
   listCalendars,
   listEvents,
+  listarConsultasFuturasDoContato,
   createEvent,
   updateEvent,
   deleteEvent,
@@ -32,9 +33,11 @@ import {
   disconnectGoogle,
   type CalendarRow,
   type ConfirmacaoNaTela,
+  type ConsultaFutura,
   type EventRow,
   type GoogleStatus,
 } from '@/app/(dashboard)/agenda/actions'
+import { rotuloDaRemarcacao, sugerirRemarcacao } from '@/lib/agenda/remarcacao'
 import {
   baseDaConfirmacao,
   diaEHoraNoFuso,
@@ -121,6 +124,18 @@ type Draft = {
    * que o servidor recusa (01/10, revisão). null = ainda não carregado.
    */
   contatoFlags: { optedOut: boolean; isGroup: boolean } | null
+  /**
+   * Consultas futuras do paciente — só no compromisso NOVO (02/10), para a
+   * pergunta "remarcação ou consulta nova?". null = ainda não carregou (ou
+   * trocou o paciente: recarrega); `lista` null = a carga falhou (o modal diz
+   * que não deu para conferir — nunca vira "não tem nenhuma").
+   */
+  consultasDoPaciente: { contactId: string; lista: ConsultaFutura[] | null } | null
+  /**
+   * A resposta da pergunta. null = ninguém mexeu: vale a sugestão
+   * (sugerirRemarcacao), recalculada com o título — como `notifyPatient`.
+   */
+  remarcaEscolha: { tipo: 'nova' } | { tipo: 'remarcar'; eventoId: string } | null
 }
 
 /** Preferências da conta para o modal (getAgendaPrefs). */
@@ -132,6 +147,62 @@ function draftIso(d: Pick<Draft, 'allDay' | 'start' | 'end'>): { startsAt: strin
   const e = d.allDay ? new Date(d.end + 'T23:59') : new Date(d.end)
   if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return null
   return { startsAt: s.toISOString(), endsAt: e.toISOString() }
+}
+
+/**
+ * O início de um compromisso gravado passando pelo MESMO caminho do salvar
+ * (campo da tela → ISO). Abrir e salvar sem mexer dá o mesmo valor, mesmo com
+ * segundos vindos do Google ou dia inteiro gravado no fuso da conta — comparar
+ * com o valor cru do banco ofereceria "remarcação" sem ninguém ter remarcado.
+ */
+function inicioComoNaTela(ev: { startsAt: string; endsAt: string; allDay: boolean }): string {
+  const s = new Date(ev.startsAt)
+  const e = new Date(ev.endsAt)
+  const start = ev.allDay ? toDateInput(s) : toLocalInput(s)
+  const end = ev.allDay ? toDateInput(e) : toLocalInput(e)
+  return draftIso({ allDay: ev.allDay, start, end })?.startsAt ?? ev.startsAt
+}
+
+/**
+ * A consulta que este salvar REMARCA (02/10), ou null = consulta nova. Só no
+ * compromisso novo, com paciente e a lista dele carregada: a escolha de quem
+ * mexeu ou, sem ela, a sugestão pelo nome no título. Escolha que sumiu da
+ * lista (recarregou depois de um erro) volta para a sugestão.
+ */
+function remarcacaoDoRascunho(d: Draft, calendars: CalendarRow[]): ConsultaFutura | null {
+  if (d.id || !d.contactId) return null
+  const cs = d.consultasDoPaciente
+  if (!cs || cs.contactId !== d.contactId || !cs.lista || cs.lista.length === 0) return null
+  const lista = cs.lista
+  const e = d.remarcaEscolha
+  if (e?.tipo === 'nova') return null
+  const escolhida = e?.tipo === 'remarcar' ? lista.find((c) => c.id === e.eventoId) : undefined
+  if (escolhida) return escolhida
+  const sugerida = sugerirRemarcacao(d.title, lista, calendars.map((c) => c.name))
+  return lista.find((c) => c.id === sugerida) ?? null
+}
+
+/** Ainda conferindo se o paciente do compromisso novo já tem consulta? (Salvar espera.) */
+function conferindoConsultas(d: Draft): boolean {
+  return !d.id && Boolean(d.contactId) && d.consultasDoPaciente?.contactId !== d.contactId
+}
+
+/**
+ * Contra o que a confirmação deste salvar é comparada. Edição: o `original`
+ * do rascunho. Remarcação (02/10): a consulta X, com a MESMA regra da fila
+ * (baseDaConfirmacao) — o que o paciente já sabe dela; marcação de X ainda na
+ * fila = nada (vai como marcação); senão X como está gravada. Consulta nova:
+ * null (marcação).
+ */
+function baseDoRascunho(d: Draft, remarcacao: ConsultaFutura | null): Draft['original'] {
+  if (d.id) return d.original
+  if (!remarcacao) return null
+  return baseDaConfirmacao({
+    conhecido: remarcacao.confirmationKnown,
+    pendente: Boolean(remarcacao.confirmationDueAt),
+    // X é do paciente do rascunho: a lista é carregada por ele.
+    atual: { startsAt: inicioComoNaTela(remarcacao), calendarId: remarcacao.calendarId, contactId: d.contactId },
+  })
 }
 
 /**
@@ -148,17 +219,26 @@ function faltaEscolherAgenda(d: Pick<Draft, 'calendarId'>, calendars: CalendarRo
  * com base, só se mudou dia/hora, o profissional (agenda de outra pessoa) ou
  * o paciente. Horário que já passou não oferece. Sem agenda escolhida também
  * não (02/10): a prévia diria "com" quem ainda não se sabe.
+ *
+ * Remarcação no compromisso novo (02/10): é a EDIÇÃO da consulta X, então o
+ * tipo é calculado contra X (baseDoRascunho) — "remarcada", "agora é com" ou
+ * nada, igual ao que a fila vai decidir no servidor.
  */
-function confirmacaoDoRascunho(d: Draft, calendars: CalendarRow[]): TipoConfirmacao | null {
+function confirmacaoDoRascunho(
+  d: Draft,
+  calendars: CalendarRow[],
+  remarcacao: ConsultaFutura | null,
+): TipoConfirmacao | null {
   if (!d.contactId) return null
   if (faltaEscolherAgenda(d, calendars)) return null
   const iso = draftIso(d)
   if (!iso) return null
   if (new Date(d.allDay ? iso.endsAt : iso.startsAt).getTime() <= Date.now()) return null
-  if (!d.original) return 'marcacao'
+  const original = baseDoRascunho(d, remarcacao)
+  if (!original) return 'marcacao'
   const nomeDe = (id: string) => calendars.find((c) => c.id === id)?.name ?? null
   return tipoDaConfirmacaoNaEdicao({
-    antes: { ...d.original, nomeAgenda: nomeDe(d.original.calendarId) },
+    antes: { ...original, nomeAgenda: nomeDe(original.calendarId) },
     depois: {
       startsAt: iso.startsAt,
       calendarId: d.calendarId,
@@ -396,6 +476,43 @@ export function AgendaClient() {
     }
   }, [contatoSemFlags])
 
+  // 🔁 Remarcação ou consulta nova? (02/10) Compromisso NOVO com paciente:
+  // carrega as consultas futuras dele para o modal perguntar. Trocou o
+  // paciente → recarrega e a escolha volta para a sugestão. Falhou → `lista`
+  // null: o modal diz que não deu para conferir (nunca "não tem nenhuma").
+  const contatoParaConsultas =
+    draft && !draft.id && draft.contactId && draft.consultasDoPaciente?.contactId !== draft.contactId
+      ? draft.contactId
+      : null
+  useEffect(() => {
+    if (!contatoParaConsultas) return
+    let vivo = true
+    const grava = (lista: ConsultaFutura[] | null) => {
+      if (!vivo) return
+      setDraft((d) => {
+        if (!d || d.id || d.contactId !== contatoParaConsultas) return d
+        const e = d.remarcaEscolha
+        // A consulta escolhida não está mais na lista (cancelada no meio):
+        // a escolha some e vale a sugestão de novo.
+        const escolhaSumiu = e?.tipo === 'remarcar' && !lista?.some((c) => c.id === e.eventoId)
+        return {
+          ...d,
+          consultasDoPaciente: { contactId: contatoParaConsultas, lista },
+          remarcaEscolha: escolhaSumiu ? null : e,
+        }
+      })
+    }
+    listarConsultasFuturasDoContato(contatoParaConsultas)
+      .then((lista) => grava(lista))
+      .catch((err) => {
+        console.error('[agenda] consultas futuras do paciente:', err)
+        grava(null)
+      })
+    return () => {
+      vivo = false
+    }
+  }, [contatoParaConsultas])
+
   const onSyncGoogle = async () => {
     setSyncing(true)
     try {
@@ -495,6 +612,9 @@ export function AgendaClient() {
       status: 'confirmed',
       // Vindo da conversa, só o id: as flags chegam pelo efeito abaixo.
       contatoFlags: null,
+      // Com paciente, o efeito carrega as consultas futuras dele (02/10).
+      consultasDoPaciente: null,
+      remarcaEscolha: null,
     })
   }
 
@@ -522,21 +642,21 @@ export function AgendaClient() {
       // Contra o que comparar (02/10): a MESMA base que a fila usa — o que o
       // paciente já sabe; marcação ainda na fila = nada (consulta nova para
       // ele); senão o compromisso como abriu. O início "de antes" passa pelo
-      // MESMO caminho do salvar (campo da tela → ISO): abrir e salvar sem
-      // mexer dá o mesmo valor, mesmo com segundos vindos do Google ou dia
-      // inteiro gravado no fuso da conta. Comparar com o valor cru do banco
-      // ofereceria "remarcação" sem ninguém ter remarcado.
+      // MESMO caminho do salvar (inicioComoNaTela).
       original: baseDaConfirmacao({
         conhecido: ev.confirmationKnown,
         pendente: Boolean(ev.confirmationDueAt),
         atual: {
-          startsAt: draftIso({ allDay: ev.allDay, start, end })?.startsAt ?? ev.startsAt,
+          startsAt: inicioComoNaTela(ev),
           calendarId: ev.calendarId,
           contactId: ev.contactId,
         },
       }),
       confirmacaoNaFila: ev.confirmationDueAt,
       ultimaConfirmacao: ev.confirmationResult,
+      // Editar não pergunta "remarcação ou nova?" (02/10): já é a consulta.
+      consultasDoPaciente: null,
+      remarcaEscolha: null,
     })
   }
 
@@ -557,15 +677,21 @@ export function AgendaClient() {
     // O botão já fica desligado e o erro aparece no formulário; isto é a trava.
     if (scheduleError(draft.start, draft.end, draft.allDay)) return
     if (faltaEscolherAgenda(draft, calendars)) return
+    // Sem saber se o paciente já tem consulta, salvar criaria a duplicata que
+    // a pergunta existe para evitar (02/10). O botão já espera; isto é a trava.
+    if (conferindoConsultas(draft)) return
     const iso = draftIso(draft)
     if (!iso) return
     setSaving(true)
+    // "Esta é a remarcação da consulta X" (02/10): o servidor edita X em vez
+    // de criar outra. null = consulta nova (ou edição).
+    const remarcacao = remarcacaoDoRascunho(draft, calendars)
     try {
       const { startsAt, endsAt } = iso
       // Só pede a confirmação quando a caixa está NA TELA e marcada; e só tira
       // da fila quando ela estava NA TELA e foi desmarcada (02/10). Sem a
       // caixa na tela (só mudou o título), a fila fica como está.
-      const tipo = confirmacaoDoRascunho(draft, calendars)
+      const tipo = confirmacaoDoRascunho(draft, calendars, remarcacao)
       const caixaNaTela =
         prefs?.confirmacaoAoAgendar === true &&
         tipo !== null &&
@@ -586,13 +712,20 @@ export function AgendaClient() {
       }
       // Dia do evento (pra pular a visão pra lá e evitar confusão de mês/data).
       const eventDate = new Date(draft.start.slice(0, 10) + 'T12:00:00')
-      const r = draft.id ? await updateEvent(draft.id, payload) : await createEvent(payload)
+      const r = draft.id
+        ? await updateEvent(draft.id, payload)
+        : await createEvent({ ...payload, remarcaEventoId: remarcacao?.id ?? null })
       if (r.error) {
         // As actions não lançam: devolvem { error }. Até 01/10 isso era
         // ignorado — o modal fechava com "Evento criado." e nada tinha sido
         // gravado. Agora o erro aparece e o modal fica aberto, com o que foi
         // digitado, para tentar de novo.
         toast.error(erroLegivel(r.error, 'Não foi possível salvar o evento. Tente de novo.'))
+        // A consulta escolhida pode ter sido cancelada/movida no meio (02/10):
+        // recarrega a lista do paciente para a pergunta mostrar o que vale agora.
+        if (remarcacao) {
+          setDraft((d) => (d && !d.id ? { ...d, consultasDoPaciente: null } : d))
+        }
         return
       }
       setDraft(null)
@@ -600,7 +733,7 @@ export function AgendaClient() {
       // e a confirmação já foi para a fila (ou não). Uma recarga que falhasse
       // caía no catch abaixo e dizia "Não foi possível salvar" — a recepção
       // salvaria de novo sem precisar.
-      toast.success(draft.id ? 'Evento atualizado.' : 'Evento criado.')
+      toast.success(draft.id ? 'Evento atualizado.' : remarcacao ? 'Consulta remarcada.' : 'Evento criado.')
       avisarConfirmacao(r.confirmacao, prefs?.timezone || FUSO_PADRAO)
       if (viewRef.current !== 'month') setDayDate(eventDate)
       const sameMonth =
@@ -1253,11 +1386,19 @@ function EventModal({
   // o Salvar fica desligado e a linha abaixo do seletor diz por quê.
   const faltaAgenda = faltaEscolherAgenda(draft, calendars)
   const tz = prefs?.timezone || FUSO_PADRAO
+  // 🔁 Remarcação ou consulta nova? (02/10) Só no compromisso novo com
+  // paciente que já tem consulta futura. `remarcacao` = a consulta que este
+  // salvar remarca (a escolha, ou a sugestão pelo nome no título); null = nova.
+  const conferindo = conferindoConsultas(draft)
+  const consultasDoPaciente =
+    !draft.id && draft.consultasDoPaciente?.contactId === draft.contactId ? draft.consultasDoPaciente.lista : []
+  const remarcacao = remarcacaoDoRascunho(draft, calendars)
   // A caixa da confirmação: só com a opção da conta ligada, a agenda escolhida
   // e um salvamento que muda algo para o paciente. A prévia mostra o miolo da
-  // mensagem, no fuso da conta, com o profissional da agenda escolhida.
+  // mensagem, no fuso da conta, com o profissional da agenda escolhida. Com
+  // remarcação, é a edição da consulta X: a prévia diz "foi remarcada".
   const tipoConfirmacao =
-    prefs?.confirmacaoAoAgendar && !timeError ? confirmacaoDoRascunho(draft, calendars) : null
+    prefs?.confirmacaoAoAgendar && !timeError ? confirmacaoDoRascunho(draft, calendars, remarcacao) : null
   // Cancelado, grupo, "não perturbe": no lugar da caixa, o porquê (01/10,
   // revisão) — antes a caixa prometia "Sai ao salvar" e o aviso desmentia.
   const semConfirmacao = tipoConfirmacao
@@ -1281,7 +1422,8 @@ function EventModal({
       : 'Enviar confirmação ao paciente pelo WhatsApp'
   // O que a caixa promete (02/10): a confirmação não sai mais NO salvar — vai
   // para a fila e sai uns minutos depois do último salvar, só a versão final.
-  const naFila = draft.confirmacaoNaFila
+  // Na remarcação, a fila é a da consulta X (é ela que é salva).
+  const naFila = draft.id ? draft.confirmacaoNaFila : (remarcacao?.confirmationDueAt ?? null)
   const legendaCaixa = marcada
     ? naFila
       ? 'Já está na fila; salvando, sai 3 min depois, só a versão final'
@@ -1372,6 +1514,9 @@ function EventModal({
                     contact && contact.id === contactId
                       ? { optedOut: contact.optedOut === true, isGroup: contact.isGroup === true }
                       : null,
+                  // Outro paciente (02/10): as consultas dele são outras —
+                  // recarrega, e a resposta da pergunta volta para a sugestão.
+                  ...(contactId !== draft.contactId ? { consultasDoPaciente: null, remarcaEscolha: null } : {}),
                 })
               }
               placeholder="Buscar por nome ou telefone..."
@@ -1396,6 +1541,58 @@ function EventModal({
               )}
             </p>
           </div>
+
+          {/* 🔁 02/10, numa clínica: a IA marcou a avaliação de um menino; à
+              noite a recepção marcou ele e a irmã (mesmo contato) em consultas
+              NOVAS, e a antiga ficou de pé — lembrete errado, cadeira ocupada
+              à toa. Cancelar sozinho é perigoso (famílias têm 2-3 consultas no
+              mesmo contato), então o modal PERGUNTA. Remarcação edita a
+              consulta escolhida; nova mantém todas. */}
+          {!draft.id && draft.contactId && conferindo && (
+            <p className="-mt-1 text-[11px] text-muted-foreground">
+              Conferindo se o paciente já tem consulta marcada…
+            </p>
+          )}
+          {!draft.id && draft.contactId && !conferindo && consultasDoPaciente === null && (
+            <p role="alert" className="-mt-1 flex items-start gap-1 text-xs text-amber-700 dark:text-amber-400">
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+              Não deu para conferir se o paciente já tem consulta marcada. Salvando, entra como consulta nova —
+              se ele já tinha horário, confira a agenda dele.
+            </p>
+          )}
+          {!draft.id && consultasDoPaciente && consultasDoPaciente.length > 0 && (
+            <div
+              role="radiogroup"
+              aria-labelledby="pergunta-remarcacao"
+              className="flex flex-col gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2.5"
+            >
+              <p id="pergunta-remarcacao" className="text-xs font-medium text-foreground">
+                Este paciente já tem consulta marcada. Esta é:
+              </p>
+              {consultasDoPaciente.map((c) => (
+                <label key={c.id} className="flex cursor-pointer items-start gap-2 text-xs text-foreground">
+                  <input
+                    type="radio"
+                    name="remarcacao"
+                    className="mt-0.5"
+                    checked={remarcacao?.id === c.id}
+                    onChange={() => setDraft({ ...draft, remarcaEscolha: { tipo: 'remarcar', eventoId: c.id } })}
+                  />
+                  <span className="min-w-0">{rotuloDaRemarcacao(c, tz)}</span>
+                </label>
+              ))}
+              <label className="flex cursor-pointer items-start gap-2 text-xs text-foreground">
+                <input
+                  type="radio"
+                  name="remarcacao"
+                  className="mt-0.5"
+                  checked={!remarcacao}
+                  onChange={() => setDraft({ ...draft, remarcaEscolha: { tipo: 'nova' } })}
+                />
+                <span className="min-w-0">Consulta nova — manter as que já tem</span>
+              </label>
+            </div>
+          )}
 
           <div>
             <Label className="mb-1 block text-xs">Agenda</Label>
@@ -1575,7 +1772,12 @@ function EventModal({
             <Button variant="outline" onClick={onClose} disabled={saving}>
               Cancelar
             </Button>
-            <Button onClick={onSave} disabled={saving || !draft.title.trim() || !!timeError || faltaAgenda}>
+            {/* Conferindo as consultas do paciente (02/10): salvar antes criaria
+                a duplicata que a pergunta existe para evitar. */}
+            <Button
+              onClick={onSave}
+              disabled={saving || !draft.title.trim() || !!timeError || faltaAgenda || conferindo}
+            >
               {saving ? 'Salvando…' : 'Salvar'}
             </Button>
           </div>
