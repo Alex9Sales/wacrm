@@ -111,6 +111,15 @@ import('./owner-digest-worker')
     console.error('[worker] owner-digest failed to start:', err);
   });
 
+// ⏰ Transferência parada — tick de 2 min: avisa o responsável quando uma
+// transferência da IA passa de N min de expediente sem resposta da equipe
+// (opt-in por conta, 02/10/2026).
+import('./handoff-stalled-worker')
+  .then((m) => m.startHandoffStalledWorker())
+  .catch((err) => {
+    console.error('[worker] handoff-stalled failed to start:', err);
+  });
+
 // 🩺 Saúde dos canais Meta (API oficial) — tick de 30 min: número/token morto
 // na Meta vira 'disconnected' + aviso (antes ficava verde pra sempre).
 import('./meta-health-worker')

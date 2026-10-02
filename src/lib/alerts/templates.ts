@@ -1,7 +1,9 @@
 // Templates padrão dos Avisos do responsável + render — módulo PURO
 // (client-safe: a UI mostra como placeholder; o runtime usa pra enviar).
 
-export type OwnerAlertKind = 'won' | 'handoff' | 'booking' | 'order' | 'demo'
+// 'handoff_stalled' (02/10/2026): a transferência da IA passou de N minutos de
+// expediente sem ninguém da equipe responder (aviso-transferencia-parada.ts).
+export type OwnerAlertKind = 'won' | 'handoff' | 'booking' | 'order' | 'demo' | 'handoff_stalled'
 
 /** O cliente pode substituir por conta (Config→Negócios). Variáveis {{assim}}. */
 export const DEFAULT_ALERT_TEMPLATES: Record<OwnerAlertKind, string> = {
@@ -37,6 +39,16 @@ Detalhes no funil do FluxiaCRM.`,
 📋 Resumo: {{resumo}}
 
 💬 Chamar no WhatsApp: {{whatsapp}}
+🔗 Conversa no FluxiaCRM: {{link}}`,
+  // Sem o "Chamar no WhatsApp" do aviso de transferência: resposta dada do
+  // celular pessoal de quem recebe o aviso não aparece no CRM, e a transferência
+  // seguiria "parada". O caminho é a conversa no CRM (ou o número da empresa).
+  handoff_stalled: `⏰ *TRANSFERÊNCIA SEM RESPOSTA*
+
+👤 {{cliente}} · {{telefone}}
+⏳ Espera há {{tempo}} desde que a IA passou para a equipe
+🏷️ Motivo: {{motivo}}
+
 🔗 Conversa no FluxiaCRM: {{link}}`,
   booking: `📅 *NOVO AGENDAMENTO*
 
