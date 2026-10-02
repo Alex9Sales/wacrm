@@ -38,7 +38,7 @@ import {
   type EventRow,
   type GoogleStatus,
 } from '@/app/(dashboard)/agenda/actions'
-import { rotuloDaRemarcacao, sugerirRemarcacao } from '@/lib/agenda/remarcacao'
+import { avisoDeTrocaDeProfissional, rotuloDaRemarcacao, sugerirRemarcacao } from '@/lib/agenda/remarcacao'
 import {
   baseDaConfirmacao,
   diaEHoraNoFuso,
@@ -133,10 +133,30 @@ type Draft = {
    */
   consultasDoPaciente: { contactId: string; lista: ConsultaFutura[] | null } | null
   /**
-   * A resposta da pergunta. null = ninguém mexeu: vale a sugestão
-   * (sugerirRemarcacao), recalculada com o título — como `notifyPatient`.
+   * A resposta da pergunta. null = SEM RESPOSTA (revisão de 02/10): o Salvar
+   * fica desligado até a recepção responder. Antes null valia a sugestão pelo
+   * nome no título, que vinha pré-marcada e errava em família (nome da mãe no
+   * título, sobrenome dos irmãos, "Retorno Davi" × "Avaliação Davi").
    */
   remarcaEscolha: { tipo: 'nova' } | { tipo: 'remarcar'; eventoId: string } | null
+  /**
+   * Nome do paciente/contato escolhido (02/10, revisão): as palavras dele saem
+   * dos dois lados ao comparar nomes de títulos — numa família o contato é a
+   * mãe, e o nome dela não diz de qual filho é a consulta. null = não sabido.
+   */
+  contatoNome: string | null
+  /**
+   * A recepção DIGITOU o título (02/10, revisão). O nome do contato que o
+   * modal põe no título vazio não conta: na remarcação, só o título digitado
+   * substitui o da consulta X (onde está o nome de qual filho).
+   */
+  tituloDigitado: boolean
+  /**
+   * A agenda veio da consulta X escolhida para remarcar (id de X), porque o
+   * compromisso novo estava sem agenda (02/10, revisão). Trocar a resposta ou
+   * o paciente desfaz; mexer no seletor de agenda torna a escolha da pessoa.
+   */
+  agendaHerdadaDe: string | null
 }
 
 /** Preferências da conta para o modal (getAgendaPrefs). */
@@ -164,23 +184,47 @@ function inicioComoNaTela(ev: { startsAt: string; endsAt: string; allDay: boolea
   return draftIso({ allDay: ev.allDay, start, end })?.startsAt ?? ev.startsAt
 }
 
-/**
- * A consulta que este salvar REMARCA (02/10), ou null = consulta nova. Só no
- * compromisso novo, com paciente e a lista dele carregada: a escolha de quem
- * mexeu ou, sem ela, a sugestão pelo nome no título. Escolha que sumiu da
- * lista (recarregou depois de um erro) volta para a sugestão.
- */
-function remarcacaoDoRascunho(d: Draft, calendars: CalendarRow[]): ConsultaFutura | null {
-  if (d.id || !d.contactId) return null
+/** As consultas futuras do paciente do compromisso NOVO, já carregadas (vazia = nenhuma, ou não carregou). */
+function consultasCarregadas(d: Draft): ConsultaFutura[] {
+  if (d.id || !d.contactId) return []
   const cs = d.consultasDoPaciente
-  if (!cs || cs.contactId !== d.contactId || !cs.lista || cs.lista.length === 0) return null
-  const lista = cs.lista
+  return cs && cs.contactId === d.contactId && cs.lista ? cs.lista : []
+}
+
+/**
+ * A consulta que este salvar REMARCA (02/10), ou null = consulta nova (ou
+ * ainda sem resposta). Só a RESPOSTA da recepção vale (revisão de 02/10): a
+ * sugestão pelo nome no título vinha pré-marcada e errava em família — agora
+ * ela é só um destaque (sugerirRemarcacao). Escolha que sumiu da lista
+ * (recarregou depois de um erro) volta a ser "sem resposta".
+ */
+function remarcacaoDoRascunho(d: Draft): ConsultaFutura | null {
   const e = d.remarcaEscolha
-  if (e?.tipo === 'nova') return null
-  const escolhida = e?.tipo === 'remarcar' ? lista.find((c) => c.id === e.eventoId) : undefined
-  if (escolhida) return escolhida
-  const sugerida = sugerirRemarcacao(d.title, lista, calendars.map((c) => c.name))
-  return lista.find((c) => c.id === sugerida) ?? null
+  if (e?.tipo !== 'remarcar') return null
+  return consultasCarregadas(d).find((c) => c.id === e.eventoId) ?? null
+}
+
+/**
+ * O paciente tem consulta futura e a recepção ainda não respondeu
+ * "remarcação de qual, ou consulta nova?" (02/10, revisão). O Salvar fica
+ * desligado e o save() também trava: salvar sem resposta ou criava a
+ * duplicata, ou remarcava a consulta de outra pessoa da família.
+ */
+function faltaResponderRemarcacao(d: Draft): boolean {
+  const lista = consultasCarregadas(d)
+  if (lista.length === 0) return false
+  const e = d.remarcaEscolha
+  if (e?.tipo === 'nova') return false
+  return !(e?.tipo === 'remarcar' && lista.some((c) => c.id === e.eventoId))
+}
+
+/**
+ * Desfaz a agenda que veio da consulta X (02/10, revisão), quando a resposta
+ * ou o paciente mudam: o compromisso volta a ficar sem agenda, como estava
+ * antes de herdar. Quem mexeu no seletor depois já zerou `agendaHerdadaDe`.
+ */
+function semAgendaHerdada(d: Draft): Partial<Draft> {
+  return d.agendaHerdadaDe ? { calendarId: '', agendaHerdadaDe: null } : {}
 }
 
 /** Ainda conferindo se o paciente do compromisso novo já tem consulta? (Salvar espera.) */
@@ -223,7 +267,9 @@ function faltaEscolherAgenda(d: Pick<Draft, 'calendarId'>, calendars: CalendarRo
  *
  * Remarcação no compromisso novo (02/10): é a EDIÇÃO da consulta X, então o
  * tipo é calculado contra X (baseDoRascunho) — "remarcada", "agora é com" ou
- * nada, igual ao que a fila vai decidir no servidor.
+ * nada, igual ao que a fila vai decidir no servidor. Sem resposta à pergunta
+ * (revisão de 02/10) também não: a prévia diria "marcação" antes de a
+ * recepção dizer se é remarcação.
  */
 function confirmacaoDoRascunho(
   d: Draft,
@@ -232,6 +278,7 @@ function confirmacaoDoRascunho(
 ): TipoConfirmacao | null {
   if (!d.contactId) return null
   if (faltaEscolherAgenda(d, calendars)) return null
+  if (faltaResponderRemarcacao(d)) return null
   const iso = draftIso(d)
   if (!iso) return null
   if (new Date(d.allDay ? iso.endsAt : iso.startsAt).getTime() <= Date.now()) return null
@@ -532,7 +579,8 @@ export function AgendaClient() {
   // Grupo / "não perturbe" do paciente do rascunho (01/10, revisão): a caixa
   // da confirmação não pode prometer "Sai ao salvar" para quem o servidor
   // recusa. O ContactPicker já traz as flags; aqui chegam as do paciente que
-  // veio só pelo id (link da conversa, compromisso aberto para editar).
+  // veio só pelo id (link da conversa, compromisso aberto para editar). E o
+  // nome dele (02/10, revisão): sai dos títulos ao comparar quem é quem.
   const contatoSemFlags = draft?.contactId && !draft.contatoFlags ? draft.contactId : null
   useEffect(() => {
     if (!contatoSemFlags) return
@@ -541,7 +589,11 @@ export function AgendaClient() {
       .then((c) => {
         if (!vivo || !c) return
         const flags = { optedOut: c.optedOut === true, isGroup: c.isGroup === true }
-        setDraft((d) => (d && d.contactId === c.id && !d.contatoFlags ? { ...d, contatoFlags: flags } : d))
+        setDraft((d) =>
+          d && d.contactId === c.id && !d.contatoFlags
+            ? { ...d, contatoFlags: flags, contatoNome: d.contatoNome ?? c.name ?? null }
+            : d,
+        )
       })
       .catch(() => {})
     return () => {
@@ -551,7 +603,7 @@ export function AgendaClient() {
 
   // 🔁 Remarcação ou consulta nova? (02/10) Compromisso NOVO com paciente:
   // carrega as consultas futuras dele para o modal perguntar. Trocou o
-  // paciente → recarrega e a escolha volta para a sugestão. Falhou → `lista`
+  // paciente → recarrega e a pergunta volta sem resposta. Falhou → `lista`
   // null: o modal diz que não deu para conferir (nunca "não tem nenhuma").
   const contatoParaConsultas =
     draft && !draft.id && draft.contactId && draft.consultasDoPaciente?.contactId !== draft.contactId
@@ -565,13 +617,15 @@ export function AgendaClient() {
       setDraft((d) => {
         if (!d || d.id || d.contactId !== contatoParaConsultas) return d
         const e = d.remarcaEscolha
-        // A consulta escolhida não está mais na lista (cancelada no meio):
-        // a escolha some e vale a sugestão de novo.
+        // A consulta escolhida não está mais na lista (cancelada no meio): a
+        // pergunta volta sem resposta, e a agenda que tinha vindo dela também
+        // sai (02/10, revisão).
         const escolhaSumiu = e?.tipo === 'remarcar' && !lista?.some((c) => c.id === e.eventoId)
         return {
           ...d,
           consultasDoPaciente: { contactId: contatoParaConsultas, lista },
           remarcaEscolha: escolhaSumiu ? null : e,
+          ...(escolhaSumiu ? semAgendaHerdada(d) : {}),
         }
       })
     }
@@ -688,6 +742,10 @@ export function AgendaClient() {
       // Com paciente, o efeito carrega as consultas futuras dele (02/10).
       consultasDoPaciente: null,
       remarcaEscolha: null,
+      // O nome chega com as flags (efeito acima) ou pelo ContactPicker.
+      contatoNome: null,
+      tituloDigitado: false,
+      agendaHerdadaDe: null,
     })
   }
 
@@ -757,6 +815,10 @@ export function AgendaClient() {
       // Editar não pergunta "remarcação ou nova?" (02/10): já é a consulta.
       consultasDoPaciente: null,
       remarcaEscolha: null,
+      contatoNome: null,
+      // Na edição o título é o do compromisso: vai como sempre foi.
+      tituloDigitado: true,
+      agendaHerdadaDe: null,
     })
   }
 
@@ -780,12 +842,16 @@ export function AgendaClient() {
     // Sem saber se o paciente já tem consulta, salvar criaria a duplicata que
     // a pergunta existe para evitar (02/10). O botão já espera; isto é a trava.
     if (conferindoConsultas(draft)) return
+    // Paciente com consulta futura e a recepção ainda não respondeu se é
+    // remarcação (de qual) ou consulta nova (02/10, revisão). O botão já fica
+    // desligado; isto é a trava — nada é decidido no lugar dela.
+    if (faltaResponderRemarcacao(draft)) return
     const iso = draftIso(draft)
     if (!iso) return
     setSaving(true)
     // "Esta é a remarcação da consulta X" (02/10): o servidor edita X em vez
     // de criar outra. null = consulta nova (ou edição).
-    const remarcacao = remarcacaoDoRascunho(draft, calendars)
+    const remarcacao = remarcacaoDoRascunho(draft)
     try {
       const { startsAt, endsAt } = iso
       // Só pede a confirmação quando a caixa está NA TELA e marcada; e só tira
@@ -816,7 +882,13 @@ export function AgendaClient() {
       const eventDate = new Date(draft.start.slice(0, 10) + 'T12:00:00')
       const r = draft.id
         ? await updateEvent(draft.id, payload)
-        : await createEvent({ ...payload, remarcaEventoId: remarcacao?.id ?? null })
+        : // Na remarcação o servidor só troca o título de X se a recepção o
+          // DIGITOU (o nome do contato posto no título vazio não conta).
+          await createEvent({
+            ...payload,
+            remarcaEventoId: remarcacao?.id ?? null,
+            tituloDigitado: draft.tituloDigitado,
+          })
       if (r.error) {
         // As actions não lançam: devolvem { error }. Até 01/10 isso era
         // ignorado — o modal fechava com "Evento criado." e nada tinha sido
@@ -1490,11 +1562,42 @@ function EventModal({
   const tz = prefs?.timezone || FUSO_PADRAO
   // 🔁 Remarcação ou consulta nova? (02/10) Só no compromisso novo com
   // paciente que já tem consulta futura. `remarcacao` = a consulta que este
-  // salvar remarca (a escolha, ou a sugestão pelo nome no título); null = nova.
+  // salvar remarca (só a RESPOSTA da recepção — revisão de 02/10); null = nova
+  // ou ainda sem resposta (`faltaResponder`, e aí o Salvar fica desligado).
   const conferindo = conferindoConsultas(draft)
   const consultasDoPaciente =
     !draft.id && draft.consultasDoPaciente?.contactId === draft.contactId ? draft.consultasDoPaciente.lista : []
-  const remarcacao = remarcacaoDoRascunho(draft, calendars)
+  const remarcacao = remarcacaoDoRascunho(draft)
+  const faltaResponder = faltaResponderRemarcacao(draft)
+  // "Parece ser a mesma pessoa" — só destaque, nunca resposta marcada.
+  const pareceAMesma =
+    consultasDoPaciente && consultasDoPaciente.length > 0
+      ? sugerirRemarcacao(
+          draft.title,
+          consultasDoPaciente,
+          calendars.map((c) => c.name),
+          draft.contatoNome,
+        )
+      : null
+  // Remarcação com outra agenda (02/10, revisão): no lugar da dica do
+  // seletor, diz com quem X é e com quem está salvando.
+  const agendaDoForm = calendars.find((c) => c.id === draft.calendarId) ?? null
+  const trocaDeProfissional = remarcacao
+    ? avisoDeTrocaDeProfissional(remarcacao, agendaDoForm ? { id: agendaDoForm.id, name: agendaDoForm.name } : null, tz)
+    : null
+  // A resposta: escolher X traz a agenda de X se o compromisso ainda está sem
+  // agenda (o modal não pré-escolhe mais) — ou se a agenda atual tinha vindo
+  // de outra X. "Nova" desfaz a agenda herdada.
+  const escolherRemarcar = (c: ConsultaFutura) => {
+    const herda =
+      calendars.some((k) => k.id === c.calendarId) && (!draft.calendarId || draft.agendaHerdadaDe !== null)
+    setDraft({
+      ...draft,
+      remarcaEscolha: { tipo: 'remarcar', eventoId: c.id },
+      ...(herda ? { calendarId: c.calendarId, agendaHerdadaDe: c.id } : {}),
+    })
+  }
+  const escolherNova = () => setDraft({ ...draft, remarcaEscolha: { tipo: 'nova' }, ...semAgendaHerdada(draft) })
   // A caixa da confirmação: só com a opção da conta ligada, a agenda escolhida
   // e um salvamento que muda algo para o paciente. A prévia mostra o miolo da
   // mensagem, no fuso da conta, com o profissional da agenda escolhida. Com
@@ -1602,7 +1705,9 @@ function EventModal({
             <Input
               autoFocus
               value={draft.title}
-              onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+              // Digitou = o título é da recepção (02/10, revisão): na
+              // remarcação ele substitui o de X; o auto-preenchido não.
+              onChange={(e) => setDraft({ ...draft, title: e.target.value, tituloDigitado: true })}
               placeholder="Ex.: Reunião com cliente"
             />
           </div>
@@ -1621,15 +1726,25 @@ function EventModal({
                   // Título em branco ganha o nome de quem é — o atendente digita
                   // o mínimo e o compromisso já fica reconhecível na agenda.
                   title: draft.title || (contact?.name ? contact.name : draft.title),
+                  // Título que o modal preencheu com o nome do contato não é
+                  // "digitado" (02/10, revisão) — nem se antes alguém digitou e
+                  // apagou tudo.
+                  ...(!draft.title && contact?.name ? { tituloDigitado: false } : {}),
                   // Grupo / "não perturbe" de quem foi escolhido (a caixa da
                   // confirmação depende disso). Sem o contato, o efeito busca.
                   contatoFlags:
                     contact && contact.id === contactId
                       ? { optedOut: contact.optedOut === true, isGroup: contact.isGroup === true }
                       : null,
+                  // O nome sai dos títulos ao comparar quem é quem (02/10,
+                  // revisão): o da mãe não diz de qual filho é a consulta.
+                  contatoNome: contact && contact.id === contactId ? (contact.name ?? null) : null,
                   // Outro paciente (02/10): as consultas dele são outras —
-                  // recarrega, e a resposta da pergunta volta para a sugestão.
-                  ...(contactId !== draft.contactId ? { consultasDoPaciente: null, remarcaEscolha: null } : {}),
+                  // recarrega, a pergunta volta sem resposta e a agenda que
+                  // tinha vindo da consulta do paciente anterior sai.
+                  ...(contactId !== draft.contactId
+                    ? { consultasDoPaciente: null, remarcaEscolha: null, ...semAgendaHerdada(draft) }
+                    : {}),
                 })
               }
               placeholder="Buscar por nome ou telefone..."
@@ -1660,7 +1775,9 @@ function EventModal({
               NOVAS, e a antiga ficou de pé — lembrete errado, cadeira ocupada
               à toa. Cancelar sozinho é perigoso (famílias têm 2-3 consultas no
               mesmo contato), então o modal PERGUNTA. Remarcação edita a
-              consulta escolhida; nova mantém todas. */}
+              consulta escolhida; nova mantém todas. Revisão de 02/10: nada
+              vem marcado — a recepção TEM que responder; a que parece ser da
+              mesma pessoa só ganha um destaque. */}
           {!draft.id && draft.contactId && conferindo && (
             <p className="-mt-1 text-[11px] text-muted-foreground">
               Conferindo se o paciente já tem consulta marcada…
@@ -1689,9 +1806,17 @@ function EventModal({
                     name="remarcacao"
                     className="mt-0.5"
                     checked={remarcacao?.id === c.id}
-                    onChange={() => setDraft({ ...draft, remarcaEscolha: { tipo: 'remarcar', eventoId: c.id } })}
+                    onChange={() => escolherRemarcar(c)}
                   />
-                  <span className="min-w-0">{rotuloDaRemarcacao(c, tz)}</span>
+                  <span className="min-w-0">
+                    {rotuloDaRemarcacao(c, tz)}
+                    {/* Só destaque: quem decide é a recepção. */}
+                    {pareceAMesma === c.id && (
+                      <span className="ml-1.5 inline-block rounded bg-amber-500/15 px-1.5 py-px text-[10px] font-medium text-amber-800 dark:text-amber-300">
+                        parece ser a mesma pessoa
+                      </span>
+                    )}
+                  </span>
                 </label>
               ))}
               <label className="flex cursor-pointer items-start gap-2 text-xs text-foreground">
@@ -1699,11 +1824,18 @@ function EventModal({
                   type="radio"
                   name="remarcacao"
                   className="mt-0.5"
-                  checked={!remarcacao}
-                  onChange={() => setDraft({ ...draft, remarcaEscolha: { tipo: 'nova' } })}
+                  checked={draft.remarcaEscolha?.tipo === 'nova'}
+                  onChange={escolherNova}
                 />
                 <span className="min-w-0">Consulta nova — manter as que já tem</span>
               </label>
+              {/* Sem resposta, o Salvar fica desligado: diz por quê, no lugar. */}
+              {faltaResponder && (
+                <p role="alert" className="flex items-start gap-1 text-xs text-amber-700 dark:text-amber-400">
+                  <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                  Responda: é remarcação de uma dessas ou consulta nova?
+                </p>
+              )}
             </div>
           )}
 
@@ -1711,7 +1843,9 @@ function EventModal({
             <Label className="mb-1 block text-xs">Agenda</Label>
             <select
               value={draft.calendarId}
-              onChange={(e) => setDraft({ ...draft, calendarId: e.target.value })}
+              // Mexeu no seletor: a agenda passa a ser escolha da recepção (não
+              // é mais "a que veio da consulta X" — 02/10, revisão).
+              onChange={(e) => setDraft({ ...draft, calendarId: e.target.value, agendaHerdadaDe: null })}
               aria-invalid={faltaAgenda ? true : undefined}
               className={cn(
                 'h-9 w-full rounded-md border border-border bg-background px-2 text-sm',
@@ -1737,6 +1871,13 @@ function EventModal({
               <p role="alert" className="mt-1 flex items-start gap-1 text-xs text-amber-700 dark:text-amber-400">
                 <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                 Escolha a agenda do profissional que vai atender — é ela que diz ao paciente com quem é a consulta.
+              </p>
+            ) : trocaDeProfissional ? (
+              // Remarcação com outra agenda (02/10, revisão): pode ser troca de
+              // profissional de propósito, mas a recepção vê antes de salvar.
+              <p role="alert" className="mt-1 flex items-start gap-1 text-xs text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                {trocaDeProfissional}
               </p>
             ) : (
               <p className="mt-1 text-[11px] text-muted-foreground">
@@ -1890,10 +2031,11 @@ function EventModal({
               Cancelar
             </Button>
             {/* Conferindo as consultas do paciente (02/10): salvar antes criaria
-                a duplicata que a pergunta existe para evitar. */}
+                a duplicata que a pergunta existe para evitar. Sem resposta à
+                pergunta (revisão de 02/10) também espera. */}
             <Button
               onClick={onSave}
-              disabled={saving || !draft.title.trim() || !!timeError || faltaAgenda || conferindo}
+              disabled={saving || !draft.title.trim() || !!timeError || faltaAgenda || conferindo || faltaResponder}
             >
               {saving ? 'Salvando…' : 'Salvar'}
             </Button>

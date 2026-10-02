@@ -121,9 +121,13 @@ export const TAG_DIRECTIVE = /\[\[\s*etiqueta\s*:\s*([^\]]+?)\s*\]\]/gi
  *   - `nova`  → cria um compromisso ADICIONAL; nunca move nada.
  *   - `remarca YYYY-MM-DDTHH:MM` → move EXATAMENTE a consulta deste contato que
  *     começa nesse dia/hora (fuso da conta). Não achou = não mexe em nada.
- *   - sem 4º campo → o de sempre (move a mais próxima), para os prompts e as
- *     conversas que já existem continuarem iguais.
+ *   - sem 4º campo → sem consulta, cria; com UMA compatível, move (o de
+ *     sempre de quem tem uma reunião só); senão NÃO mexe em nada e avisa
+ *     (revisão de 02/10 — antes movia a mais próxima, às vezes a do irmão).
+ *     Ver decidirAgendamento (schedule-actions.ts).
  * Com 4º campo o 3º pode vir vazio: `[[AGENDAR:2026-10-21T10:00|Limpeza||nova]]`.
+ * Com 3 campos e o 3º sendo um modo (`|Limpeza|nova]]`), ele é o modo e não há
+ * profissional (revisão de 02/10 — ver modoNoTerceiroCampo).
  * O 3º campo não aceita mais "|": antes ele engolia o resto até o "]]".
  */
 export const SCHEDULE_DIRECTIVE =
@@ -138,11 +142,11 @@ export type ModoAgendamento = { tipo: 'nova' } | { tipo: 'remarca'; deLocal: str
 
 /**
  * 4º campo do [[AGENDAR]] → modo. null = sem campo ou campo que não dá para
- * entender, e aí vale o comportamento de sempre.
+ * entender, e aí vale o caminho sem modo (decidirAgendamento).
  *
  * O vocabulário é mais largo que o documentado ("nova"/"remarca") porque o
  * modelo às vezes escreve "novo", "outra", "mudar"… Um "remarca" sem data NÃO
- * vira o comportamento de sempre (mover a mais próxima): a IA quis mexer numa
+ * vira o caminho sem modo (que pode mover a única consulta): a IA quis mexer numa
  * consulta específica e não disse qual — mover a errada é pior que não mover.
  * Uma data solta, sem palavra nenhuma, é remarcação dela.
  */
@@ -159,6 +163,28 @@ export function parseModoAgendamento(raw: string | null | undefined): ModoAgenda
   if (/^(nov[ao]|adicional|outr[ao]|extra|mais|mant)/.test(norm)) return { tipo: 'nova' }
   if (deLocal && /^\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}$/.test(norm)) return { tipo: 'remarca', deLocal }
   return null
+}
+
+/**
+ * O 3º campo INTEIRO é um modo ("nova", "remarca 2026-10-21T09:30", uma data
+ * solta)? Revisão de 02/10: a IA às vezes pula o campo do profissional e
+ * escreve `[[AGENDAR:…|Limpeza|nova]]`. Lido como profissional, o modo sumia
+ * e o marcador virava o de sempre — que MOVIA a consulta mais próxima, às
+ * vezes a do irmão. Mais estrito que o 4º campo (a frase toda tem que ser o
+ * modo): "Maisa Lima" ou "Moura" no 3º campo continuam sendo profissionais.
+ */
+const MODO_SOZINHO =
+  /^(?:nov[ao](?: consulta)?|consulta nova|adicional|outr[ao]|extra|(?:remarca(?:r|cao)?|reagenda(?:r|mento)?|mover|mudar|trocar|alterar)(?:\s*:?\s*\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2})?|\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2})$/
+
+export function modoNoTerceiroCampo(raw: string | null | undefined): ModoAgendamento | null {
+  const norm = (raw ?? '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+  if (!norm || !MODO_SOZINHO.test(norm)) return null
+  return parseModoAgendamento(raw)
 }
 /**
  * 🧾 Cobrança (Fase 3): o que o devedor acabou de fazer.
@@ -273,14 +299,18 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
   const sm = raw.match(SCHEDULE_DIRECTIVE)
   let schedule: AgentDirectives['schedule'] = null
   if (sm) {
+    // A IA pulou o campo do profissional e pôs o modo no 3º (revisão de
+    // 02/10): `|Limpeza|nova]]`. Só sem 4º campo e só se o 3º INTEIRO for um
+    // modo — senão é o nome do profissional, como sempre.
+    const modoNo3 = (sm[4] || '').trim() ? null : modoNoTerceiroCampo(sm[3])
     schedule = {
       startsLocal: sm[1].trim(),
       title: (sm[2] || '').trim(),
       // De quem é a agenda (3º campo). Vazio = agenda padrão da conta.
-      profissional: (sm[3] || '').trim() || null,
+      profissional: modoNo3 ? null : (sm[3] || '').trim() || null,
     }
     // Nova / remarca (4º campo, 02/10). Sem ele, a chave nem existe.
-    const modo = parseModoAgendamento(sm[4])
+    const modo = modoNo3 ?? parseModoAgendamento(sm[4])
     if (modo) schedule.modo = modo
     else if ((sm[4] || '').trim()) {
       console.warn(`[ai directives] 4º campo do [[AGENDAR]] não reconhecido ("${(sm[4] || '').trim().slice(0, 60)}") — segue o comportamento de sempre`)
@@ -464,7 +494,7 @@ export function scheduleInstruction(opts: { approval?: boolean; busySlots?: stri
     ? ` THIS customer ALREADY HAS the following appointment(s) booked (business timezone, soonest first):\n${opts.booked}\n` +
       'Those times are taken by THIS customer\'s own appointments, not by a conflict — do not offer other times because of them and do not say you need to adjust them. Do NOT emit [[AGENDAR]] again for an appointment that is already booked unless the customer explicitly asks to change it.' +
       ' When this customer asks to book and it is NOT clear whether they want to CHANGE one of these appointments or book ANOTHER one while keeping what they have (for example for another person in the family, or for a different procedure), ASK before booking — e.g. "Você quer remarcar a consulta de <dia> com <profissional>, ou marcar uma nova e manter essa?" (with more than one appointment, say which one you mean). Emit [[AGENDAR]] only AFTER they answer. If the request is already clear (e.g. "quero mudar minha consulta de quinta", "quero marcar outra para a minha filha"), do not ask again.' +
-      ' For this customer, ALWAYS add a 4th field to the marker saying what it does: to book an ADDITIONAL appointment and keep the existing ones, "[[AGENDAR:YYYY-MM-DDTHH:MM|<short title>|<professional>|nova]]"; to MOVE one of the appointments above, "[[AGENDAR:<new YYYY-MM-DDTHH:MM>|<short title>|<professional>|remarca YYYY-MM-DDTHH:MM]]", copying after "remarca" EXACTLY the ref of that appointment as listed above. When there is no professional, leave the third field empty ("|<short title>||nova"). A new appointment must not take one of the times above with the same professional.' +
+      ' For this customer, ALWAYS add a 4th field to the marker saying what it does: to book an ADDITIONAL appointment and keep the existing ones, "[[AGENDAR:YYYY-MM-DDTHH:MM|<short title>|<professional>|nova]]"; to MOVE one of the appointments above, "[[AGENDAR:<new YYYY-MM-DDTHH:MM>|<short title>|<professional>|remarca YYYY-MM-DDTHH:MM]]", copying after "remarca" EXACTLY the ref of that appointment as listed above. When there is no professional, leave the third field EMPTY but keep it — two bars in a row ("|<short title>||nova") — so the 4th field stays the 4th. A new appointment must not take one of the times above with the same professional.' +
       ' If your business instructions below say that an additional appointment, an appointment for another person or a reschedule must go to a human (e.g. the reception), follow your instructions instead: in those cases do not emit [[AGENDAR]].'
     : ''
   // 30/09 (clínica da Dra. Joyce, 10 profissionais): a lista única de horários
@@ -477,8 +507,15 @@ export function scheduleInstruction(opts: { approval?: boolean; busySlots?: stri
   // expediente mora no prompt da conta, e esta instrução manda respeitá-lo.
   // Para quem já tem compromisso, o que acontece (mover ou criar outro) é o
   // 4º campo do marcador que decide — ver `booked` acima.
+  // Revisão de 02/10: aqui dizia "leave the third field OUT" e o `booked`
+  // dizia "leave it EMPTY". Com 4º campo, "out" vira `|Limpeza|nova]]` — o
+  // modo no lugar do profissional. Com consulta marcada a regra é uma só:
+  // VAZIO, com as duas barras.
+  const semProfissional = opts.booked
+    ? 'leave the third field EMPTY but keep it ("|<short title>||<4th field>")'
+    : 'leave the third field out'
   const equipe = opts.agendasDaEquipe
-    ? ` THIS BUSINESS HAS SEVERAL CALENDARS, one per professional. Each one has its OWN availability — a time booked in one calendar does NOT block the others. Here is who exists and when each is busy (business timezone):\n${opts.agendasDaEquipe}\nThis list shows only BUSY times: an empty line does NOT mean the professional is working. Offer only times inside that professional's working hours as given in your instructions — outside them the professional is simply not there. When the customer asks for a specific professional, first follow your instructions on whether that professional can be booked for THIS customer; only then check THAT professional's line and offer only times that do not overlap it. When the customer has no preference, follow your instructions on whom to offer. When you book, put the professional's name in the THIRD field of the marker: "[[AGENDAR:YYYY-MM-DDTHH:MM|<short title>|<professional name>]]", copying the name EXACTLY as written in the list above. If the customer did not name a professional and you did not pick one, leave the third field out. NEVER invent a professional who is not in the list, and never promise a time that overlaps that professional's busy list.`
+    ? ` THIS BUSINESS HAS SEVERAL CALENDARS, one per professional. Each one has its OWN availability — a time booked in one calendar does NOT block the others. Here is who exists and when each is busy (business timezone):\n${opts.agendasDaEquipe}\nThis list shows only BUSY times: an empty line does NOT mean the professional is working. Offer only times inside that professional's working hours as given in your instructions — outside them the professional is simply not there. When the customer asks for a specific professional, first follow your instructions on whether that professional can be booked for THIS customer; only then check THAT professional's line and offer only times that do not overlap it. When the customer has no preference, follow your instructions on whom to offer. When you book, put the professional's name in the THIRD field of the marker: "[[AGENDAR:YYYY-MM-DDTHH:MM|<short title>|<professional name>]]", copying the name EXACTLY as written in the list above. If the customer did not name a professional and you did not pick one, ${semProfissional}. NEVER invent a professional who is not in the list, and never promise a time that overlaps that professional's busy list.`
     : ''
   // 02/10/2026: só o PRIMEIRO [[AGENDAR]] de cada resposta é executado
   // (parseCloseDirectives não usa /g) — os outros somem do texto sem aviso. Com

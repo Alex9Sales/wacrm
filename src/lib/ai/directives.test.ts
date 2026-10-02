@@ -112,6 +112,46 @@ describe('parseCloseDirectives', () => {
     expect(d.schedule?.modo).toEqual({ tipo: 'remarca', deLocal: null })
   })
 
+  // Revisão de 02/10: a IA pulou o profissional e pôs o modo no 3º campo. Lido
+  // como profissional, o modo sumia e o marcador MOVIA a consulta mais próxima.
+  it('3 campos com o 3º sendo um modo: é o modo, sem profissional', () => {
+    expect(parseCloseDirectives('ok [[AGENDAR:2026-10-21T10:00|Limpeza · Nina|nova]]').schedule).toEqual({
+      startsLocal: '2026-10-21T10:00',
+      title: 'Limpeza · Nina',
+      profissional: null,
+      modo: { tipo: 'nova' },
+    })
+    expect(parseCloseDirectives('ok [[AGENDAR:2026-10-23T14:00|Avaliação · Léo|remarca 2026-10-21T09:30]]').schedule).toEqual({
+      startsLocal: '2026-10-23T14:00',
+      title: 'Avaliação · Léo',
+      profissional: null,
+      modo: { tipo: 'remarca', deLocal: '2026-10-21T09:30' },
+    })
+    expect(parseCloseDirectives('ok [[AGENDAR:2026-10-23T14:00|Avaliação|Remarcar]]').schedule?.modo).toEqual({
+      tipo: 'remarca',
+      deLocal: null,
+    })
+    expect(parseCloseDirectives('ok [[AGENDAR:2026-10-23T14:00|Avaliação|2026-10-21 09:30]]').schedule?.modo).toEqual({
+      tipo: 'remarca',
+      deLocal: '2026-10-21T09:30',
+    })
+  })
+
+  it('3º campo que só COMEÇA como um modo continua sendo o profissional', () => {
+    // "Maisa" começa com "mais", "Moura" com "mo", "Nova Era" com "nova".
+    for (const prof of ['Dra. Maisa Lima', 'Maisa Lima', 'Moura', 'Clínica Nova Era', 'Nova Era']) {
+      const d = parseCloseDirectives(`ok [[AGENDAR:2026-10-21T10:00|Avaliação|${prof}]]`)
+      expect(d.schedule?.profissional, prof).toBe(prof)
+      expect(d.schedule && 'modo' in d.schedule, prof).toBe(false)
+    }
+  })
+
+  it('com 4º campo, o 3º é sempre o profissional (mesmo que pareça um modo)', () => {
+    const d = parseCloseDirectives('ok [[AGENDAR:2026-10-21T10:00|Avaliação|nova|remarca 2026-10-20T09:00]]')
+    expect(d.schedule?.profissional).toBe('nova')
+    expect(d.schedule?.modo).toEqual({ tipo: 'remarca', deLocal: '2026-10-20T09:00' })
+  })
+
   it('4º campo que não dá para entender: segue o de sempre (sem `modo`)', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const d = parseCloseDirectives('ok [[AGENDAR:2026-10-23T14:00|Avaliação|Dra. Marta|qualquer coisa]]')

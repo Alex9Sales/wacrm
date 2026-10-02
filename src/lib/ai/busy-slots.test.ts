@@ -32,9 +32,12 @@ vi.mock('@/db', async (importOriginal) => {
 
 import {
   MAX_COMPROMISSOS_DO_CONTATO,
+  formatBookedForPrompt,
   formatBusySlot,
   horaDeParede,
   loadBookedForContact,
+  tituloNormalizado,
+  type CompromissoDoContato,
 } from './busy-slots'
 import { scheduleInstruction } from './defaults'
 
@@ -56,13 +59,13 @@ describe('consultas futuras do contato (loadBookedForContact)', () => {
     expect(horaDeParede('2026-10-21T12:30:00.000Z', 'Nada/Isso')).toBe('2026-10-21T09:30')
   })
 
-  it('devolve todas, com agenda, título e quando — e pede no máximo 5 ao banco', async () => {
+  it('devolve todas, com agenda, título e quando — e pede UMA a mais que o limite (para saber que cortou)', async () => {
     h.rows = [
       { startsAt: '2026-10-21 12:30:00+00', endsAt: '2026-10-21 13:00:00+00', allDay: false, title: 'Avaliação · Léo', agenda: 'Dra. Marta Teixeira' },
       { startsAt: '2026-10-28 17:00:00+00', endsAt: '2026-10-28 18:00:00+00', allDay: false, title: 'Cirurgia · Nina', agenda: null },
     ]
     const itens = await loadBookedForContact('conta-1', 'contato-1', 'America/Sao_Paulo')
-    expect(h.limit).toBe(MAX_COMPROMISSOS_DO_CONTATO)
+    expect(h.limit).toBe(MAX_COMPROMISSOS_DO_CONTATO + 1)
     expect(MAX_COMPROMISSOS_DO_CONTATO).toBe(5)
     expect(h.joins).toBe(1)
     expect(itens).toHaveLength(2)
@@ -95,6 +98,69 @@ describe('consultas futuras do contato (loadBookedForContact)', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     h.throws = true
     await expect(loadBookedForContact('conta-1', 'contato-1', 'America/Sao_Paulo')).resolves.toEqual([])
+  })
+})
+
+// Revisão de 02/10: consulta lançada em DUAS agendas (mesmo instante, mesmo
+// título) aparecia em duas linhas e a IA contava duas consultas.
+describe('a lista do prompt (formatBookedForPrompt)', () => {
+  const item = (o: Partial<CompromissoDoContato>): CompromissoDoContato => ({
+    startsAt: '2026-10-21T12:30:00.000Z',
+    endsAt: '2026-10-21T13:00:00.000Z',
+    allDay: false,
+    titulo: 'Avaliação · Léo',
+    agenda: 'Dra. Marta Teixeira',
+    quando: 'qua 21/10 09:30–10:00',
+    inicioLocal: '2026-10-21T09:30',
+    ...o,
+  })
+
+  it('mesma consulta em duas agendas: UMA linha, "agendas: A + B"', () => {
+    const lista = formatBookedForPrompt(
+      [item({}), item({ titulo: 'AVALIAÇÃO do Léo', agenda: 'Dr. Otávio Prates' })],
+      { comAgenda: true },
+    )
+    expect(lista).toBe(
+      '- qua 21/10 09:30–10:00 · "Avaliação · Léo" · agendas: Dra. Marta Teixeira + Dr. Otávio Prates · ref: 2026-10-21T09:30',
+    )
+  })
+
+  it('mesmo instante com títulos diferentes (dois filhos): duas linhas', () => {
+    const lista = formatBookedForPrompt([item({}), item({ titulo: 'Avaliação · Nina', agenda: 'Dr. Otávio Prates' })], {
+      comAgenda: true,
+    })!
+    expect(lista.split('\n')).toHaveLength(2)
+  })
+
+  it('título vazio não junta: sem título não dá para dizer que é a mesma', () => {
+    const lista = formatBookedForPrompt([item({ titulo: '' }), item({ titulo: '', agenda: 'Dr. Otávio Prates' })], {
+      comAgenda: true,
+    })!
+    expect(lista.split('\n')).toHaveLength(2)
+  })
+
+  it('passou do limite: as 5 primeiras e "e mais N"', () => {
+    const seis = Array.from({ length: 6 }, (_, i) =>
+      item({
+        startsAt: `2026-10-2${i}T12:30:00.000Z`,
+        titulo: `Consulta ${i}`,
+        quando: `dia 2${i}`,
+        inicioLocal: `2026-10-2${i}T09:30`,
+      }),
+    )
+    const linhas = formatBookedForPrompt(seis)!.split('\n')
+    expect(linhas).toHaveLength(6)
+    expect(linhas[4]).toContain('ref: 2026-10-24T09:30')
+    expect(linhas[5]).toMatch(/^- e mais 1 \(lista cortada/)
+    // Até o limite, sem a linha extra.
+    expect(formatBookedForPrompt(seis.slice(0, 5))!.split('\n')).toHaveLength(5)
+  })
+
+  it('o título normalizado ignora acento, caixa, pontuação e ligações', () => {
+    expect(tituloNormalizado('Avaliação · Léo')).toBe('avaliacao leo')
+    expect(tituloNormalizado('AVALIAÇÃO do Léo')).toBe('avaliacao leo')
+    expect(tituloNormalizado('Retorno com a Nina')).toBe('retorno nina')
+    expect(tituloNormalizado(null)).toBe('')
   })
 })
 
