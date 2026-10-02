@@ -5,6 +5,7 @@ import {
   findCustomer,
   findCustomerByDocument,
   findOrCreateCustomer,
+  phoneForAsaasCustomer,
   type AsaasCredential,
   type AsaasCustomer,
 } from './collections'
@@ -215,5 +216,67 @@ describe('findCustomer / findCustomerByDocument — só leitura', () => {
   it('findCustomerByDocument sem documento válido não chama o Asaas', async () => {
     expect(await findCustomerByDocument(PROD, '123')).toBeNull()
     expect(calls).toHaveLength(0)
+  })
+})
+
+// 02/10/2026: a emissão de cobrança mandava o E.164 do CRM e o Asaas lia o 55
+// como DDD (o erro da Appia, agora no Asaas DO CLIENTE). O que precisa de
+// teste é não trocar um erro por outro: DDD 55 (Santa Maria/RS) existe, e
+// número que não é brasileiro vai em branco, não torto. Números fictícios.
+describe('telefone do cliente no Asaas — nacional, sem o 55', () => {
+  it.each([
+    ['celular com 55 (13 dígitos) → 11', '5567999991234', '67999991234'],
+    ['fixo com 55 (12 dígitos) → 10', '556732220000', '6732220000'],
+    ['celular já nacional fica', '67999991234', '67999991234'],
+    ['fixo já nacional fica', '6732220000', '6732220000'],
+    ['DDD 55 (RS) sem DDI, celular (11) fica', '55999990000', '55999990000'],
+    ['DDD 55 (RS) sem DDI, fixo (10) fica', '5532220000', '5532220000'],
+    ['DDD 55 (RS) com DDI (13) → só o DDI sai', '5555999990000', '55999990000'],
+    ['formatado como gente digita', '+55 (67) 99999-1234', '67999991234'],
+    ['com + e 55 de país', '+5567999991234', '67999991234'],
+  ])('%s', (_, raw, esperado) => {
+    expect(phoneForAsaasCustomer(raw)).toBe(esperado)
+  })
+
+  it.each([
+    ['estrangeiro com + (mesmos 11 dígitos de um DDD 14)', '+1 415 955 1212'],
+    ['estrangeiro sem + (Reino Unido)', '447700900123'],
+    ['55 + DDD + só 7 dígitos (GoLink 19/09)', '55129888381'],
+    ['+55 que não fecha um número brasileiro', '+55985856375'],
+    ['curto demais', '12345'],
+    ['vazio', ''],
+    ['nulo', null],
+    ['indefinido', undefined],
+  ])('%s → vazio', (_, raw) => {
+    expect(phoneForAsaasCustomer(raw)).toBeNull()
+  })
+
+  it('o POST que cria o cliente leva o nacional, não o E.164 do CRM', async () => {
+    await findOrCreateCustomer(PROD, input({ cpfCnpj: CNPJ, mobilePhone: '5567999991234' }), { existing: null })
+    const [post] = writes()
+    expect(post.method).toBe('POST')
+    expect(post.body).toMatchObject({ mobilePhone: '67999991234' })
+  })
+
+  it('DDD 55 do RS já nacional chega intacto no POST', async () => {
+    await findOrCreateCustomer(PROD, input({ cpfCnpj: CNPJ, mobilePhone: '55999990000' }), { existing: null })
+    expect(writes()[0].body).toMatchObject({ mobilePhone: '55999990000' })
+  })
+
+  it('estrangeiro ou sem telefone → o campo nem vai no POST (em branco, não errado)', async () => {
+    await findOrCreateCustomer(PROD, input({ cpfCnpj: CNPJ, mobilePhone: '+1 415 955 1212' }), { existing: null })
+    await findOrCreateCustomer(PROD, input({ cpfCnpj: CNPJ, mobilePhone: null }), { existing: null })
+    await findOrCreateCustomer(PROD, input({ cpfCnpj: CNPJ, mobilePhone: '' }), { existing: null })
+    const w = writes()
+    expect(w).toHaveLength(3)
+    for (const post of w) expect(post.body).not.toHaveProperty('mobilePhone')
+  })
+
+  it('complemento de cadastro existente (PUT) não mexe no telefone', async () => {
+    byDoc = [{ id: 'cus_real', cpfCnpj: CNPJ, mobilePhone: '67999991234' }]
+    await findOrCreateCustomer(PROD, input({ cpfCnpj: CNPJ, email: 'nota@empresa.com', mobilePhone: '5567988887777' }))
+    const [put] = writes()
+    expect(put.method).toBe('PUT')
+    expect(put.body).not.toHaveProperty('mobilePhone')
   })
 })

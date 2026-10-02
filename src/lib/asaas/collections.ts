@@ -9,6 +9,8 @@
 // Sem 'server-only' — o worker precisa alcançar isso na Fase 2.
 // ============================================================
 
+import { toBrNationalOrNull } from '@/lib/whatsapp/phone-utils'
+
 import { normalizeDocument, pickCustomerForDocument, pickCustomerForReference } from './match'
 
 export type AsaasEnv = 'sandbox' | 'production'
@@ -268,8 +270,12 @@ export interface AsaasCustomerAddress {
 
 export interface AsaasCustomerInput {
   name: string
-  /** Só dígitos, com DDI (5567…). */
-  mobilePhone: string
+  /**
+   * Telefone do contato COMO O CRM GUARDA (E.164, "5567…"), ou nulo. Quem
+   * converte para o formato do Asaas é `findOrCreateCustomer`, via
+   * `phoneForAsaasCustomer` — quem chama não precisa (nem deve) tirar o 55.
+   */
+  mobilePhone?: string | null
   cpfCnpj?: string | null
   email?: string | null
   /** Nosso id do contato — é por ele que reencontramos o cliente da próxima vez. */
@@ -308,6 +314,37 @@ function addressFields(a: AsaasCustomerAddress | null | undefined): Record<strin
   put('complement', a.complement)
   put('province', a.province)
   return out
+}
+
+/**
+ * Telefone do contato → o que vai no `mobilePhone` do cliente no Asaas DO
+ * CLIENTE: número NACIONAL (DDD + local, 10 ou 11 dígitos), sem o 55.
+ *
+ * 02/10/2026: a emissão de cobrança mandava o E.164 do CRM ("5567999991234")
+ * e o Asaas lia o 55 como DDD — o cliente nascia lá com um telefone que não
+ * existe. É o mesmo erro da Appia no billing da assinatura (28/09), corrigido
+ * lá com `toBrNationalOrNull`; aqui faltava. A regra é a mesma, pelo TAMANHO:
+ * 12–13 dígitos começando com 55 = tem DDI, sai o 55; 10–11 dígitos = já é
+ * nacional e fica — inclusive com DDD 55 (Santa Maria/RS), que existe.
+ *
+ * Nulo para o que não dá para afirmar que é brasileiro (estrangeiro, número
+ * quebrado): campo em branco no Asaas é melhor que telefone errado, que
+ * ninguém procura porque parece preenchido.
+ *
+ * O "+" é respeitado como em `asaasPhoneForContact` (match.ts): "+1 415
+ * 955-1212" tem os mesmos 11 dígitos de um celular de DDD 14 sem o sinal, e o
+ * sinal é a única pista de que o número já veio internacional.
+ *
+ * Só mexe no que SAI para o Asaas — o telefone gravado no CRM e o casamento
+ * cliente↔contato (match.ts/sync.ts) continuam em E.164.
+ */
+export function phoneForAsaasCustomer(raw: string | null | undefined): string | null {
+  const text = (raw ?? '').trim()
+  if (text.startsWith('+')) {
+    const d = text.replace(/\D/g, '')
+    return /^55\d{10,11}$/.test(d) ? toBrNationalOrNull(d) : null
+  }
+  return toBrNationalOrNull(text)
 }
 
 /** Até quantos cadastros cada busca traz para escolher (a busca não custa chamada a mais). */
@@ -394,6 +431,8 @@ export async function findOrCreateCustomer(
     // 08/09: o Asaas de produção exige CPF/CNPJ pra gerar cobrança.
     // 11/09: e e-mail + endereço pra emitir nota fiscal. Cliente que já existe
     // recebe agora o que veio preenchido — sem apagar o que já estava lá.
+    // O telefone NÃO entra no complemento (02/10/2026): o do cadastro existente
+    // é de quem cuida do Asaas, e o CRM só informa telefone ao criar.
     const patch: Record<string, string> = { ...endereco }
     if (!(existente.cpfCnpj ?? '').trim() && doc) patch.cpfCnpj = doc
     if (email && !existente.email) patch.email = email
@@ -408,9 +447,12 @@ export async function findOrCreateCustomer(
 
   if (requireDocument && !doc) throw new AsaasDocumentRequiredError()
 
+  // Telefone nacional, sem o 55 (02/10/2026 — ver phoneForAsaasCustomer). Sem
+  // número brasileiro possível, o campo nem vai: em branco, não errado.
+  const mobilePhone = phoneForAsaasCustomer(input.mobilePhone)
   return asaasPost<AsaasCustomer>(cred, '/customers', {
     name: input.name,
-    mobilePhone: input.mobilePhone,
+    ...(mobilePhone ? { mobilePhone } : {}),
     ...(doc ? { cpfCnpj: doc } : {}),
     ...(email ? { email } : {}),
     ...endereco,

@@ -47,7 +47,6 @@ import { postInternalNote } from '@/lib/ai/close-actions'
 import { notifyUsers } from '@/lib/orchestration/actions'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { decrypt } from '@/lib/whatsapp/encryption'
-import { toBrE164IfNational } from '@/lib/whatsapp/phone-utils'
 
 import { listChargesAtSilencing, recordSilenced } from './asaas-silenced'
 import {
@@ -539,10 +538,14 @@ export async function createChargeForContact(input: CreateChargeInput): Promise<
       }
     }
 
-    const phoneDigits = (contact.phone ?? '').replace(/\D/g, '')
     const customerInput: AsaasCustomerInput = {
       name: (contact.name || contact.email || contact.phone || 'Cliente').trim(),
-      mobilePhone: phoneDigits ? toBrE164IfNational(phoneDigits) : '',
+      // Vai CRU, como o CRM guarda (02/10/2026). Antes este ponto completava o
+      // 55 (toBrE164IfNational) e o Asaas lia o 55 como DDD — o cliente nascia
+      // com telefone inexistente, o erro da Appia. Quem converte para o
+      // nacional (DDD + número) é findOrCreateCustomer, no único lugar em que
+      // o telefone sai para o Asaas do cliente.
+      mobilePhone: contact.phone,
       // O e-mail digitado agora vence o da ficha: quem preencheu sabia que é
       // esse que precisa sair na nota fiscal (11/09).
       email: input.email?.trim() || contact.email,
