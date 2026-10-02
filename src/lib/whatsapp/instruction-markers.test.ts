@@ -93,3 +93,63 @@ describe('duas chamadas seguidas limpam as duas', () => {
     expect(b.text).toBe('Dois')
   })
 })
+
+// 02/10/2026 (conta com agente OpenAI): numa transferência o modelo fechou o
+// resumo para a equipe com "] ]" e ele foi ENVIADO como despedida, com os
+// dados do cliente. A rede só reconhecia "[[…]]" fechado, e linha a linha.
+describe('marcador conhecido MAL FECHADO (02/10/2026)', () => {
+  it('o caso real: "[[RESUMO:… ] ]" some inteiro', () => {
+    const r = stripInstructionMarkers('[[RESUMO:Cliente quer adquirir o kit; esclarecer todas as medidas.] ]')
+    expect(r.text).toBe('')
+    expect(r.removed).toEqual(['[[RESUMO:Cliente quer adquirir o kit; esclarecer todas as medidas.] ]'])
+  })
+
+  it('"]\\n]", sem fechar ou com "]" só: some até o fechamento ou o fim do texto', () => {
+    expect(stripInstructionMarkers('Já te passo.\n[[RESUMO:Ana, Centro]\n]').text).toBe('Já te passo.')
+    expect(stripInstructionMarkers('Já te passo.\n[[RESUMO:Ana, Centro').text).toBe('Já te passo.')
+    expect(stripInstructionMarkers('Já te passo. [[TRANSFERIR:Vendas|Ana]').text).toBe('Já te passo.')
+  })
+
+  it('atravessa linhas: o resumo em várias linhas sai inteiro e o texto em volta fica', () => {
+    const r = stripInstructionMarkers('Perfeito!\n[[RESUMO:Ana\ncidade Centro\norçamento] ]\nAté já.')
+    expect(r.text).toBe('Perfeito!\nAté já.')
+    expect(r.removed).toHaveLength(1)
+  })
+
+  it('o fechado em várias linhas também sai (antes, linha a linha, vazava)', () => {
+    expect(stripInstructionMarkers('Oi.\n[[NOTA:linha 1\nlinha 2]]\nTchau.').text).toBe('Oi.\nTchau.')
+  })
+
+  it('para no fechamento: o texto depois dele fica', () => {
+    expect(stripInstructionMarkers('[[RESUMO:Ana] ] Qualquer coisa me chama.').text).toBe('Qualquer coisa me chama.')
+  })
+
+  it('sem fechamento, para antes do próximo "[[" — o [[foto:…]] seguinte não é comido', () => {
+    expect(stripInstructionMarkers('[[RESUMO:Ana\n[[foto:frente]]').text).toBe('[[foto:frente]]')
+  })
+
+  it('marcador sem argumento fecha no 1º "]" — a frase depois fica', () => {
+    expect(stripInstructionMarkers('[[GANHO] Obrigada!').text).toBe('Obrigada!')
+    expect(stripInstructionMarkers('Combinado. [[HANDOFF] ]').text).toBe('Combinado.')
+  })
+
+  it('minúsculas, espaços e cedilha', () => {
+    expect(stripInstructionMarkers('Oi [[ resumo : Ana ] ]').text).toBe('Oi')
+    expect(stripInstructionMarkers('Oi [[COBRANÇA:promessa] ]').text).toBe('Oi')
+  })
+
+  it('"[[" sem nome conhecido não é mexido (texto comum)', () => {
+    const t = 'Use [[ colchetes duplos ] ] assim, ou [[QUALQUER] ] coisa'
+    expect(stripInstructionMarkers(t).text).toBe(t)
+    expect(stripInstructionMarkers(t).removed).toEqual([])
+  })
+
+  it('nome que só COMEÇA igual não é o marcador ("[[NOTAS" não é NOTA)', () => {
+    const t = 'Veja as [[NOTAS] ] da reunião'
+    expect(stripInstructionMarkers(t).text).toBe(t)
+  })
+
+  it('[[AUDIO]] e [[foto:…]] continuam passando', () => {
+    expect(stripInstructionMarkers('[[AUDIO]] Bom dia [[RESUMO:x] ]').text).toBe('[[AUDIO]] Bom dia')
+  })
+})

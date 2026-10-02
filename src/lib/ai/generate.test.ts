@@ -56,6 +56,25 @@ describe('parseGeneration', () => {
       handoff: true,
     })
   })
+
+  // 02/10/2026: o modelo que fecha "[[RESUMO:…] ]" também escreve o sentinel
+  // do jeito dele — a transferência não pode se perder por isso.
+  it('handoff tolerante: minúsculas, espaços, "] ]", "]\\n]" e "]" só', () => {
+    for (const raw of ['[[handoff]]', '[[ HANDOFF ]]', '[[HANDOFF] ]', '[[Handoff]\n]', '[[HANDOFF]']) {
+      expect(parseGeneration(raw)).toEqual({ text: '', handoff: true })
+    }
+  })
+
+  it('o caso real: o resumo mal fechado continua no texto (quem tira é parseCloseDirectives)', () => {
+    expect(parseGeneration('[[HANDOFF]]\n[[RESUMO:Cliente quer o kit] ]')).toEqual({
+      text: '[[RESUMO:Cliente quer o kit] ]',
+      handoff: true,
+    })
+  })
+
+  it('[[HANDOFF_…]] (outro nome) não é transferência', () => {
+    expect(parseGeneration('Oi [[HANDOFF_X]]')).toEqual({ text: 'Oi [[HANDOFF_X]]', handoff: false })
+  })
 })
 
 describe('generateReply — OpenAI', () => {

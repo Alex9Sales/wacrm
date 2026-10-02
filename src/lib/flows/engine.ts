@@ -91,6 +91,8 @@ import {
 } from "./types";
 import { runHttpFetch } from "./http-fetch";
 import { generateFlowAiReply, splitIntoMessages } from "@/lib/ai/flow-agent";
+import { parseCloseDirectives } from "@/lib/ai/defaults";
+import { stripInstructionMarkers } from "@/lib/whatsapp/instruction-markers";
 import { getAccountSettings } from "@/lib/settings/account-settings";
 import { aiHoursAllows } from "@/lib/ai/hours-gate";
 
@@ -1739,6 +1741,39 @@ export async function resumeTimedOutRuns(
 }
 
 /**
+ * 🛡️ O texto do nó de IA, pronto para o cliente (02/10/2026).
+ *
+ * O nó de IA usa o mesmo prompt do atendimento automático — e o prompt da
+ * conta pode mandar escrever marcadores ([[RESUMO:…]], [[ETIQUETA:…]],
+ * [[FUNIL:…]]…). Aqui ninguém os executa, e o texto ia inteiro para o envio,
+ * onde a rede de segurança só pegava "[[…]]" fechado NA MESMA LINHA. No mesmo
+ * dia, no auto-reply, um "[[RESUMO:… ] ]" mal fechado foi entregue ao cliente
+ * com os dados dele; o nó de IA tinha o mesmo buraco.
+ *
+ * Passa pela MESMA limpeza do auto-reply: parseCloseDirectives (que já tira o
+ * RESUMO tolerante) e a rede de segurança do envio, que também pega marcador
+ * conhecido mal fechado e em várias linhas. E tira o [[AUDIO]] e o [[foto:…]]:
+ * o auto-reply os transforma em áudio/imagem, o nó de IA não — sairiam como
+ * texto cru.
+ *
+ * `calar`: a IA escreveu [[IGNORAR]] ("ok", emoji — nada a responder). Quem
+ * chama decide; o texto que sobrou, se sobrou, é o que vai.
+ */
+export function textoDaIaParaOCliente(raw: string | null | undefined): {
+  text: string;
+  calar: boolean;
+} {
+  const dirs = parseCloseDirectives(raw ?? "");
+  const limpo = stripInstructionMarkers(dirs.text);
+  const text = (limpo.text ?? "")
+    .replace(/\[\[\s*audio\s*\](?:\s*\])?[ \t]*/gi, "")
+    .replace(/\[\[\s*foto\s*:[^\]\n]*\](?:\s*\])?[ \t]*/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { text, calar: dirs.skipReply };
+}
+
+/**
  * One conversational turn of an `ai` node: generate a reply from the
  * account's AI agent (prompt + RAG, via generateFlowAiReply), send it as
  * a few short messages, then either loop (re-park, waiting for the next
@@ -1813,16 +1848,27 @@ async function runAiTurn(
     await leave(`ai_turn_failed:${result.reason ?? "erro"}`, "error");
     return;
   }
+  // Marcadores fora ANTES de decidir "tem texto?" e de dividir (02/10/2026,
+  // ver textoDaIaParaOCliente): resposta que era só marcador cai no "não
+  // produziu nada", em vez de virar bolha com o marcador ou envio vazio.
+  const resposta = textoDaIaParaOCliente(result.text);
   // AI defers to a human, or produced nothing → exit path.
-  if (result.handoff || !result.text.trim()) {
+  if (result.handoff || (!resposta.text && !resposta.calar)) {
     await leave("ai_handoff", "handoff");
+    return;
+  }
+  // Só [[IGNORAR]]: a mensagem não pedia resposta — não é "não soube
+  // responder", então não sai para o humano; segue no nó esperando a próxima
+  // (antes, o marcador ia para o envio, era limpo lá e o envio vazio falhava).
+  if (!resposta.text) {
+    await advanceCurrentNodeKey(run.id, run.current_node_key, node.node_key, null);
     return;
   }
 
   // Send the reply as a few short, human-sized messages. When typing is on
   // (default), show "digitando…" and pause a beat before each one so it
   // reads like a person, not a bot dumping text.
-  const parts = splitIntoMessages(result.text);
+  const parts = splitIntoMessages(resposta.text);
   const typing = cfg.typing !== false;
   for (const part of parts) {
     try {

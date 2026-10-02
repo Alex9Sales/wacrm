@@ -26,6 +26,17 @@ export const AI_PROVIDER_DEFAULT_MODEL: Record<AiProvider, string> = {
 export const HANDOFF_SENTINEL = '[[HANDOFF]]'
 
 /**
+ * Como o sentinel é RECONHECIDO na resposta (o HANDOFF_SENTINEL acima é como
+ * ele é ENSINADO no prompt). 02/10/2026: o modelo de uma conta com agente
+ * OpenAI fechou o marcador do resumo com "] ]" na mesma resposta da
+ * transferência — quem erra o fechamento de um erra o do outro. A comparação
+ * exata com "[[HANDOFF]]" perdia a transferência e o marcador ia pro cliente.
+ * Aceita minúsculas, espaços dentro, "] ]"/"]\n]" e "]" só. Exige "]" logo
+ * depois do nome: um "[[HANDOFF_…]]" futuro não vira transferência.
+ */
+export const HANDOFF_DIRECTIVE = /\[\[\s*handoff\s*\](?:\s*\])?/i
+
+/**
  * Marker the model prefixes a message with to have it delivered as a VOICE
  * note (TTS) instead of text. Parsed + stripped by the auto-reply sender.
  */
@@ -100,8 +111,21 @@ export const LOSE_DIRECTIVE = /\[\[\s*perder\s*(?::\s*((?:(?!\[\[)[\s\S])+?))?\s
  *  no comercial em Reunião agendada"). */
 export const WIN_DIRECTIVE = /\[\[\s*ganho\s*\]\]/i
 /** Resumo pra quem assume no handoff: [[RESUMO:<texto>]]. Vai até o "]]" (o
- *  resumo pode ter "[" no meio — mesmo cuidado do TRANSFERIR). */
-export const HANDOFF_SUMMARY_DIRECTIVE = /\[\[\s*resumo\s*:\s*([\s\S]+?)\s*\]\](?!\])/i
+ *  resumo pode ter "[" no meio — mesmo cuidado do TRANSFERIR).
+ *
+ *  02/10/2026 (conta com agente OpenAI): o modelo fechou com "] ]" (colchete,
+ *  ESPAÇO, colchete) — "[[RESUMO:Cliente quer … as medidas.] ]". O regex não
+ *  casou: a nota interna saiu sem o resumo e o marcador inteiro, com os dados
+ *  do cliente, foi ENVIADO como despedida da transferência. Agora:
+ *   - fecha com "]" + espaços/quebra de linha opcionais + "]";
+ *   - sem fechamento, vale até o próximo "[[" (outro marcador) ou o fim do
+ *     texto — um "]" solto no fim conta como fechamento;
+ *   - o lazy para no PRIMEIRO fechamento válido, então o que vem depois de um
+ *     "]]" certo nunca entra no resumo; e o resumo não atravessa "[[" (mesma
+ *     regra do PERDER), senão um marcador sem fechamento comeria o seguinte;
+ *   - não começa com "]": "[[RESUMO:]]" não vira o resumo "]". */
+export const HANDOFF_SUMMARY_DIRECTIVE =
+  /\[\[\s*resumo\s*:\s*((?!\])(?:(?!\[\[)[\s\S])+?)\s*(?:\]\s*\](?!\])|\]?\s*(?=\[\[)|\]?\s*$)/i
 /** Não responder: a mensagem não pede resposta (ex.: "ok"/emoji). */
 export const SKIP_DIRECTIVE = /\[\[\s*ignorar\s*\]\]/i
 /** Etiquetar o contato com uma etiqueta EXISTENTE (captura o nome). Global. */

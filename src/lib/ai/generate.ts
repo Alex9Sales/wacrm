@@ -5,7 +5,7 @@ import {
   type GenerateResult,
   type UsageMeta,
 } from './types'
-import { HANDOFF_SENTINEL, aiRequestTimeoutMs } from './defaults'
+import { HANDOFF_DIRECTIVE, aiRequestTimeoutMs } from './defaults'
 import { generateOpenAi } from './providers/openai'
 import { generateAnthropic } from './providers/anthropic'
 import { generateGemini } from './providers/gemini'
@@ -70,9 +70,16 @@ export async function generateReply(args: GenerateArgs): Promise<GenerateResult>
  * Split the raw model output into `{ text, handoff }`. The sentinel can
  * appear alone or trailing a partial reply; either way we treat the
  * turn as a handoff and strip the marker from any remaining text.
+ *
+ * 02/10/2026: reconhecido pelo HANDOFF_DIRECTIVE, não pela string exata. O
+ * modelo que fecha um marcador com "] ]" também escreve "[[handoff]]" ou
+ * "[[ HANDOFF ] ]" — com a comparação exata a transferência não acontecia e
+ * o marcador ia pro cliente junto com o resto do texto.
  */
 export function parseGeneration(raw: string): GenerateResult {
-  const handoff = raw.includes(HANDOFF_SENTINEL)
-  const text = raw.split(HANDOFF_SENTINEL).join('').trim()
+  const handoff = HANDOFF_DIRECTIVE.test(raw)
+  const text = handoff
+    ? raw.replace(new RegExp(HANDOFF_DIRECTIVE.source, 'gi'), '').trim()
+    : raw.trim()
   return { text, handoff }
 }
