@@ -92,6 +92,7 @@ import {
 } from '@/lib/flows/meta-send'
 import { splitIntoMessages } from '@/lib/ai/flow-agent'
 import { AUDIO_MARKER, PHOTO_DIRECTIVE } from '@/lib/ai/defaults'
+import { controlMarkerRegex } from '@/lib/whatsapp/instruction-markers'
 import { resolveProductPhoto } from '@/lib/ai/catalog'
 import { synthesizeSpeech } from '@/lib/ai/tts'
 import { planStageFollowUp } from '@/lib/ai/followup'
@@ -1042,10 +1043,18 @@ export async function dispatchInboundToAiReply(
     // pro cliente (pode carregar resumo com CPF). Ficam só [[AUDIO]] e [[foto:…]].
     // Aqui, ANTES da decisão "tem texto?": resposta só de marcador desconhecido
     // cai no ramo sem texto (nota de tropeço), não ocupa vaga em silêncio.
+    // 02/10/2026: antes do "[[…]]" fechado, o marcador CONHECIDO mal fechado
+    // ("[[RESUMO:…] ]", sem fechar) — a mesma regra do envio
+    // (instruction-markers.ts). Numa transferência o texto que sobra aqui vira
+    // a despedida ENVIADA ao cliente; só marcador → sobra nada → vai a
+    // despedida padrão (HANDOFF_FAREWELL, logo abaixo). O conhecido vem
+    // primeiro: o genérico iria do "[[RESUMO" até o "]]" de outro marcador e
+    // comeria o texto do meio.
     const unknownMarker = /\[\[(?!\s*(?:audio\s*\]\]|foto\s*:))[\s\S]*?\]\]/gi
-    if (unknownMarker.test(dirs.text)) {
-      console.warn('[ai auto-reply] marcador desconhecido removido da resposta:', conversationId)
-      dirs.text = dirs.text.replace(unknownMarker, '').replace(/\n{3,}/g, '\n\n').trim()
+    const semMarcador = dirs.text.replace(controlMarkerRegex(), '').replace(unknownMarker, '')
+    if (semMarcador !== dirs.text) {
+      console.warn('[ai auto-reply] marcador desconhecido ou mal fechado removido da resposta:', conversationId)
+      dirs.text = semMarcador.replace(/\n{3,}/g, '\n\n').trim()
     }
     const text = dirs.text
 

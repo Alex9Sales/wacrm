@@ -31,8 +31,91 @@
  * `[[foto:…]]`. A regra é "tudo é interno, menos o que se conhece" de
  * propósito — marcador novo que alguém inventar no prompt amanhã já nasce
  * bloqueado, em vez de vazar até alguém reparar.
+ *
+ * Só dentro da LINHA (`[^\n]`): um "[[" solto de texto comum não pode ir até
+ * um "]]" lá embaixo e comer os parágrafos do meio. Marcador que atravessa
+ * linhas só é removido quando tem nome conhecido (ver MARCADOR_DE_CONTROLE).
  */
-const INSTRUCTION_MARKER = /\[\[(?!\s*(?:audio\s*\]\]|foto\s*:))[\s\S]*?\]\]/gi
+const MARCADOR_GENERICO = String.raw`\[\[(?!\s*(?:audio\s*\]\]|foto\s*:))[^\n]*?\]\]`
+
+/**
+ * Nomes de marcador que o sistema usa — conferidos em ai/defaults.ts (as
+ * diretivas), ai/materials-shared.ts (ENVIAR), ai/external-tools.ts
+ * (FERRAMENTA), ai/followup.ts (SILENT) e na captura do site (LEAD). Marcador
+ * NOVO entra aqui também: sem o nome, a versão mal fechada dele vaza.
+ * AUDIO e foto ficam de fora pelo mesmo motivo do MARCADOR_GENERICO.
+ */
+const NOMES_DE_MARCADOR = [
+  'resumo',
+  'handoff',
+  'transferir',
+  'agente',
+  'avisardono',
+  'agendar',
+  'perder',
+  'ganho',
+  'funil',
+  'resolver',
+  'ignorar',
+  'etiqueta',
+  'criarcard',
+  'nota',
+  'atributo',
+  'voz',
+  'telefone',
+  'cobran[cç]a',
+  'cobrar',
+  'enviar',
+  'ferramenta',
+  'silent',
+  'lead',
+]
+
+/** Os que nunca levam argumento: o 1º "]" já fecha ("[[GANHO] Obrigado!"
+ *  perde só o marcador, não a frase). */
+const SEM_ARGUMENTO = ['handoff', 'ganho', 'resolver', 'ignorar', 'silent']
+
+/**
+ * 🛡️ Marcador de controle MAL FECHADO (02/10/2026, conta com agente OpenAI).
+ *
+ * Numa transferência o modelo escreveu "[[HANDOFF]]" e, na linha de baixo,
+ * "[[RESUMO:Cliente quer … as medidas.] ]" — fechado com colchete, ESPAÇO,
+ * colchete. O MARCADOR_GENERICO só reconhece "[[…]]" fechado, então o resumo
+ * para a equipe, com os dados do cliente, foi ENVIADO como despedida.
+ *
+ * Mal fechado só é reconhecível pelo NOME: "[[" + um nome desta lista vai até
+ * o primeiro "]" + espaços/quebra opcionais + "]", ou até antes do próximo
+ * "[[", ou até o FIM do texto — atravessando linhas (o resumo às vezes vem em
+ * várias). Perder o resto de uma resposta que já estava quebrada é melhor que
+ * mandar o encanamento ao cliente. "[[" sem nome conhecido (texto comum, o
+ * colchete do próprio cliente) não é mexido: sem nome não dá para saber onde
+ * acaba, e engolir texto de verdade seria outra falha.
+ *
+ * O nome tem que terminar ali ("[[NOTAS…" não é NOTA). Vale também para o
+ * marcador BEM fechado, que é removido igual.
+ */
+const MARCADOR_DE_CONTROLE =
+  String.raw`\[\[\s*(?:(?:${SEM_ARGUMENTO.join('|')})\s*\](?:\s*\])?|` +
+  String.raw`(?:${NOMES_DE_MARCADOR.join('|')})(?![\p{L}\p{N}_])(?:(?!\[\[)[\s\S])*?(?:\]\s*\](?!\])|(?=\[\[)|$))`
+
+/**
+ * Regex NOVA a cada chamada (com /g, uma instância compartilhada guardaria o
+ * lastIndex entre textos). Para o auto-reply, que limpa o texto inteiro
+ * antes da decisão "tem texto?" e precisa da mesma regra deste envio.
+ */
+export function controlMarkerRegex(): RegExp {
+  return new RegExp(MARCADOR_DE_CONTROLE, 'giu')
+}
+
+/** O conhecido vem ANTES na alternância: o genérico iria do "[[RESUMO" mal
+ *  fechado até o "]]" de outro marcador e comeria o texto do meio. */
+function marcadoresRegex(): RegExp {
+  return new RegExp(`${MARCADOR_DE_CONTROLE}|${MARCADOR_GENERICO}`, 'giu')
+}
+
+/** Marca o lugar de onde um marcador saiu, para a limpeza linha a linha.
+ *  NUL não aparece em mensagem de WhatsApp. */
+const VAGA = '\u0000'
 
 export interface StrippedText {
   /** O texto que pode ir ao cliente. */
@@ -44,26 +127,28 @@ export interface StrippedText {
 export function stripInstructionMarkers(raw: string | null | undefined): StrippedText {
   if (typeof raw !== 'string' || !raw) return { text: raw ?? null, removed: [] }
 
+  // Remove no texto INTEIRO (um marcador mal fechado atravessa linhas) e deixa
+  // uma VAGA no lugar; a arrumação depois é por linha.
   const removed: string[] = []
+  const marcado = raw.replace(marcadoresRegex(), (m) => {
+    removed.push(m.trim())
+    return VAGA
+  })
+  if (!removed.length) return { text: raw, removed: [] }
+
   // Decide LINHA A LINHA, como o parser de materiais do motor já faz: a linha
   // que era só o marcador some inteira; a que tinha texto fica, sem o buraco.
   // Um filtro global de linhas vazias comeria parágrafo legítimo.
-  const linhas = raw.split('\n')
   const mantidas: string[] = []
-  for (const linha of linhas) {
-    let tinha = false
-    // Uma instância por linha: regex com /g guarda lastIndex, e reaproveitar
-    // a mesma faria a linha seguinte começar a busca no meio.
-    const re = new RegExp(INSTRUCTION_MARKER.source, 'gi')
-    const semMarcador = linha.replace(re, (m) => {
-      tinha = true
-      removed.push(m.trim())
-      return ''
-    })
-    if (tinha && !semMarcador.trim()) continue // linha que era só o marcador
-    mantidas.push(tinha ? semMarcador.replace(/[ \t]{2,}/g, ' ').trimEnd() : linha)
+  for (const linha of marcado.split('\n')) {
+    if (!linha.includes(VAGA)) {
+      mantidas.push(linha)
+      continue
+    }
+    const semMarcador = linha.split(VAGA).join('')
+    if (!semMarcador.trim()) continue // linha que era só o marcador
+    mantidas.push(semMarcador.replace(/[ \t]{2,}/g, ' ').trimEnd())
   }
-  if (!removed.length) return { text: raw, removed: [] }
 
   const text = mantidas.join('\n').replace(/\n{3,}/g, '\n\n').trim()
 

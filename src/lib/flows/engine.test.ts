@@ -8,6 +8,7 @@ import {
   isTerminal,
   evaluateConditionPredicate,
   rollIntoBusinessHours,
+  textoDaIaParaOCliente,
 } from "./engine";
 
 describe("matchReplyId", () => {
@@ -443,5 +444,39 @@ describe("rollIntoBusinessHours (Atraso Inteligente)", () => {
     expect(
       rollIntoBusinessHours(base, { ...bh, start: "nope" }).toISOString(),
     ).toBe(iso);
+  });
+});
+
+// 02/10/2026: o nó de IA mandava o texto do modelo como veio. Um "[[RESUMO:…] ]"
+// mal fechado (o caso do auto-reply no mesmo dia) passaria cru pro cliente.
+describe("textoDaIaParaOCliente (nó de IA dos Fluxos)", () => {
+  it("o caso real: resumo mal fechado sai inteiro e a fala fica", () => {
+    const r = textoDaIaParaOCliente(
+      "Perfeito! Já te passo pro responsável.\n[[RESUMO:Cliente quer o kit; esclarecer as medidas.] ]",
+    );
+    expect(r).toEqual({ text: "Perfeito! Já te passo pro responsável.", calar: false });
+  });
+
+  it("marcador conhecido mal fechado em várias linhas e o bem fechado também saem", () => {
+    expect(
+      textoDaIaParaOCliente("Oi!\n[[ETIQUETA:quente]]\n[[NOTA:linha 1\nlinha 2] ]").text,
+    ).toBe("Oi!");
+  });
+
+  it("[[AUDIO]] e [[foto:…]] não viram texto cru (o nó não manda áudio nem foto)", () => {
+    expect(textoDaIaParaOCliente("[[AUDIO]] Bom dia!\n\n[[foto:Fachada]]").text).toBe("Bom dia!");
+  });
+
+  it("só marcador → texto vazio (quem chama manda pro caminho de saída)", () => {
+    expect(textoDaIaParaOCliente("[[RESUMO:Ana, Centro")).toEqual({ text: "", calar: false });
+  });
+
+  it("[[IGNORAR]] → calar, sem texto", () => {
+    expect(textoDaIaParaOCliente("[[IGNORAR]]")).toEqual({ text: "", calar: true });
+  });
+
+  it("texto sem marcador sai idêntico", () => {
+    const t = "Linha 1\n\nLinha 2 [conforme tabela]";
+    expect(textoDaIaParaOCliente(t).text).toBe(t);
   });
 });

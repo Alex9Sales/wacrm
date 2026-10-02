@@ -39,6 +39,62 @@ describe('parseCloseDirectives — [[GANHO]] e [[RESUMO:…]]', () => {
   })
 })
 
+// 02/10/2026 (conta com agente OpenAI): o modelo fechou o resumo com "] ]" — o
+// regex não casou, a nota saiu sem o resumo e o marcador foi pro cliente.
+describe('[[RESUMO:…]] mal fechado (02/10/2026)', () => {
+  const resumo = (raw: string) => parseCloseDirectives(raw)
+
+  it('o caso real: fechado com "] ]" → resumo extraído e nada sobra pro cliente', () => {
+    const d = resumo('[[RESUMO:Cliente quer adquirir o kit; esclarecer todas as medidas.] ]')
+    expect(d.handoffSummary).toBe('Cliente quer adquirir o kit; esclarecer todas as medidas.')
+    expect(d.text).toBe('')
+  })
+
+  it('"]]", "] ]" e "]\\n]" dão o mesmo resumo', () => {
+    for (const fecho of [']]', '] ]', ']\n]', ']  ]']) {
+      const d = resumo(`Já te passo pro responsável.\n[[RESUMO:Ana, bairro Centro, 2x/mês${fecho}`)
+      expect(d.handoffSummary).toBe('Ana, bairro Centro, 2x/mês')
+      expect(d.text).toBe('Já te passo pro responsável.')
+    }
+  })
+
+  it('sem fechamento vale até o fim do texto (e "]" solto no fim também fecha)', () => {
+    expect(resumo('[[RESUMO:Ana quer orçamento\nmora no Centro').handoffSummary).toBe(
+      'Ana quer orçamento\nmora no Centro',
+    )
+    const d = resumo('Já chamo alguém.\n[[RESUMO:Ana quer orçamento]')
+    expect(d.handoffSummary).toBe('Ana quer orçamento')
+    expect(d.text).toBe('Já chamo alguém.')
+  })
+
+  it('minúsculas e espaços dentro do marcador', () => {
+    expect(resumo('[[ resumo :  Ana, Centro  ] ]').handoffSummary).toBe('Ana, Centro')
+  })
+
+  it('o resumo NÃO engole o texto depois de um fechamento válido', () => {
+    const d = resumo('[[RESUMO:Ana, Centro]] Obrigada pelo contato ]]')
+    expect(d.handoffSummary).toBe('Ana, Centro')
+    expect(d.text).toBe('Obrigada pelo contato ]]')
+  })
+
+  it('sem fechamento, para antes do próximo marcador (que continua valendo)', () => {
+    const d = resumo('[[RESUMO:Ana quer orçamento\n[[GANHO]]')
+    expect(d.handoffSummary).toBe('Ana quer orçamento')
+    expect(d.win).toBe(true)
+    expect(d.text).toBe('')
+  })
+
+  it('"]" do próprio resumo antes do fechamento continua no resumo', () => {
+    expect(resumo('[[RESUMO:Ana [Centro]]]').handoffSummary).toBe('Ana [Centro]')
+    expect(resumo('[[RESUMO:Ana [Centro] ]]').handoffSummary).toBe('Ana [Centro]')
+  })
+
+  it('resumo vazio não vira resumo', () => {
+    expect(resumo('[[RESUMO:]]').handoffSummary).toBeNull()
+    expect(resumo('[[RESUMO: ] ]').handoffSummary).toBeNull()
+  })
+})
+
 describe('crossFunnelInstruction', () => {
   it('teaches the close-and-open combinations', () => {
     const t = crossFunnelInstruction([{ name: '4. Individual', stages: ['Novo lead'] }])

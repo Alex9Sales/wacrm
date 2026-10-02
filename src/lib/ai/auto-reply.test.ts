@@ -264,7 +264,7 @@ vi.mock('@/db', async (importOriginal) => {
 
 import { dispatchInboundToAiReply } from './auto-reply'
 import { HANDOFF_NOTE_PREFIX } from './handoff-pause'
-import { parseCloseDirectives } from './defaults'
+import { HANDOFF_FAREWELL, parseCloseDirectives } from './defaults'
 
 const ARGS = {
   accountId: 'acct-1',
@@ -763,6 +763,57 @@ describe('dispatchInboundToAiReply — handoff', () => {
       }),
     )
     expect(h.state.updatePayload).toEqual({ aiAutoreplyDisabled: true })
+  })
+
+  // 02/10/2026 (conta com agente OpenAI): "[[HANDOFF]]" + o resumo fechado com
+  // "] ]". O resumo não casava, sobrava como "despedida" e era ENVIADO ao
+  // cliente; a nota interna saía só com "Cliente disse: …".
+  describe('resumo mal fechado (02/10/2026)', () => {
+    const RESUMO = 'Cliente quer adquirir o kit completo; esclarecer todas as medidas.'
+    /** A saída CRUA do modelo passa pelo parseGeneration de verdade. */
+    const modeloRespondeu = async (raw: string) => {
+      const { parseGeneration } = await vi.importActual<typeof import('./generate')>('./generate')
+      h.generateReply.mockResolvedValue(parseGeneration(raw))
+    }
+    const enviados = () => h.engineSendText.mock.calls.map((c) => (c[0] as { text: string }).text)
+    const notaDoHandoff = () =>
+      (h.postInternalNote.mock.calls as [{ text: string }][])
+        .map((c) => c[0].text)
+        .find((t) => t.startsWith(HANDOFF_NOTE_PREFIX))
+
+    it('o caso real: o cliente recebe SÓ a despedida padrão e o resumo vai pra nota e pro aviso', async () => {
+      await modeloRespondeu(`[[HANDOFF]]\n[[RESUMO:${RESUMO}] ]`)
+      await dispatchInboundToAiReply(ARGS)
+      expect(enviados()).toEqual([HANDOFF_FAREWELL])
+      expect(enviados().join('\n')).not.toContain('RESUMO')
+      expect(notaDoHandoff()).toContain(`📋 ${RESUMO}`)
+      expect(h.sendOwnerAlert).toHaveBeenCalledWith(
+        'acct-1',
+        'handoff',
+        expect.objectContaining({ resumo: RESUMO }),
+      )
+      expect(h.state.updatePayload).toEqual({ aiAutoreplyDisabled: true })
+    })
+
+    it('sentinel e resumo escritos "do jeito do modelo" (minúsculas, "]\\n]") → mesma coisa', async () => {
+      await modeloRespondeu(`[[ handoff ] ]\n[[resumo: ${RESUMO}]\n]`)
+      await dispatchInboundToAiReply(ARGS)
+      expect(enviados()).toEqual([HANDOFF_FAREWELL])
+      expect(notaDoHandoff()).toContain(`📋 ${RESUMO}`)
+    })
+
+    it('despedida do modelo + resumo sem fechar → a despedida dele sai, o resumo não', async () => {
+      await modeloRespondeu(`Perfeito! Já te passo pro responsável.\n[[HANDOFF]]\n[[RESUMO:${RESUMO}`)
+      await dispatchInboundToAiReply(ARGS)
+      expect(enviados()).toEqual(['Perfeito! Já te passo pro responsável.'])
+      expect(notaDoHandoff()).toContain(`📋 ${RESUMO}`)
+    })
+
+    it('rede de segurança: outro marcador conhecido mal fechado também não sai', async () => {
+      await modeloRespondeu('[[HANDOFF]]\n[[NOTA:dados do cliente] ]')
+      await dispatchInboundToAiReply(ARGS)
+      expect(enviados()).toEqual([HANDOFF_FAREWELL])
+    })
   })
 })
 
