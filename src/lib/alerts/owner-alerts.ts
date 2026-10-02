@@ -38,22 +38,32 @@ export function flattenForTemplate(text: string, max = 900): string {
 
 const KIND_TOGGLE: Record<
   OwnerAlertKind,
-  'alertOnWon' | 'alertOnHandoff' | 'alertOnBooking' | 'alertOnOrder' | 'alertOnDemo'
+  | 'alertOnWon'
+  | 'alertOnHandoff'
+  | 'alertOnBooking'
+  | 'alertOnOrder'
+  | 'alertOnDemo'
+  | 'alertOnHandoffStalled'
 > = {
   won: 'alertOnWon',
   handoff: 'alertOnHandoff',
   booking: 'alertOnBooking',
   order: 'alertOnOrder',
   demo: 'alertOnDemo',
+  handoff_stalled: 'alertOnHandoffStalled',
 }
 
-const KIND_TEMPLATE: Record<
-  OwnerAlertKind,
-  | 'alertWonTemplate'
-  | 'alertHandoffTemplate'
-  | 'alertBookingTemplate'
-  | 'alertOrderTemplate'
-  | 'alertDemoTemplate'
+// 02/10/2026: o aviso de transferência parada não tem texto personalizável
+// (sai sempre o padrão) — por isso o mapa é parcial.
+const KIND_TEMPLATE: Partial<
+  Record<
+    OwnerAlertKind,
+    | 'alertWonTemplate'
+    | 'alertHandoffTemplate'
+    | 'alertBookingTemplate'
+    | 'alertOrderTemplate'
+    | 'alertDemoTemplate'
+  >
 > = {
   won: 'alertWonTemplate',
   handoff: 'alertHandoffTemplate',
@@ -77,7 +87,8 @@ export async function sendOwnerAlert(
     const phone = s.alertPhone.replace(/\D/g, '')
     if (!phone || !s[KIND_TOGGLE[kind]]) return false
 
-    const template = (s[KIND_TEMPLATE[kind]] || '').trim() || DEFAULT_ALERT_TEMPLATES[kind]
+    const templateKey = KIND_TEMPLATE[kind]
+    const template = ((templateKey ? s[templateKey] : '') || '').trim() || DEFAULT_ALERT_TEMPLATES[kind]
     // Nome sem letra ("." do perfil do WhatsApp) não é nome: a linha sai só com
     // o telefone (16/09, Família do Gás: "👤 . · 5567…"). Vale pra todo aviso.
     const clean = { ...vars }

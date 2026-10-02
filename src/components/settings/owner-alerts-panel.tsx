@@ -35,6 +35,10 @@ export function OwnerAlertsPanel() {
   const [onBooking, setOnBooking] = useState(false);
   const [onOrder, setOnOrder] = useState(false);
   const [onDemo, setOnDemo] = useState(false);
+  // ⏰ 02/10/2026 (pedido de uma clínica): transferência da IA que ninguém assumiu.
+  const [onStalled, setOnStalled] = useState(false);
+  const [stalledMinutes, setStalledMinutes] = useState(15);
+  const [expedienteOk, setExpedienteOk] = useState(true);
   const [channels, setChannels] = useState<{ id: string; name: string; phone: string | null }[]>([]);
   const [showTemplates, setShowTemplates] = useState(false);
   // Número de um canal DESTA conta? O aviso entra lá como mensagem recebida
@@ -56,6 +60,9 @@ export function OwnerAlertsPanel() {
         setOnBooking(d.onBooking);
         setOnOrder(d.onOrder);
         setOnDemo(d.onDemo);
+        setOnStalled(d.onHandoffStalled);
+        setStalledMinutes(d.handoffStalledMinutes);
+        setExpedienteOk(d.expedienteConfigurado);
         setChannels(d.channels);
         setWonTemplate(d.wonTemplate);
         setHandoffTemplate(d.handoffTemplate);
@@ -86,6 +93,8 @@ export function OwnerAlertsPanel() {
       onBooking,
       onOrder,
       onDemo,
+      onHandoffStalled: onStalled,
+      handoffStalledMinutes: stalledMinutes,
       wonTemplate,
       handoffTemplate,
       bookingTemplate,
@@ -199,6 +208,44 @@ export function OwnerAlertsPanel() {
                   <span className="text-foreground">{o.label}</span>
                 </label>
               ))}
+              {/* O aviso imediato de transferência some no meio do dia; este é
+                  o segundo toque, UMA vez, quando ninguém assumiu. Conta só o
+                  tempo de expediente e só avisa com a empresa aberta. */}
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <input
+                  id="alert-stalled"
+                  type="checkbox"
+                  checked={onStalled}
+                  onChange={(e) => setOnStalled(e.target.checked)}
+                  className="h-3.5 w-3.5 cursor-pointer accent-[var(--primary)]"
+                />
+                <label htmlFor="alert-stalled" className="cursor-pointer text-foreground">
+                  ⏰ Uma transferência da IA ficar sem resposta da equipe por
+                </label>
+                <Input
+                  type="number"
+                  min={5}
+                  max={240}
+                  step={5}
+                  value={stalledMinutes}
+                  onChange={(e) => setStalledMinutes(Number(e.target.value))}
+                  onBlur={() =>
+                    setStalledMinutes((v) =>
+                      Number.isFinite(v) && v > 0 ? Math.min(240, Math.max(5, Math.trunc(v))) : 15,
+                    )
+                  }
+                  className="h-7 w-16 px-2 text-sm"
+                  aria-label="Minutos de expediente sem resposta"
+                />
+                <span className="text-foreground">min de expediente</span>
+              </div>
+              {onStalled && (
+                <p className="pl-5 text-xs text-muted-foreground">
+                  {expedienteOk
+                    ? 'Um aviso por transferência, só com a empresa aberta. Responder a conversa pelo CRM ou pelo WhatsApp da empresa conta como resposta.'
+                    : 'Sem horário de atendimento ligado (Configurações → Atendimento), o tempo conta 24h por dia — o aviso pode chegar de madrugada.'}
+                </p>
+              )}
             </div>
 
             <button

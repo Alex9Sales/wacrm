@@ -41,7 +41,14 @@ import { loadLeadDistribution } from '@/lib/leads/distribution'
 import {
   getAccountSettings,
   updateAccountSettings, DEFAULT_ACCOUNT_SETTINGS } from '@/lib/settings/account-settings'
-import { previewDigest, sendDigestNow } from '@/lib/reports/owner-digest'
+import {
+  previewDigest,
+  sendDigestNow,
+  toDigestMode,
+  type DigestMode,
+} from '@/lib/reports/owner-digest'
+import { expedienteConfigurado, textoDosFechamentos } from '@/lib/alerts/expediente'
+import { limiarDaTransferenciaParada } from '@/lib/alerts/aviso-transferencia-parada'
 import { getCompanyProfile } from '@/lib/ai/company-profile'
 import type { Tag, MessageTemplate, WhatsAppConfig } from '@/types'
 
@@ -1209,6 +1216,14 @@ export async function getOwnerDigest(): Promise<{
    *  oficial como mensagem de cliente). */
   channels: { id: string; name: string; phone: string | null }[]
   preview: string
+  /** 02/10/2026: 'hora' (todo dia na hora escolhida) ou 'fechamento' (no fim
+   *  de cada dia de expediente). */
+  mode: DigestMode
+  /** O modo 'fechamento' depende do horário de atendimento LIGADO em
+   *  Configurações → Atendimento; sem ele a tela desabilita a opção. */
+  expedienteConfigurado: boolean
+  /** "Segunda a sexta às 20h30, sábado às 17h. Domingo: sem resumo (fechado)". */
+  fechamentos: string | null
 }> {
   const ctx = await getCurrentAccount()
   const [s, chans, preview] = await Promise.all([
@@ -1219,6 +1234,7 @@ export async function getOwnerDigest(): Promise<{
       .where(eq(channels.accountId, ctx.accountId)),
     previewDigest(ctx.accountId).catch(() => ''),
   ])
+  const configurado = expedienteConfigurado(s)
   return {
     enabled: s.ownerDigestEnabled,
     hour: s.ownerDigestHour,
@@ -1228,7 +1244,16 @@ export async function getOwnerDigest(): Promise<{
       .filter((c) => WA_PROVIDERS.includes(c.provider))
       .map((c) => ({ id: c.id, name: c.name, phone: channelDigits(c.phoneNumber) })),
     preview,
+    mode: toDigestMode(s.ownerDigestMode),
+    expedienteConfigurado: configurado,
+    fechamentos: configurado ? textoDosFechamentos(s.businessDays) : null,
   }
+}
+
+/** Prévia do resumo no modo escolhido NA TELA (ainda sem salvar). */
+export async function previewOwnerDigest(mode: DigestMode): Promise<string> {
+  const ctx = await getCurrentAccount()
+  return previewDigest(ctx.accountId, toDigestMode(mode)).catch(() => '')
 }
 
 /** Normaliza o telefone do dono: só dígitos + prefixo BR (55) se vier "pelado". */
@@ -1263,6 +1288,8 @@ export async function setOwnerDigest(input: {
   hour: number
   phone: string
   channelId: string | null
+  /** Sem o campo (tela antiga em cache) o modo salvo não muda. */
+  mode?: DigestMode
 }): Promise<{ error: string | null }> {
   const ctx = await requireRole('admin')
   const phone = normalizeOwnerPhone(input.phone)
@@ -1275,19 +1302,35 @@ export async function setOwnerDigest(input: {
       error: `Esse número é o canal "${asChannel}" do CRM. Coloque o celular pessoal de quem vai receber o resumo — um número de canal faria a IA responder a si mesma.`,
     }
   }
+  const mode = input.mode === undefined ? undefined : toDigestMode(input.mode)
+  if (mode === 'fechamento') {
+    // Sem horário de atendimento não há "fim do expediente": salvar assim
+    // faria o resumo cair na hora sem o dono saber por quê.
+    const s = await getAccountSettings(ctx.accountId)
+    if (!expedienteConfigurado(s)) {
+      return {
+        error:
+          'Para mandar no fim do expediente, ligue o horário de atendimento em Configurações → Atendimento (é de lá que vem o horário de fechamento de cada dia).',
+      }
+    }
+  }
   const hour = Math.min(23, Math.max(0, Math.trunc(Number(input.hour))))
   await updateAccountSettings(ctx.accountId, {
     ownerDigestEnabled: !!input.enabled,
     ownerDigestHour: Number.isFinite(hour) ? hour : 8,
     ownerDigestPhone: phone,
     ownerDigestChannelId: input.channelId || null,
+    ...(mode ? { ownerDigestMode: mode } : {}),
   })
   return { error: null }
 }
 
-export async function sendOwnerDigestTest(): Promise<{ ok: boolean; error?: string }> {
+/** "Enviar teste agora" no modo que está na tela (mesmo sem salvar). */
+export async function sendOwnerDigestTest(
+  mode?: DigestMode,
+): Promise<{ ok: boolean; error?: string }> {
   const ctx = await requireRole('admin')
-  return sendDigestNow(ctx.accountId)
+  return sendDigestNow(ctx.accountId, mode === undefined ? undefined : toDigestMode(mode))
 }
 
 // ============================================================
@@ -1453,6 +1496,12 @@ export async function getOwnerAlerts(): Promise<{
   onBooking: boolean
   onOrder: boolean
   onDemo: boolean
+  /** ⏰ Transferência da IA parada (02/10/2026) + minutos de expediente. */
+  onHandoffStalled: boolean
+  handoffStalledMinutes: number
+  /** Sem horário de atendimento ligado o tempo da transferência parada corre
+   *  24h por dia — a tela avisa. */
+  expedienteConfigurado: boolean
   wonTemplate: string
   handoffTemplate: string
   bookingTemplate: string
@@ -1476,6 +1525,9 @@ export async function getOwnerAlerts(): Promise<{
     onBooking: s.alertOnBooking,
     onOrder: s.alertOnOrder,
     onDemo: s.alertOnDemo,
+    onHandoffStalled: s.alertOnHandoffStalled === true,
+    handoffStalledMinutes: limiarDaTransferenciaParada(s.handoffStalledMinutes),
+    expedienteConfigurado: expedienteConfigurado(s),
     wonTemplate: s.alertWonTemplate,
     handoffTemplate: s.alertHandoffTemplate,
     bookingTemplate: s.alertBookingTemplate,
@@ -1508,6 +1560,9 @@ export async function setOwnerAlerts(input: {
   onBooking: boolean
   onOrder?: boolean
   onDemo?: boolean
+  /** Sem os campos (tela antiga em cache) a config salva não muda. */
+  onHandoffStalled?: boolean
+  handoffStalledMinutes?: number
   wonTemplate?: string
   handoffTemplate?: string
   bookingTemplate?: string
@@ -1521,7 +1576,8 @@ export async function setOwnerAlerts(input: {
     input.onHandoff ||
     input.onBooking ||
     !!input.onOrder ||
-    !!input.onDemo
+    !!input.onDemo ||
+    !!input.onHandoffStalled
   if (anyOn && !phone) {
     return { error: 'Informe o número do WhatsApp que vai receber os avisos.' }
   }
@@ -1539,6 +1595,12 @@ export async function setOwnerAlerts(input: {
     alertOnBooking: !!input.onBooking,
     alertOnOrder: !!input.onOrder,
     alertOnDemo: !!input.onDemo,
+    ...(input.onHandoffStalled === undefined
+      ? {}
+      : { alertOnHandoffStalled: input.onHandoffStalled === true }),
+    ...(input.handoffStalledMinutes === undefined
+      ? {}
+      : { handoffStalledMinutes: limiarDaTransferenciaParada(input.handoffStalledMinutes) }),
     // Template vazio = usa o padrão do sistema.
     alertWonTemplate: (input.wonTemplate ?? '').trim().slice(0, 2_000),
     alertHandoffTemplate: (input.handoffTemplate ?? '').trim().slice(0, 2_000),

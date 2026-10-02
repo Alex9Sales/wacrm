@@ -129,6 +129,14 @@ export interface AccountSettings {
   alertOnOrder: boolean
   /** Avisar quando o SDR marcar um TESTE/DEMONSTRAÇÃO (via [[AVISARDONO:]]). */
   alertOnDemo: boolean
+  /** ⏰ Avisar quando uma transferência da IA ([[HANDOFF]]) passar de
+   *  `handoffStalledMinutes` minutos DE EXPEDIENTE sem ninguém da equipe
+   *  responder. Um aviso por transferência, só dentro do expediente comercial.
+   *  OFF por padrão. 02/10/2026 (pedido de uma clínica). Ver
+   *  lib/alerts/aviso-transferencia-parada.ts. */
+  alertOnHandoffStalled: boolean
+  /** Minutos de expediente até a transferência contar como parada (5–240). */
+  handoffStalledMinutes: number
   /** Templates dos avisos ('' = padrão do sistema). Variáveis {{assim}} por
    *  evento — ver DEFAULT_ALERT_TEMPLATES em lib/alerts/owner-alerts. */
   alertWonTemplate: string
@@ -141,6 +149,11 @@ export interface AccountSettings {
   ownerDigestEnabled: boolean
   /** Hora (0–23) do envio, avaliada no `businessTimezone` da conta. Padrão 8h. */
   ownerDigestHour: number
+  /** QUANDO o resumo sai: 'hora' = todo dia na `ownerDigestHour` (resumo da
+   *  manhã, o de sempre); 'fechamento' = em cada dia de expediente, logo depois
+   *  do FECHAMENTO comercial (resumo de hoje). Sem expediente configurado o
+   *  'fechamento' cai na hora. 02/10/2026 (pedido de uma clínica: "todo fim de expediente"). */
+  ownerDigestMode: 'hora' | 'fechamento'
   /** Telefone (WhatsApp) que RECEBE o resumo. Vazio = não envia. */
   ownerDigestPhone: string
   /** Canal WhatsApp de origem do envio. null = 1º canal WhatsApp conectado. */
@@ -259,6 +272,8 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   alertOnBooking: false,
   alertOnOrder: false,
   alertOnDemo: false,
+  alertOnHandoffStalled: false,
+  handoffStalledMinutes: 15,
   alertWonTemplate: '',
   alertHandoffTemplate: '',
   alertBookingTemplate: '',
@@ -266,6 +281,7 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   alertDemoTemplate: '',
   ownerDigestEnabled: false,
   ownerDigestHour: 8,
+  ownerDigestMode: 'hora',
   ownerDigestPhone: '',
   ownerDigestChannelId: null,
   ownerDigestLastSent: null,

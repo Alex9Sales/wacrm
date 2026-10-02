@@ -2,8 +2,11 @@
 // Owner-digest worker — tick de 15 min que roda o sweep do "Sócio IA":
 // para cada conta com o resumo LIGADO, envia o briefing diário no WhatsApp do
 // dono quando bate a hora configurada (no fuso da conta) e ainda não enviou
-// hoje. A lógica (com todas as travas) vive em lib/reports/owner-digest.ts, que
-// NÃO importa 'server-only' (senão derruba o worker). Espelha o sla-worker.
+// hoje. Desde 02/10/2026 também no modo "fim do expediente": o primeiro tick
+// depois do fechamento comercial de cada dia aberto (por isso o tick de 15 min
+// basta — o resumo chega até 15 min depois de fechar). A lógica (com todas as
+// travas) vive em lib/reports/owner-digest.ts, que NÃO importa 'server-only'
+// (senão derruba o worker). Espelha o sla-worker.
 // ============================================================
 
 import { Queue, Worker, type Job } from 'bullmq';
