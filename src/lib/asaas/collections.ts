@@ -331,9 +331,9 @@ function addressFields(a: AsaasCustomerAddress | null | undefined): Record<strin
  * quebrado): campo em branco no Asaas é melhor que telefone errado, que
  * ninguém procura porque parece preenchido.
  *
- * O "+" é respeitado como em `asaasPhoneForContact` (match.ts): "+1 415
- * 955-1212" tem os mesmos 11 dígitos de um celular de DDD 14 sem o sinal, e o
- * sinal é a única pista de que o número já veio internacional.
+ * O "+" é respeitado como em `asaasPhoneForContact` (match.ts): "+34 912 345
+ * 678" (Espanha) sem o sinal tem a cara de um celular de DDD 34, e o sinal é a
+ * única pista de que o número já veio internacional.
  *
  * Só mexe no que SAI para o Asaas — o telefone gravado no CRM e o casamento
  * cliente↔contato (match.ts/sync.ts) continuam em E.164.
@@ -449,10 +449,13 @@ export async function findOrCreateCustomer(
 
   // Telefone nacional, sem o 55 (02/10/2026 — ver phoneForAsaasCustomer). Sem
   // número brasileiro possível, o campo nem vai: em branco, não errado.
-  const mobilePhone = phoneForAsaasCustomer(input.mobilePhone)
+  // Fixo (10 dígitos) vai no `phone`; celular (11) no `mobilePhone` — o Asaas
+  // valida o campo de celular, e um fixo ali pode recusar o cadastro inteiro.
+  const telefone = phoneForAsaasCustomer(input.mobilePhone)
+  const campoDoTelefone = telefone ? (telefone.length === 10 ? { phone: telefone } : { mobilePhone: telefone }) : {}
   return asaasPost<AsaasCustomer>(cred, '/customers', {
     name: input.name,
-    ...(mobilePhone ? { mobilePhone } : {}),
+    ...campoDoTelefone,
     ...(doc ? { cpfCnpj: doc } : {}),
     ...(email ? { email } : {}),
     ...endereco,

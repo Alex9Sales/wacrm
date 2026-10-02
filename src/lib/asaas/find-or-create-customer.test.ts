@@ -239,7 +239,7 @@ describe('telefone do cliente no Asaas — nacional, sem o 55', () => {
   })
 
   it.each([
-    ['estrangeiro com + (mesmos 11 dígitos de um DDD 14)', '+1 415 955 1212'],
+    ['estrangeiro com + (Espanha: sem o sinal parece celular de DDD 34)', '+34 912 345 678'],
     ['estrangeiro sem + (Reino Unido)', '447700900123'],
     ['55 + DDD + só 7 dígitos (GoLink 19/09)', '55129888381'],
     ['+55 que não fecha um número brasileiro', '+55985856375'],
@@ -263,13 +263,23 @@ describe('telefone do cliente no Asaas — nacional, sem o 55', () => {
     expect(writes()[0].body).toMatchObject({ mobilePhone: '55999990000' })
   })
 
+  it('fixo (10 dígitos) vai no campo phone, não no mobilePhone', async () => {
+    await findOrCreateCustomer(PROD, input({ cpfCnpj: CNPJ, mobilePhone: '556733334444' }), { existing: null })
+    const body = writes()[0].body
+    expect(body).toMatchObject({ phone: '6733334444' })
+    expect(body).not.toHaveProperty('mobilePhone')
+  })
+
   it('estrangeiro ou sem telefone → o campo nem vai no POST (em branco, não errado)', async () => {
-    await findOrCreateCustomer(PROD, input({ cpfCnpj: CNPJ, mobilePhone: '+1 415 955 1212' }), { existing: null })
+    await findOrCreateCustomer(PROD, input({ cpfCnpj: CNPJ, mobilePhone: '+34 912 345 678' }), { existing: null })
     await findOrCreateCustomer(PROD, input({ cpfCnpj: CNPJ, mobilePhone: null }), { existing: null })
     await findOrCreateCustomer(PROD, input({ cpfCnpj: CNPJ, mobilePhone: '' }), { existing: null })
     const w = writes()
     expect(w).toHaveLength(3)
-    for (const post of w) expect(post.body).not.toHaveProperty('mobilePhone')
+    for (const post of w) {
+      expect(post.body).not.toHaveProperty('mobilePhone')
+      expect(post.body).not.toHaveProperty('phone')
+    }
   })
 
   it('complemento de cadastro existente (PUT) não mexe no telefone', async () => {
