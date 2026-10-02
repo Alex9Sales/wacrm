@@ -30,6 +30,7 @@ import { generateReply } from './generate'
 import { buildConversationContext } from './context'
 import type { ChatMessage } from './types'
 import { getAccountSettings } from '@/lib/settings/account-settings'
+import { aiCurrencyToStored } from '@/lib/custom-fields/currency'
 
 // ---- Campos do NEGÓCIO que a IA pode sugerir, com validação do valor. ----
 export const DEAL_FIELD_TARGETS: {
@@ -79,6 +80,21 @@ export function customOptions(cf: CustomField): string[] {
   return cf.field_type === 'select'
     ? ((cf.field_options?.options as string[] | undefined) ?? [])
     : []
+}
+
+/**
+ * Dica ao modelo do formato de um campo personalizado.
+ *
+ * Moeda (02/10/2026): antes caía em "texto curto" e a IA escrevia "3 mil",
+ * "entre 3 e 5 mil", "R$ 5k" — o campo de moeda só aceita número, então
+ * aceitar a sugestão falhava. Agora pede o número, igual ao "Valor" do negócio
+ * (e o parseSuggestions descarta o que ainda vier por extenso).
+ */
+export function customFieldHint(cf: CustomField): string {
+  const opts = customOptions(cf)
+  if (opts.length) return `um de: ${opts.join(' | ')}`
+  if (cf.field_type === 'currency') return 'número em R$ (ex.: 1500)'
+  return 'texto curto'
 }
 
 /** Offset (ms) do fuso `tz` em `date`: (relógio-de-parede lido como UTC) − UTC. */
@@ -148,12 +164,7 @@ function buildSuggestionsPrompt(
     (t) => `- "${t.target}" (${t.label}) → ${t.hint}`,
   ).join('\n')
   const customTargets = fields
-    .map((cf) => {
-      const opts = customOptions(cf)
-      return `- "custom:${cf.id}" (${cf.field_name}) → ${
-        opts.length ? `um de: ${opts.join(' | ')}` : 'texto curto'
-      }`
-    })
+    .map((cf) => `- "custom:${cf.id}" (${cf.field_name}) → ${customFieldHint(cf)}`)
     .join('\n')
   // Contexto atual do negócio: ancora o próximo passo e evita re-sugerir um
   // campo que já tem o mesmo valor (a nota "de novo", por ex.).
@@ -319,11 +330,26 @@ export function parseSuggestions(
       if (!cf) continue
       const opts = customOptions(cf)
       if (opts.length && !opts.includes(rawValue)) continue // select fora das opções
+      let value = rawValue.trim()
+      if (cf.field_type === 'currency') {
+        // Moeda (02/10/2026): o campo só grava número ("1028.67"). Valor por
+        // extenso ("3 mil", "entre 3 e 5 mil", "R$ 5k") viraria uma sugestão
+        // que falha ao aceitar — descarta aqui, com log, em vez de mostrar
+        // um botão que não funciona. O que é número sai no formato gravado.
+        const stored = aiCurrencyToStored(value)
+        if (stored === null) {
+          console.warn(
+            `[deal-suggest] sugestão descartada: campo de moeda "${cf.field_name}" recebeu "${value.slice(0, 80)}", que não é um valor em reais`,
+          )
+          continue
+        }
+        value = stored
+      }
       out.push({
         kind: 'field',
         target,
         label: cf.field_name,
-        value: rawValue.trim(),
+        value,
         evidence,
         dueAt: null,
       })

@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  aiCurrencyToStored,
   checkCurrencyValues,
   currencyInputToStored,
   currencyStoredToInput,
   currencyToStored,
+  invalidAiCurrencyMessage,
   invalidCurrencyMessage,
 } from './currency'
 
@@ -123,6 +125,29 @@ describe('checkCurrencyValues — conferência no salvar', () => {
   it('mensagem de erro aponta o campo e dá o exemplo', () => {
     expect(invalidCurrencyMessage('Orçamento')).toBe(
       'Não entendi o valor de "Orçamento". Use, por exemplo, 1.028,67.',
+    )
+  })
+})
+
+// Sugestão da IA (02/10/2026): a IA escreve dinheiro por extenso — o que não
+// for valor em reais vira null (quem gera descarta, quem aceita avisa).
+describe('aiCurrencyToStored — valor sugerido pela IA', () => {
+  it.each([
+    ['1500', '1500'],
+    ['R$ 1.500,00', '1500'],
+    ['1.028,67', '1028.67'],
+    ['0', '0'],
+  ])('"%s" → "%s"', (entrada, gravado) => {
+    expect(aiCurrencyToStored(entrada)).toBe(gravado)
+  })
+
+  it.each(['3 mil', 'entre 3 e 5 mil', 'R$ 5k', '', '-', '-500', null])('"%s" → null', (entrada) => {
+    expect(aiCurrencyToStored(entrada)).toBeNull()
+  })
+
+  it('mensagem diz o valor, o campo e o que fazer', () => {
+    expect(invalidAiCurrencyMessage('3 mil', 'Orçamento')).toBe(
+      'A IA sugeriu "3 mil" para "Orçamento", que não é um valor em reais. Preencha o campo à mão ou dispense a sugestão.',
     )
   })
 })

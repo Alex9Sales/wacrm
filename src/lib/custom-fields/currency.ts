@@ -86,3 +86,28 @@ export function checkCurrencyValues(
 export function invalidCurrencyMessage(fieldName: string): string {
   return `Não entendi o valor de "${fieldName}". Use, por exemplo, 1.028,67.`
 }
+
+/**
+ * Valor que a IA SUGERIU para um campo de moeda → formato gravado ("1500",
+ * "1028.67"), ou null quando não é um valor em reais.
+ *
+ * Por quê (02/10/2026): a IA escreve dinheiro por extenso ("3 mil", "entre 3
+ * e 5 mil", "R$ 5k") e, desde que o campo de moeda passou a recusar texto que
+ * não é número (checkCurrencyValues), aceitar essa sugestão no card falhava
+ * com um aviso genérico. Quem gera a sugestão (lib/ai/deal-suggest) descarta
+ * o que vier assim; quem aceita (acceptDealSuggestion) confere de novo —
+ * sugestão antiga, gravada antes desta regra, ainda pode estar pendente.
+ *
+ * Vazio e negativo também viram null: a IA lê um valor da conversa, e
+ * dinheiro negativo ali não existe (o "Valor" do negócio já recusa ≤ 0).
+ */
+export function aiCurrencyToStored(raw: string | null | undefined): string | null {
+  const { value, invalid } = parseBrlField(raw)
+  if (invalid || value === null || value < 0) return null
+  return currencyToStored(value)
+}
+
+/** Erro ao aceitar sugestão da IA cujo valor não é dinheiro (campo de moeda). */
+export function invalidAiCurrencyMessage(value: string, fieldName: string): string {
+  return `A IA sugeriu "${value}" para "${fieldName}", que não é um valor em reais. Preencha o campo à mão ou dispense a sugestão.`
+}

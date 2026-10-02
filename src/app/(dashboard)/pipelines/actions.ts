@@ -42,7 +42,12 @@ import {
   updateAccountSettings,
 } from '@/lib/settings/account-settings'
 import { canonReason, sortReasons } from '@/lib/deals/lost-reasons'
-import { checkCurrencyValues, invalidCurrencyMessage } from '@/lib/custom-fields/currency'
+import {
+  aiCurrencyToStored,
+  checkCurrencyValues,
+  invalidAiCurrencyMessage,
+  invalidCurrencyMessage,
+} from '@/lib/custom-fields/currency'
 import { enrollContactInCadence } from '@/lib/cadences/cadence'
 import { runDealSuggestions } from '@/lib/ai/deal-suggest'
 import { planStageFollowUp } from '@/lib/ai/followup'
@@ -3640,6 +3645,26 @@ export async function acceptDealSuggestion(
       await updateDeal(sug.dealId, { notes: sug.value })
     } else if (sug.target.startsWith('custom:')) {
       const fieldId = sug.target.slice('custom:'.length)
+      // Moeda (02/10/2026): o campo só grava número e o save recusava com um
+      // aviso genérico ("Não entendi o valor…") quando a IA tinha escrito
+      // "3 mil" / "R$ 5k". A geração já descarta isso, mas sugestão antiga
+      // (de antes da regra) pode estar pendente — confere ANTES de salvar e
+      // diz o que fazer. Número entendido vai no formato gravado ("1500").
+      const field = firstOrNull(
+        await db
+          .select({ name: customFields.fieldName, type: customFields.fieldType })
+          .from(customFields)
+          .where(and(eq(customFields.id, fieldId), eq(customFields.accountId, ctx.accountId)))
+          .limit(1),
+      )
+      let value = sug.value
+      if (field?.type === 'currency') {
+        const stored = aiCurrencyToStored(sug.value)
+        if (stored === null) {
+          return { error: invalidAiCurrencyMessage(sug.value, field.name || sug.label) }
+        }
+        value = stored
+      }
       const deal = await getDeal(sug.dealId)
       if (!deal?.contact_id) return { error: 'Negócio sem contato para preencher.' }
       // Mescla com os valores atuais (saveContactCustomValues substitui TUDO).
@@ -3648,7 +3673,7 @@ export async function acceptDealSuggestion(
       )
       const map: Record<string, string> = {}
       for (const row of existing) map[row.custom_field_id] = row.value ?? ''
-      map[fieldId] = sug.value
+      map[fieldId] = value
       const { error } = await saveContactCustomValues(deal.contact_id, map)
       if (error) return { error }
     } else {
