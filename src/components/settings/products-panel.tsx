@@ -13,6 +13,8 @@ import {
 } from '@/app/(dashboard)/settings/products-actions'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { MoneyInput } from '@/components/ui/money-input'
+import { formatBrlInput, parseBrlField } from '@/lib/format/parse-brl'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -165,7 +167,7 @@ export function ProductsPanel() {
       name: p.name,
       description: p.description ?? '',
       kind: p.kind,
-      unitPrice: p.unit_price ? String(p.unit_price) : '',
+      unitPrice: p.unit_price ? formatBrlInput(p.unit_price) : '',
       linkUrl: p.link_url ?? '',
       imageUrl: p.image_url ?? '',
       active: p.active,
@@ -178,8 +180,15 @@ export function ProductsPanel() {
       toast.error('O nome é obrigatório.')
       return
     }
+    // Preço no formato BR (02/10/2026): o replace(',', '.') transformava
+    // "1.028,67" em "1.028.67" → NaN → o item ia pro catálogo a R$ 0 calado.
+    const price = parseBrlField(draft.unitPrice)
+    if (price.invalid) {
+      toast.error(`Não entendi o preço "${draft.unitPrice.trim()}". Use, por exemplo, 1.028,67.`)
+      return
+    }
     setSaving(true)
-    const priceNum = Number(draft.unitPrice.replace(',', '.')) || 0
+    const priceNum = price.value ?? 0
     const payload = {
       name: draft.name.trim(),
       description: draft.description.trim() || null,
@@ -500,12 +509,13 @@ export function ProductsPanel() {
               </div>
               <div>
                 <Label htmlFor="prod-price">Preço (R$)</Label>
-                <Input
+                {/* Formata ao sair ("1028.67" → "1.028,67") e marca o que
+                    não é número (02/10/2026). */}
+                <MoneyInput
                   id="prod-price"
-                  inputMode="decimal"
                   value={draft.unitPrice}
-                  onChange={(e) =>
-                    setDraft({ ...draft, unitPrice: e.target.value })
+                  onValueChange={(t) =>
+                    setDraft((d) => ({ ...d, unitPrice: t }))
                   }
                   placeholder="0,00"
                 />

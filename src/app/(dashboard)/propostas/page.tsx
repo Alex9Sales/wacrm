@@ -41,8 +41,16 @@ import {
   type ProposalItemInput,
 } from "./actions";
 import type { DiscountType } from "@/lib/proposals/shared";
+import { MoneyInput } from "@/components/ui/money-input";
+import { parseBrl, parseBrlField } from "@/lib/format/parse-brl";
 
 type Pipeline = { id: string; name: string; stages: { id: string; name: string }[] };
+
+/** Item em edição: o preço fica como TEXTO digitado ("1.028,67") e só vira
+ *  número (parseBrl) no total e ao salvar — o type="number" recusava a
+ *  vírgula (02/10/2026). */
+type ItemDraft = Omit<ProposalItemInput, "unitPrice"> & { priceText: string };
+const EMPTY_ITEM: ItemDraft = { name: "", quantity: 1, priceText: "" };
 
 /** Link wa.me pra enviar a proposta no WhatsApp (abre a conversa com o link). */
 function whatsappShareHref(phone: string, url: string): string {
@@ -261,9 +269,7 @@ function ProposalCreator({
   const [pickedLead, setPickedLead] = useState<{ id: string; label: string } | null>(null);
   // proposta
   const [title, setTitle] = useState("");
-  const [items, setItems] = useState<ProposalItemInput[]>([
-    { name: "", quantity: 1, unitPrice: 0 },
-  ]);
+  const [items, setItems] = useState<ItemDraft[]>([EMPTY_ITEM]);
   const [discount, setDiscount] = useState("");
   const [discountType, setDiscountType] = useState<DiscountType>("value");
   const [validUntil, setValidUntil] = useState("");
@@ -283,20 +289,21 @@ function ProposalCreator({
   const stages = pipelines.find((p) => p.id === pipelineId)?.stages ?? [];
 
   const subtotal = items.reduce(
-    (s, it) => s + (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0),
+    (s, it) => s + (Number(it.quantity) || 0) * (parseBrl(it.priceText) ?? 0),
     0,
   );
+  // Desconto no formato BR ("150,00" / "12,5") — parseFloat lia "1.028,67"
+  // como 1.028 (02/10/2026).
+  const discountNum = parseBrl(discount) ?? 0;
   const disc =
-    discountType === "percent"
-      ? (subtotal * (parseFloat(discount) || 0)) / 100
-      : parseFloat(discount) || 0;
+    discountType === "percent" ? (subtotal * discountNum) / 100 : discountNum;
   const total = Math.max(0, subtotal - Math.max(0, Math.min(disc, subtotal)));
 
-  function setItem(i: number, patch: Partial<ProposalItemInput>) {
+  function setItem(i: number, patch: Partial<ItemDraft>) {
     setItems((prev) => prev.map((it, idx) => (idx === i ? { ...it, ...patch } : it)));
   }
   function addItem() {
-    setItems((prev) => [...prev, { name: "", quantity: 1, unitPrice: 0 }]);
+    setItems((prev) => [...prev, EMPTY_ITEM]);
   }
   function removeItem(i: number) {
     setItems((prev) => (prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev));
@@ -357,6 +364,21 @@ function ProposalCreator({
       toast.error("Adicione ao menos um item.");
       return;
     }
+    // Preço/desconto que não é número trava com aviso — antes virava R$ 0
+    // calado e a proposta ia pro cliente com o valor errado.
+    const badItem = items.find(
+      (it) => it.name.trim() && parseBrlField(it.priceText).invalid,
+    );
+    if (badItem) {
+      toast.error(
+        `Não entendi o preço de "${badItem.name.trim()}" ("${badItem.priceText.trim()}"). Use, por exemplo, 1.028,67.`,
+      );
+      return;
+    }
+    if (parseBrlField(discount).invalid) {
+      toast.error(`Não entendi o desconto "${discount.trim()}". Use, por exemplo, 150,00 ou 12,5.`);
+      return;
+    }
     setSaving(true);
     const res = await saveProposalDraft({
       mode,
@@ -370,8 +392,13 @@ function ProposalCreator({
       pipelineId: pipelineId || null,
       stageId: stageId || null,
       title,
-      items,
-      discount: parseFloat(discount) || 0,
+      items: items.map(
+        ({ priceText, ...it }): ProposalItemInput => ({
+          ...it,
+          unitPrice: parseBrl(priceText) ?? 0,
+        }),
+      ),
+      discount: discountNum,
       discountType,
       validUntil: validUntil || null,
       terms: terms || null,
@@ -663,12 +690,10 @@ function ProposalCreator({
             </div>
             <div className="grid w-28 gap-1">
               <label className="text-[11px] text-muted-foreground">Preço un.</label>
-              <Input
-                type="number"
-                min={0}
-                step="0.01"
-                value={it.unitPrice}
-                onChange={(e) => setItem(i, { unitPrice: Number(e.target.value) || 0 })}
+              <MoneyInput
+                placeholder="0,00"
+                value={it.priceText}
+                onValueChange={(t) => setItem(i, { priceText: t })}
               />
             </div>
             <button
@@ -687,11 +712,11 @@ function ProposalCreator({
         <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border pt-3">
           <div className="flex items-center gap-1">
             <span className="text-xs text-muted-foreground">Desconto</span>
-            <Input
-              type="number"
-              min={0}
+            <MoneyInput
+              placeholder="0"
               value={discount}
-              onChange={(e) => setDiscount(e.target.value)}
+              minFractionDigits={discountType === "percent" ? 0 : 2}
+              onValueChange={setDiscount}
               className="h-8 w-24"
             />
             <div className="flex overflow-hidden rounded-lg border border-border">
