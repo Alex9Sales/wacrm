@@ -4,7 +4,7 @@
 // (CRM → Google) entra na etapa seguinte.
 // ============================================================
 
-import { and, eq, isNull, sql } from 'drizzle-orm'
+import { and, eq, gte, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm'
 import { db, calendarConnections, calendars, calendarEvents, contacts } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { phoneFromDescription, phoneKey } from './event-contact'
@@ -16,6 +16,7 @@ import { recomecoDoLembrete } from '@/lib/ai/meeting-reminder-block'
 import {
   refreshAccessToken,
   listGoogleEvents,
+  getGoogleEvent,
   listCalendarList,
   insertGoogleEvent,
   patchGoogleEvent,
@@ -180,6 +181,316 @@ export async function descobrirAgendas(
   }
 }
 
+// ============================================================
+// 👻 Fantasma do evento MOVIDO de agenda no Google (02/10/2026).
+//
+// Verificado em produção em 01/10, numa clínica com uma agenda do Google por
+// profissional: a recepção cria o compromisso no CRM na agenda da dona (o
+// modal abria com ela) e depois, no próprio Google Agenda, MOVE o evento para
+// a agenda do profissional certo. O Google mantém o MESMO id. No CRM, o import
+// da agenda nova cria a linha dela — e a linha da agenda antiga ficava
+// 'confirmed' para sempre:
+//  - ocupava um horário falso da dona (a IA via ocupado);
+//  - travava a confirmação ao agendar ("paciente já tem outro compromisso
+//    neste horário");
+//  - se depois o evento era apagado na agenda nova, a cópia antiga mandava o
+//    LEMBRETE de uma consulta que não existe.
+//
+// Por que o import não pegava: na agenda antiga, o evento movido vira uma
+// lápide — GET dá 200 com status 'cancelled' e início em 31/12/1999 (data
+// fictícia). A listagem é por janela (-7d…+60d) com showDeleted, e a lápide de
+// 1999 nunca cai nela. E o import só mexe no que vem na listagem.
+//
+// A varredura, por agenda, DEPOIS da listagem: linha confirmada desta agenda,
+// com id do Google, início dentro da janela, que NÃO veio na listagem (nem
+// como cancelada) e que ninguém criou nem mexeu nos últimos 10 min. Para cada
+// uma, pergunta ao Google pelo id NAQUELA agenda; só cancela se ele responder
+// que não existe (404/410) ou que está cancelado. "Não consegui perguntar"
+// pula a linha.
+//
+// Por que isto não cancela compromisso de verdade:
+//  - evento que existe nesta agenda com início na janela VEM na listagem
+//    completa, então nem vira candidato; listagem cortada no teto de páginas
+//    desliga a varredura daquela agenda;
+//  - o evento que mudou de data para FORA da janela responde 200 confirmado
+//    e a linha fica como está;
+//  - a linha recém-criada pelo push (o Google pode ainda não listar) ou
+//    recém-editada pela recepção tem menos de 10 min e fica de fora — e o
+//    UPDATE confere de novo, no relógio do banco;
+//  - se mesmo assim o Google errar, a linha só muda de status, nada é
+//    apagado: na primeira listagem que trouxer o evento, o import a devolve
+//    para 'confirmed' (ele grava `status: 'confirmed'` em todo evento listado).
+//
+// ⚠️ Limite conhecido: evento movido para uma agenda que o CRM NÃO vê (o
+// Google só nos lista as agendas em que a conta pode alterar eventos). Não há
+// gêmeo, então o compromisso some do CRM e o paciente deixa de receber o
+// lembrete que a fantasma mandava "por acaso". É coerente com o resto — nada
+// do que está nessa agenda é lembrado —, e o log avisa para onde ele foi.
+// ============================================================
+
+/**
+ * Linha criada (ou mexida) há menos que isto não é suspeita: o evento que o
+ * push acabou de criar pode ainda não aparecer na listagem do Google.
+ */
+const SUMIDO_IDADE_MIN_MS = 10 * 60_000
+/** Teto de perguntas ao Google por agenda por rodada. O resto fica para a próxima (5 min). */
+export const SUMIDOS_POR_AGENDA = 50
+
+export type LinhaSuspeita = {
+  id: string
+  googleEventId: string
+  startsAt: string
+  createdAt: string
+  updatedAt: string
+  contactId: string | null
+  dealId: string | null
+  remindersSent: number
+}
+
+/**
+ * Quais linhas confirmadas desta agenda (já filtradas pela janela no banco)
+ * merecem a pergunta ao Google. Puro, para dar para testar.
+ *
+ * Fora: o id que veio na listagem (inclusive cancelado — esse o import já
+ * tratou) e a linha criada OU alterada há menos de 10 min. Data que não dá
+ * para ler conta como recente: na dúvida, não mexe.
+ *
+ * Ordem: o que ainda vai acontecer primeiro (do mais próximo ao mais longe),
+ * depois o que já passou. É no futuro que o fantasma faz estrago — lembrete e
+ * horário que a IA deixa de oferecer. Acima de `limite`, o resto espera a
+ * próxima rodada (`sobraram` vai para o log).
+ */
+export function quaisCandidatas(
+  linhas: LinhaSuspeita[],
+  idsNaListagem: ReadonlySet<string>,
+  agoraMs: number,
+  limite: number = SUMIDOS_POR_AGENDA,
+): { candidatas: LinhaSuspeita[]; sobraram: number } {
+  const velha = (quando: string) => {
+    const t = Date.parse(quando)
+    return Number.isFinite(t) && agoraMs - t >= SUMIDO_IDADE_MIN_MS
+  }
+  const todas = linhas.filter(
+    (l) =>
+      Boolean(l.googleEventId) &&
+      !idsNaListagem.has(l.googleEventId) &&
+      velha(l.createdAt) &&
+      velha(l.updatedAt),
+  )
+  const inicio = (l: LinhaSuspeita) => {
+    const t = Date.parse(l.startsAt)
+    return Number.isFinite(t) ? t : Number.MAX_SAFE_INTEGER
+  }
+  todas.sort((a, b) => {
+    const ta = inicio(a)
+    const tb = inicio(b)
+    const futuraA = ta >= agoraMs
+    const futuraB = tb >= agoraMs
+    if (futuraA !== futuraB) return futuraA ? -1 : 1
+    return ta - tb
+  })
+  return { candidatas: todas.slice(0, limite), sobraram: Math.max(0, todas.length - limite) }
+}
+
+/**
+ * O que o Google respondeu sobre o evento NESTA agenda → cancela ou mantém.
+ * Só 'gone' (404/410) e 'cancelled' (a lápide do evento movido) cancelam.
+ * 200 confirmado ou tentativo mantém: é o evento que mudou de data para fora
+ * da janela, não fantasma.
+ */
+export function decidirFantasma(noGoogle: { status?: string }): 'cancelar' | 'manter' {
+  return noGoogle.status === 'gone' || noGoogle.status === 'cancelled' ? 'cancelar' : 'manter'
+}
+
+/**
+ * Cancela a linha fantasma e passa aos "gêmeos" o que não pode se perder.
+ *
+ * Gêmeo = linha 'confirmed' da MESMA conta, em OUTRA agenda, com o MESMO id do
+ * Google: para onde o evento foi movido (o import da agenda nova a criou), ou
+ * a cópia de uma agenda convidada. Id igual no Google é o mesmo evento, então
+ * o que a fantasma sabia vale para ele:
+ *  - lembrete: no gêmeo do MESMO instante, reminders_sent vira o maior dos
+ *    dois — o lembrete que a fantasma já mandou não sai de novo pelo gêmeo.
+ *    Só no gêmeo sem paciente ou com o MESMO paciente: o degrau gasto foi
+ *    desse paciente, não de outro;
+ *  - paciente e negócio: o gêmeo nasce do import, muitas vezes sem paciente
+ *    (sem telefone na descrição), enquanto a fantasma foi ligada à mão ou pela
+ *    IA. Só preenche o que está VAZIO no gêmeo.
+ * Nessa ordem: o degrau é carimbado ANTES de o paciente chegar, senão o
+ * lembrete poderia ver o gêmeo com paciente e contador zerado.
+ *
+ * Tudo numa transação: se a passagem falhar, a fantasma continua 'confirmed' e
+ * a próxima rodada tenta de novo — em vez de cancelar e perder o paciente.
+ *
+ * O UPDATE repete as condições de candidata no relógio do banco (agenda, id
+ * do Google, confirmado, intocado há 10 min): se a recepção acabou de editar
+ * esse compromisso, ou outra sincronização já o cancelou, não faz nada.
+ * `null` = não cancelou; senão, quantos gêmeos havia (0 = o evento foi para
+ * uma agenda que o CRM não vê, ou foi apagado de vez).
+ */
+async function cancelarFantasma(
+  accountId: string,
+  calendarId: string,
+  linha: LinhaSuspeita,
+): Promise<{ gemeos: number } | null> {
+  const idadeMin = sql.raw(`interval '${Math.round(SUMIDO_IDADE_MIN_MS / 1000)} seconds'`)
+  return db.transaction(async (tx) => {
+    const res = await tx
+      .update(calendarEvents)
+      .set({ status: 'cancelled', updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(calendarEvents.id, linha.id),
+          eq(calendarEvents.accountId, accountId),
+          eq(calendarEvents.calendarId, calendarId),
+          eq(calendarEvents.googleEventId, linha.googleEventId),
+          eq(calendarEvents.status, 'confirmed'),
+          sql`${calendarEvents.createdAt} < now() - ${idadeMin}`,
+          sql`${calendarEvents.updatedAt} < now() - ${idadeMin}`,
+        ),
+      )
+      .returning({ id: calendarEvents.id })
+    if (!res.length) return null
+
+    const gemeos = and(
+      eq(calendarEvents.accountId, accountId),
+      eq(calendarEvents.googleEventId, linha.googleEventId),
+      ne(calendarEvents.calendarId, calendarId),
+      eq(calendarEvents.status, 'confirmed'),
+    )
+    const achados = await tx.select({ id: calendarEvents.id }).from(calendarEvents).where(gemeos)
+    if (!achados.length) return { gemeos: 0 }
+
+    if (linha.contactId && linha.remindersSent > 0) {
+      await tx
+        .update(calendarEvents)
+        .set({ remindersSent: sql`GREATEST(${calendarEvents.remindersSent}, ${linha.remindersSent})` })
+        .where(
+          and(
+            gemeos,
+            eq(calendarEvents.startsAt, linha.startsAt),
+            lt(calendarEvents.remindersSent, linha.remindersSent),
+            or(isNull(calendarEvents.contactId), eq(calendarEvents.contactId, linha.contactId)),
+          ),
+        )
+    }
+    if (linha.contactId) {
+      await tx
+        .update(calendarEvents)
+        .set({ contactId: linha.contactId })
+        .where(and(gemeos, isNull(calendarEvents.contactId)))
+    }
+    if (linha.dealId) {
+      await tx
+        .update(calendarEvents)
+        .set({ dealId: linha.dealId })
+        .where(and(gemeos, isNull(calendarEvents.dealId)))
+    }
+    return { gemeos: achados.length }
+  })
+}
+
+/**
+ * A varredura de UMA agenda, depois da listagem completa dela. Devolve quantas
+ * linhas cancelou. Nunca lança: é faxina — falhar aqui não pode gravar
+ * last_sync_error ("reconecte o Google") nem parar a importação das outras
+ * agendas.
+ */
+async function liberarSumidos(p: {
+  accountId: string
+  calendarId: string
+  calGoogleId: string
+  accessToken: string
+  idsNaListagem: ReadonlySet<string>
+  timeMin: string
+  timeMax: string
+}): Promise<number> {
+  let linhas: LinhaSuspeita[]
+  try {
+    const brutas = await db
+      .select({
+        id: calendarEvents.id,
+        googleEventId: calendarEvents.googleEventId,
+        startsAt: calendarEvents.startsAt,
+        createdAt: calendarEvents.createdAt,
+        updatedAt: calendarEvents.updatedAt,
+        contactId: calendarEvents.contactId,
+        dealId: calendarEvents.dealId,
+        remindersSent: calendarEvents.remindersSent,
+      })
+      .from(calendarEvents)
+      .where(
+        and(
+          eq(calendarEvents.accountId, p.accountId),
+          eq(calendarEvents.calendarId, p.calendarId),
+          eq(calendarEvents.status, 'confirmed'),
+          isNotNull(calendarEvents.googleEventId),
+          // A MESMA janela da listagem. O Google devolve o evento que termina
+          // depois de timeMin e começa antes de timeMax: quem COMEÇA aqui
+          // dentro e existe nesta agenda teria vindo.
+          gte(calendarEvents.startsAt, p.timeMin),
+          lt(calendarEvents.startsAt, p.timeMax),
+        ),
+      )
+    linhas = brutas.flatMap((l) => (l.googleEventId ? [{ ...l, googleEventId: l.googleEventId }] : []))
+  } catch (err) {
+    console.error(
+      `[google sync] ${p.calGoogleId}: varredura de sumidos não leu o banco:`,
+      err instanceof Error ? err.message : err,
+    )
+    return 0
+  }
+
+  const { candidatas, sobraram } = quaisCandidatas(linhas, p.idsNaListagem, Date.now())
+  if (sobraram) {
+    console.warn(`[google sync] ${p.calGoogleId}: ${sobraram} suspeita(s) de evento sumido ficam para a próxima rodada`)
+  }
+
+  let liberados = 0
+  for (const linha of candidatas) {
+    let noGoogle: { status?: string; organizer?: { email?: string } }
+    try {
+      noGoogle = await getGoogleEvent(p.accessToken, p.calGoogleId, linha.googleEventId)
+    } catch (err) {
+      // Não deu para perguntar ≠ não existe. Fica como está; próxima rodada.
+      console.error(
+        `[google sync] ${p.calGoogleId}: não consegui conferir o evento ${linha.googleEventId} (fica como está):`,
+        err instanceof Error ? err.message : err,
+      )
+      continue
+    }
+    if (decidirFantasma(noGoogle) !== 'cancelar') continue
+    try {
+      const feito = await cancelarFantasma(p.accountId, p.calendarId, linha)
+      if (!feito) continue
+      liberados += 1
+      // Na lápide do evento movido, o organizador é a agenda para onde ele foi.
+      const destino = noGoogle.organizer?.email
+      const movido = destino && destino !== p.calGoogleId ? `, movido para ${destino}` : ''
+      console.log(
+        `[google sync] ${p.calGoogleId}: compromisso ${linha.id} liberado — o evento ${linha.googleEventId} não está mais nesta agenda (${noGoogle.status}${movido}); ${feito.gemeos} gêmeo(s) em outra agenda`,
+      )
+      if (!feito.gemeos && movido) {
+        // Movido, mas sem cópia em nenhuma outra agenda do CRM. Quase sempre é
+        // agenda que o CRM não enxerga (o Google só nos mostra as agendas em
+        // que a conta conectada pode ALTERAR eventos): o compromisso some
+        // daqui e, com ele, o lembrete do paciente. Quem resolve é a clínica,
+        // compartilhando essa agenda com permissão de alterar eventos. (Também
+        // acontece se a data nova caiu fora da janela de -7d…+60d.)
+        console.warn(
+          `[google sync] ${p.calGoogleId}: o evento ${linha.googleEventId} foi para ${destino} e não tem cópia em outra agenda do CRM — se essa agenda não aparece no CRM, compartilhe-a com permissão de alterar eventos`,
+        )
+      }
+    } catch (err) {
+      console.error(
+        `[google sync] ${p.calGoogleId}: não consegui liberar o compromisso ${linha.id}:`,
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
+  return liberados
+}
+
 /** Importa eventos (janela -7d…+60d) de todas as agendas Google desta conexão. */
 export async function importGoogleEvents(
   accountId: string,
@@ -224,13 +535,20 @@ export async function importGoogleEvents(
 
     let imported = 0
     let cancelled = 0
+    const aVarrer: { calendarId: string; calGoogleId: string; idsNaListagem: Set<string> }[] = []
     for (const cal of cals) {
       if (!cal.googleCalendarId) continue
       // showDeleted: o apagado precisa CHEGAR aqui pra liberar o horário.
+      const listagem = { truncated: false }
       const events = await listGoogleEvents(accessToken, cal.googleCalendarId, timeMin, timeMax, {
         showDeleted: true,
+        resultado: listagem,
       })
+      // Tudo o que o Google listou nesta agenda, inclusive cancelado e o que o
+      // mapTimes descarta — é o "existe aqui" da varredura de sumidos abaixo.
+      const idsNaListagem = new Set<string>()
       for (const ev of events) {
+        idsNaListagem.add(ev.id)
         // Apagado no Google. Vem antes de mapTimes de propósito: evento apagado
         // costuma voltar só com o id, sem start/end — se caísse no mapTimes,
         // seria descartado e a cópia daqui seguiria ocupando o horário.
@@ -318,6 +636,25 @@ export async function importGoogleEvents(
           imported += 1
         }
       }
+
+      // 👻 Evento movido para outra agenda (ou apagado) que a listagem não
+      // mostra — ver liberarSumidos. Só com a lista INTEIRA: com ela cortada
+      // no teto de páginas, "não veio" não quer dizer "não existe".
+      if (listagem.truncated) {
+        console.warn(`[google sync] ${cal.googleCalendarId}: listagem incompleta, sem varredura de sumidos nesta rodada`)
+      } else {
+        aVarrer.push({ calendarId: cal.id, calGoogleId: cal.googleCalendarId, idsNaListagem })
+      }
+    }
+
+    // A varredura vem DEPOIS de importar TODAS as agendas, não agenda por
+    // agenda: o evento movido da agenda A para a B nos últimos minutos ainda
+    // não tem linha na B quando a A é processada (a ordem das agendas é a do
+    // banco). Varrendo a A primeiro, a fantasma seria cancelada sem gêmeo, e o
+    // paciente ligado nela não passaria para a linha que o import da B cria
+    // logo depois.
+    for (const v of aVarrer) {
+      cancelled += await liberarSumidos({ accountId, accessToken, timeMin, timeMax, ...v })
     }
     await db
       .update(calendarConnections)
