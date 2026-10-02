@@ -154,7 +154,7 @@ describe('diretivas de AÇÃO com fechamento tolerante (02/10/2026, revisão 2)'
           for (const raw of [`Já te passo.\n${c.abre}${brancos}${fecho}`, `Já te passo.\n${comBrancoDentro}${fecho}`]) {
             const t0 = performance.now()
             pelaRede(raw)
-            expect(performance.now() - t0, JSON.stringify(fecho)).toBeLessThan(100)
+            expect(performance.now() - t0, JSON.stringify(fecho)).toBeLessThan(500)
           }
         }
       })
@@ -332,7 +332,10 @@ describe('revisão 3: marcador bem fechado com quebra de linha dentro de um camp
         for (const raw of [`Já.\n${abre}${corpo}${fecho}`, `Já.\n${abre}\n${corpo}${fecho}`]) {
           const t0 = performance.now()
           pelaRede(raw)
-          expect(performance.now() - t0, `${abre} ${JSON.stringify(fecho)}`).toBeLessThan(100)
+          // Folga de 500 ms (02/10): sem carga leva ~32 ms; com a suíte inteira e o tsc
+          // rodando juntos um caso passou de 100 ms. O que este teste pega é o
+          // backtracking catastrófico, que leva SEGUNDOS — não a máquina carregada.
+          expect(performance.now() - t0, `${abre} ${JSON.stringify(fecho)}`).toBeLessThan(500)
         }
       }
     }
