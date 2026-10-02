@@ -26,6 +26,7 @@ import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { findOrCreateContact } from '@/lib/api/v1/contacts'
 import { normalizeInboundPhoneBR } from '@/lib/whatsapp/phone-utils'
 import { recomputeMetricsForContacts } from '@/lib/cdl/metrics'
+import { parseImportMoney } from '@/lib/import/money'
 
 function clean(v: unknown): string | null {
   const t = String(v ?? '').trim()
@@ -504,15 +505,6 @@ export interface ImportTransactionsResult {
   error?: string
 }
 
-/** "R$ 1.234,56" | "1234.56" | "1.234,56" → 1234.56 */
-function parseImportAmount(v: unknown): number {
-  if (typeof v === 'number') return isFinite(v) ? v : 0
-  const s = String(v ?? '').replace(/[^\d.,-]/g, '')
-  if (!s) return 0
-  const n = parseFloat(s.replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.'))
-  return isFinite(n) ? n : 0
-}
-
 /** "dd/mm/aaaa" | "aaaa-mm-dd" | ISO → ISO string; null se não parsear.
  *  Ancora ao meio-dia UTC pra a data não "virar" o dia por fuso. */
 function parseImportDate(v: unknown): string | null {
@@ -552,6 +544,18 @@ export async function importTransactions(
         res.skipped++
         continue
       }
+      // Valor (02/10/2026): mesma leitura da prévia (lib/import/money —
+      // "R$ 1.234,56", "1234.56", "1.234,56", "1500 reais"). A tela já manda
+      // número e tira as inválidas; aqui é a rede de quem chamar direto (API
+      // do agente): valor que não é número PULA a linha — antes do contato,
+      // pra não criar cliente por causa de uma venda que não entra — em vez
+      // de virar uma venda de R$ 0. Vazio continua R$ 0, como sempre.
+      const money = parseImportMoney(row.amount)
+      if (money.invalid) {
+        res.skipped++
+        continue
+      }
+      const amount = money.value ?? 0
 
       let contactId: string
       try {
@@ -567,7 +571,6 @@ export async function importTransactions(
         continue
       }
 
-      const amount = parseImportAmount(row.amount)
       const occurredAt = parseImportDate(row.occurredAt)
       const product = clean(row.product)
       const paymentMethod = clean(row.paymentMethod)

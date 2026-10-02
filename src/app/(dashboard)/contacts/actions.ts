@@ -23,6 +23,7 @@ import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { optOutContact, resubscribeContact } from '@/lib/contacts/opt-out'
 import { normalizeBirthday } from '@/lib/contacts/birthday'
+import { checkCurrencyValues, invalidCurrencyMessage } from '@/lib/custom-fields/currency'
 import { dispatchTagAddedToFlows } from '@/lib/flows/engine'
 import {
   sanitizePhoneForMeta,
@@ -1060,11 +1061,32 @@ export async function saveContactCustomValues(
     )
     if (!owned) return { error: 'Contact not found' }
 
+    // Moeda (02/10/2026): confere os campos de moeda ANTES de apagar e
+    // regravar — valor novo que não é número volta como erro em vez de ir pro
+    // banco, valor novo entendido sai no formato de sempre ("1028.67") e o
+    // que não mudou passa intacto (regras em lib/custom-fields/currency).
+    let toSave = values
+    const currencyFields = await db
+      .select({ id: customFields.id, name: customFields.fieldName })
+      .from(customFields)
+      .where(and(eq(customFields.accountId, ctx.accountId), eq(customFields.fieldType, 'currency')))
+    if (currencyFields.length > 0) {
+      const existing: Record<string, string> = {}
+      const saved = await db
+        .select({ fid: contactCustomValues.customFieldId, value: contactCustomValues.value })
+        .from(contactCustomValues)
+        .where(eq(contactCustomValues.contactId, contactId))
+      for (const r of saved) existing[r.fid] = r.value ?? ''
+      const checked = checkCurrencyValues(currencyFields, values, existing)
+      if (checked.invalidField) return { error: invalidCurrencyMessage(checked.invalidField) }
+      toSave = checked.values
+    }
+
     await db
       .delete(contactCustomValues)
       .where(eq(contactCustomValues.contactId, contactId))
 
-    const rows = Object.entries(values)
+    const rows = Object.entries(toSave)
       .filter(([, val]) => val.trim())
       .map(([fieldId, val]) => ({
         contactId,

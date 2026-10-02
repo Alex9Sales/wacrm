@@ -42,6 +42,7 @@ import {
   updateAccountSettings,
 } from '@/lib/settings/account-settings'
 import { canonReason, sortReasons } from '@/lib/deals/lost-reasons'
+import { checkCurrencyValues, invalidCurrencyMessage } from '@/lib/custom-fields/currency'
 import { enrollContactInCadence } from '@/lib/cadences/cadence'
 import { runDealSuggestions } from '@/lib/ai/deal-suggest'
 import { planStageFollowUp } from '@/lib/ai/followup'
@@ -2933,7 +2934,27 @@ export async function saveDealCustomValues(
     if (!dealReadable(ctx.role, ctx.userId, deal.assignedTo)) {
       return { error: 'Este negócio está atribuído a outro atendente.' }
     }
-    for (const [fid, raw] of Object.entries(values)) {
+    // Moeda (02/10/2026): mesma conferência do contato — valor novo que não é
+    // número volta como erro (nada é gravado), o entendido sai no formato de
+    // sempre ("1028.67") e o que não mudou passa intacto
+    // (lib/custom-fields/currency).
+    let toSave = values
+    const currencyFields = await db
+      .select({ id: customFields.id, name: customFields.fieldName })
+      .from(customFields)
+      .where(and(eq(customFields.accountId, ctx.accountId), eq(customFields.fieldType, 'currency')))
+    if (currencyFields.length > 0) {
+      const existing: Record<string, string> = {}
+      const saved = await db
+        .select({ fid: dealCustomValues.customFieldId, value: dealCustomValues.value })
+        .from(dealCustomValues)
+        .where(and(eq(dealCustomValues.accountId, ctx.accountId), eq(dealCustomValues.dealId, dealId)))
+      for (const r of saved) existing[r.fid] = r.value ?? ''
+      const checked = checkCurrencyValues(currencyFields, values, existing)
+      if (checked.invalidField) return { error: invalidCurrencyMessage(checked.invalidField) }
+      toSave = checked.values
+    }
+    for (const [fid, raw] of Object.entries(toSave)) {
       const v = (raw ?? '').trim()
       if (!v) {
         await db
