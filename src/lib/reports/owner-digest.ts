@@ -321,7 +321,10 @@ async function paradasDaConta(
   now: Date,
 ): Promise<TransferenciaParada[]> {
   try {
-    return await listarTransferenciasParadas(accountId, cfg, { now })
+    // 7 dias, não as 48h do padrão: quem espera desde anteontem é justamente quem
+    // o dono mais precisa ver na lista (02/10: um paciente transferido em 30/09
+    // ainda sem resposta sumiria do resumo). O AVISO imediato segue em 24h.
+    return await listarTransferenciasParadas(accountId, cfg, { now, horas: 24 * 7 })
   } catch (err) {
     console.error(`[owner-digest] lista de transferências paradas falhou (conta ${accountId}):`, err)
     return []
