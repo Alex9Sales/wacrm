@@ -4,7 +4,7 @@
 // (CRM → Google) entra na etapa seguinte.
 // ============================================================
 
-import { and, eq, gte, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm'
+import { and, eq, gte, isNotNull, isNull, lt, ne, or, sql, type SQL } from 'drizzle-orm'
 import { db, calendarConnections, calendars, calendarEvents, contacts } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { phoneFromDescription, phoneKey } from './event-contact'
@@ -12,7 +12,7 @@ import { descricaoParaGoogle, levarPacienteAoGoogle, type PacienteDoEvento } fro
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
 import { zonedIso } from '@/lib/assistant/rules'
 import { getAccountSettings } from '@/lib/settings/account-settings'
-import { recomecoDoLembrete } from '@/lib/ai/meeting-reminder-block'
+import { mudouOInicio, recomecoDoLembrete } from '@/lib/ai/meeting-reminder-block'
 import {
   refreshAccessToken,
   listGoogleEvents,
@@ -113,7 +113,10 @@ function previousDay(date: string): string {
  * ancorada no fuso da conta, na mesma convenção que a Agenda já usa pros
  * eventos criados aqui: 00:00 do primeiro dia → 23:59 do último dia coberto.
  */
-function mapTimes(ev: GoogleEvent, tz: string): { startsAt: string; endsAt: string; allDay: boolean } | null {
+function mapTimes(
+  ev: Pick<GoogleEvent, 'start' | 'end'>,
+  tz: string,
+): { startsAt: string; endsAt: string; allDay: boolean } | null {
   if (ev.start?.date && ev.end?.date) {
     const lastDay = previousDay(ev.end.date)
     const endDay = lastDay < ev.start.date ? ev.start.date : lastDay
@@ -225,7 +228,7 @@ export async function descobrirAgendas(
 //    completa, então nem vira candidato; listagem cortada no teto de páginas
 //    desliga a varredura daquela agenda;
 //  - o evento que mudou de data para FORA da janela responde 200 confirmado
-//    e a linha fica como está;
+//    e a linha NÃO é cancelada — vai para a data nova (ver remarcarSumido);
 //  - a linha recém-criada pelo push (o Google pode ainda não listar) ou
 //    recém-editada pela recepção tem menos de 10 min e fica de fora — e o
 //    UPDATE confere de novo, no relógio do banco;
@@ -308,10 +311,30 @@ export function quaisCandidatas(
  * O que o Google respondeu sobre o evento NESTA agenda → cancela ou mantém.
  * Só 'gone' (404/410) e 'cancelled' (a lápide do evento movido) cancelam.
  * 200 confirmado ou tentativo mantém: é o evento que mudou de data para fora
- * da janela, não fantasma.
+ * da janela, não fantasma — e a linha vai para a data nova (remarcarSumido).
  */
 export function decidirFantasma(noGoogle: { status?: string }): 'cancelar' | 'manter' {
   return noGoogle.status === 'gone' || noGoogle.status === 'cancelled' ? 'cancelar' : 'manter'
+}
+
+/**
+ * As travas de toda escrita da varredura numa linha suspeita, repetidas no
+ * relógio do BANCO: a linha certa, desta conta e agenda, com o mesmo id do
+ * Google, ainda confirmada e que ninguém criou nem mexeu nos últimos 10 min.
+ * Se a recepção acabou de editar o compromisso, ou outra sincronização já o
+ * cancelou, a escrita não pega nada. Cancelar e remarcar usam as MESMAS.
+ */
+function travasDaSuspeita(accountId: string, calendarId: string, linha: LinhaSuspeita): SQL | undefined {
+  const idadeMin = sql.raw(`interval '${Math.round(SUMIDO_IDADE_MIN_MS / 1000)} seconds'`)
+  return and(
+    eq(calendarEvents.id, linha.id),
+    eq(calendarEvents.accountId, accountId),
+    eq(calendarEvents.calendarId, calendarId),
+    eq(calendarEvents.googleEventId, linha.googleEventId),
+    eq(calendarEvents.status, 'confirmed'),
+    sql`${calendarEvents.createdAt} < now() - ${idadeMin}`,
+    sql`${calendarEvents.updatedAt} < now() - ${idadeMin}`,
+  )
 }
 
 /**
@@ -345,22 +368,11 @@ async function cancelarFantasma(
   calendarId: string,
   linha: LinhaSuspeita,
 ): Promise<{ gemeos: number } | null> {
-  const idadeMin = sql.raw(`interval '${Math.round(SUMIDO_IDADE_MIN_MS / 1000)} seconds'`)
   return db.transaction(async (tx) => {
     const res = await tx
       .update(calendarEvents)
       .set({ status: 'cancelled', updatedAt: sql`now()` })
-      .where(
-        and(
-          eq(calendarEvents.id, linha.id),
-          eq(calendarEvents.accountId, accountId),
-          eq(calendarEvents.calendarId, calendarId),
-          eq(calendarEvents.googleEventId, linha.googleEventId),
-          eq(calendarEvents.status, 'confirmed'),
-          sql`${calendarEvents.createdAt} < now() - ${idadeMin}`,
-          sql`${calendarEvents.updatedAt} < now() - ${idadeMin}`,
-        ),
-      )
+      .where(travasDaSuspeita(accountId, calendarId, linha))
       // O que passa ao gêmeo sai DAQUI, da linha no instante em que foi
       // cancelada (02/10, revisão) — não da leitura da varredura, feita ANTES
       // das perguntas ao Google: nesse meio-tempo o lembrete pode ter saído
@@ -414,10 +426,66 @@ async function cancelarFantasma(
 }
 
 /**
+ * 📅 O evento sumido da listagem que o Google diz que existe (200 confirmado)
+ * com OUTRA data — remarcado no Google para fora da janela (02/10/2026).
+ *
+ * Antes a linha ficava como estava, com a data VELHA: o paciente recebia o
+ * lembrete do dia errado (a consulta que foi para daqui a três meses avisava
+ * "é amanhã") e o GET se repetia a cada rodada, porque a linha velha seguia
+ * caindo na janela. Agora ela vai para a data do Google — início, fim e dia
+ * inteiro — com o recomeço do lembrete de qualquer remarcação
+ * (recomecoDoLembrete: zera, ou restaura se voltou ao horário de antes). Na
+ * data nova fora da janela, a linha sai da varredura sozinha.
+ *
+ * As MESMAS travas do cancelamento (travasDaSuspeita), no relógio do banco.
+ * Numa transação, com a linha travada: o contador que decide entre zerar e
+ * restaurar é lido AGORA, não na leitura da varredura feita antes das
+ * perguntas ao Google — nesse meio-tempo o lembrete da data velha pode ter
+ * saído. `false` = não mexeu (alguém mexeu na linha há pouco, ou ela já não
+ * está de pé).
+ */
+async function remarcarSumido(
+  accountId: string,
+  calendarId: string,
+  linha: LinhaSuspeita,
+  datas: { startsAt: string; endsAt: string; allDay: boolean },
+): Promise<boolean> {
+  const travas = travasDaSuspeita(accountId, calendarId, linha)
+  return db.transaction(async (tx) => {
+    const atual = firstOrNull(
+      await tx
+        .select({
+          startsAt: calendarEvents.startsAt,
+          remindersSent: calendarEvents.remindersSent,
+          remindersPrevStartsAt: calendarEvents.remindersPrevStartsAt,
+          remindersPrevSent: calendarEvents.remindersPrevSent,
+        })
+        .from(calendarEvents)
+        .where(travas)
+        .for('update')
+        .limit(1),
+    )
+    if (!atual || !mudouOInicio(atual.startsAt, datas.startsAt)) return false
+    const res = await tx
+      .update(calendarEvents)
+      .set({
+        startsAt: datas.startsAt,
+        endsAt: datas.endsAt,
+        allDay: datas.allDay,
+        ...recomecoDoLembrete(atual, datas.startsAt),
+        updatedAt: sql`now()`,
+      })
+      .where(travas)
+      .returning({ id: calendarEvents.id })
+    return res.length > 0
+  })
+}
+
+/**
  * A varredura de UMA agenda, depois da listagem completa dela. Devolve quantas
- * linhas cancelou. Nunca lança: é faxina — falhar aqui não pode gravar
- * last_sync_error ("reconecte o Google") nem parar a importação das outras
- * agendas.
+ * linhas cancelou (a remarcada para fora da janela não conta: ela segue de
+ * pé). Nunca lança: é faxina — falhar aqui não pode gravar last_sync_error
+ * ("reconecte o Google") nem parar a importação das outras agendas.
  */
 async function liberarSumidos(p: {
   accountId: string
@@ -427,6 +495,8 @@ async function liberarSumidos(p: {
   idsNaListagem: ReadonlySet<string>
   timeMin: string
   timeMax: string
+  /** Fuso da conta: ancora a data nova do evento de dia inteiro (mapTimes). */
+  tz: string
 }): Promise<number> {
   let linhas: LinhaSuspeita[]
   try {
@@ -471,7 +541,8 @@ async function liberarSumidos(p: {
 
   let liberados = 0
   for (const linha of candidatas) {
-    let noGoogle: { status?: string; organizer?: { email?: string } }
+    // As datas entram para a remarcação (02/10); o organizador, para o log.
+    let noGoogle: Pick<GoogleEvent, 'status' | 'organizer' | 'start' | 'end'>
     try {
       noGoogle = await getGoogleEvent(p.accessToken, p.calGoogleId, linha.googleEventId)
     } catch (err) {
@@ -482,7 +553,26 @@ async function liberarSumidos(p: {
       )
       continue
     }
-    if (decidirFantasma(noGoogle) !== 'cancelar') continue
+    if (decidirFantasma(noGoogle) === 'manter') {
+      // 📅 Existe nesta agenda, mas não veio na listagem: mudou de data no
+      // Google para fora da janela (02/10). A linha vai para a data nova — ver
+      // remarcarSumido. Mesma data (ou sem data legível) = não mexe.
+      const datas = mapTimes(noGoogle, p.tz)
+      if (!datas || !mudouOInicio(linha.startsAt, datas.startsAt)) continue
+      try {
+        if (await remarcarSumido(p.accountId, p.calendarId, linha, datas)) {
+          console.log(
+            `[google sync] ${p.calGoogleId}: compromisso ${linha.id} foi para ${datas.startsAt} — o evento ${linha.googleEventId} mudou de data no Google (fora da janela da listagem)`,
+          )
+        }
+      } catch (err) {
+        console.error(
+          `[google sync] ${p.calGoogleId}: não consegui levar o compromisso ${linha.id} para a data nova do Google:`,
+          err instanceof Error ? err.message : err,
+        )
+      }
+      continue
+    }
     try {
       const feito = await cancelarFantasma(p.accountId, p.calendarId, linha)
       if (!feito) continue
@@ -600,7 +690,14 @@ export async function importGoogleEvents(
         if (!times) continue
         const existing = firstOrNull(
           await db
-            .select({ id: calendarEvents.id, startsAt: calendarEvents.startsAt })
+            .select({
+              id: calendarEvents.id,
+              startsAt: calendarEvents.startsAt,
+              // O recomeço do lembrete decide entre zerar e restaurar (0206).
+              remindersSent: calendarEvents.remindersSent,
+              remindersPrevStartsAt: calendarEvents.remindersPrevStartsAt,
+              remindersPrevSent: calendarEvents.remindersPrevSent,
+            })
             .from(calendarEvents)
             .where(and(eq(calendarEvents.calendarId, cal.id), eq(calendarEvents.googleEventId, ev.id)))
             .limit(1),
@@ -632,6 +729,8 @@ export async function importGoogleEvents(
           // 01/10: arrastou no Google para outro horário = lembrete recomeça,
           // como na Agenda e na IA (ver recomecoDoLembrete). Antes o contador
           // da data antiga seguia valendo e a data nova ficava sem aviso.
+          // 02/10: arrastou e arrastou DE VOLTA = o contador daquele horário
+          // volta (não manda de novo o lembrete que já saiu).
           //
           // 02/10, revisão: só a linha que ninguém mexeu desde a listagem. Era
           // um UPDATE incondicional: a recepção salvava 10h→11h no CRM enquanto
@@ -643,7 +742,7 @@ export async function importGoogleEvents(
             .update(calendarEvents)
             .set({
               ...values,
-              ...recomecoDoLembrete(existing.startsAt, values.startsAt),
+              ...recomecoDoLembrete(existing, values.startsAt),
               updatedAt: sql`now()`,
             })
             .where(and(eq(calendarEvents.id, existing.id), lt(calendarEvents.updatedAt, inicioDaListagem)))
@@ -690,7 +789,7 @@ export async function importGoogleEvents(
     // paciente ligado nela não passaria para a linha que o import da B cria
     // logo depois.
     for (const v of aVarrer) {
-      cancelled += await liberarSumidos({ accountId, accessToken, timeMin, timeMax, ...v })
+      cancelled += await liberarSumidos({ accountId, accessToken, timeMin, timeMax, tz, ...v })
     }
     await db
       .update(calendarConnections)

@@ -13,6 +13,7 @@ import { getCurrentAccount } from '@/lib/auth/account'
 import { googleConfigured } from '@/lib/google/calendar'
 import {
   isMeetingReminderBlock,
+  recomecoDoLembrete,
   type MeetingReminderBlock,
 } from '@/lib/ai/meeting-reminder-block'
 import { apagarEventoNoGoogle, importGoogleEvents, pushEventToGoogle } from '@/lib/google/sync'
@@ -714,6 +715,11 @@ export async function updateEvent(
       await db
         .select({
           startsAt: calendarEvents.startsAt,
+          // O lembrete deste início e o guardado de um início anterior
+          // (migração 0206): é o que decide entre zerar e restaurar.
+          remindersSent: calendarEvents.remindersSent,
+          remindersPrevStartsAt: calendarEvents.remindersPrevStartsAt,
+          remindersPrevSent: calendarEvents.remindersPrevSent,
           calendarId: calendarEvents.calendarId,
           // Para a confirmação: o que o paciente sabia antes deste salvar.
           contactId: calendarEvents.contactId,
@@ -747,14 +753,12 @@ export async function updateEvent(
     // nasce com os degraus queimados e o paciente não recebe nada da remarcação
     // — que é exatamente quando ele MAIS precisa ser avisado. O bloqueio antigo
     // também vai embora: fala de uma tentativa que não existe mais.
-    if (
-      patch.startsAt !== undefined &&
-      new Date(antes.startsAt).getTime() !== new Date(patch.startsAt).getTime()
-    ) {
-      set.remindersSent = 0
-      set.reminderBlock = null
-      set.reminderBlockAt = null
-    }
+    //
+    // 02/10/2026: a regra é a do recomecoDoLembrete, a mesma do Google e da IA.
+    // A recepção que mudava 10h→11h e desfazia 11h→10h zerava duas vezes, e o
+    // lembrete das 10h que já tinha saído saía de novo; agora voltar ao início
+    // de antes restaura o contador dele.
+    if (patch.startsAt !== undefined) Object.assign(set, recomecoDoLembrete(antes, patch.startsAt))
     if (patch.contactId !== undefined) set.contactId = patch.contactId || null
     if (patch.dealId !== undefined) set.dealId = patch.dealId || null
     if (patch.status !== undefined) set.status = patch.status

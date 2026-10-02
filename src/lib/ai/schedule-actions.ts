@@ -8,6 +8,7 @@ import { and, asc, desc, eq, gt, sql } from 'drizzle-orm'
 import { db, calendarConnections, calendars, calendarEvents, contacts, deals, scheduledMessages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { pushEventToGoogle } from '@/lib/google/sync'
+import { recomecoDoLembrete } from './meeting-reminder-block'
 import { escolherAgenda } from './agenda-do-profissional'
 import { tituloNormalizado } from './busy-slots'
 import type { ModoAgendamento } from './defaults'
@@ -314,6 +315,13 @@ export interface CompromissoExistente {
   location?: string | null
   /** Confirmação da Agenda na fila (02/10, revisão): só descartar quando havia uma. */
   confirmationDueAt?: string | null
+  /**
+   * O lembrete deste início e o guardado de um início anterior (migração
+   * 0206): ao mover, decidem entre zerar e restaurar (recomecoDoLembrete).
+   */
+  remindersSent?: number | null
+  remindersPrevStartsAt?: string | null
+  remindersPrevSent?: number | null
 }
 
 export type DecisaoAgendamento =
@@ -750,6 +758,10 @@ export async function scheduleEventFromAi(input: {
             location: calendarEvents.location,
             // Só descarta a confirmação da Agenda se havia uma na fila (02/10, revisão).
             confirmationDueAt: calendarEvents.confirmationDueAt,
+            // O recomeço do lembrete ao mover: zera, ou restaura se voltou (0206).
+            remindersSent: calendarEvents.remindersSent,
+            remindersPrevStartsAt: calendarEvents.remindersPrevStartsAt,
+            remindersPrevSent: calendarEvents.remindersPrevSent,
           })
           .from(calendarEvents)
           .leftJoin(calendars, and(eq(calendars.id, calendarEvents.calendarId), eq(calendars.accountId, accountId)))
@@ -850,8 +862,11 @@ export async function scheduleEventFromAi(input: {
           // Horário mudou = compromisso novo para quem vai ser avisado. Sem
           // zerar, `reminders_sent` (que só anda para frente) faz a data nova
           // nascer com os degraus queimados, e o lembrete da remarcação —
-          // justamente o mais necessário — nunca sai.
-          ...(sameTime ? {} : { remindersSent: 0, reminderBlock: null, reminderBlockAt: null }),
+          // justamente o mais necessário — nunca sai. 02/10/2026: a regra é a
+          // do recomecoDoLembrete (a mesma da Agenda e do Google) — a IA que
+          // move e depois devolve ao horário de antes restaura o contador
+          // dele, e o lembrete que já tinha saído não sai de novo.
+          ...(sameTime ? {} : recomecoDoLembrete(existing, start)),
           // ⏳ A confirmação da Agenda que estava na fila (02/10, revisão): a
           // IA remarca E confirma o horário novo na própria conversa. Sem
           // isto, a fila mandava DEPOIS a dela ("remarcada para…") — duas

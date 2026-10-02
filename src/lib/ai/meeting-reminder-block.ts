@@ -181,7 +181,58 @@ export function decideImpedimento(args: {
 }
 
 /**
- * O compromisso mudou de horário? Então o lembrete recomeça.
+ * O início do compromisso mudou? Compara até o SEGUNDO, que é o que o Google
+ * guarda: um horário do CRM com milissegundos volta do Google sem eles, e isso
+ * não é remarcação — zerar ali repetiria para o paciente um degrau que já
+ * saiu. Horário ilegível também não conta como mudança, pelo mesmo motivo.
+ */
+export function mudouOInicio(antes: string | Date, depois: string | Date): boolean {
+  const a = Math.floor(new Date(antes).getTime() / 1000)
+  const b = Math.floor(new Date(depois).getTime() / 1000)
+  return !Number.isNaN(a) && !Number.isNaN(b) && a !== b
+}
+
+/** Mesmo minuto? (o horário que a recepção vê e escolhe; o Google pode trazer segundos.) */
+function mesmoMinuto(a: string | Date | null | undefined, b: string | Date): boolean {
+  if (a === null || a === undefined || a === '') return false
+  const ta = new Date(a).getTime()
+  const tb = new Date(b).getTime()
+  return Number.isFinite(ta) && Number.isFinite(tb) && Math.abs(ta - tb) < 60_000
+}
+
+/** Contador vindo do banco (driver pode devolver texto; NULL/lixo = 0). */
+function contador(v: number | string | null | undefined): number {
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0
+}
+
+/**
+ * Como o compromisso está ANTES de mudar de horário — o que o recomeço do
+ * lembrete precisa saber. As duas últimas colunas são da migração 0206; linha
+ * lida sem elas (ou de antes dela) vale como "nada guardado".
+ */
+export type LembreteDoCompromisso = {
+  startsAt: string | Date
+  /** Degraus já enviados para `startsAt`. */
+  remindersSent?: number | string | null
+  /** O início para o qual `remindersPrevSent` vale. */
+  remindersPrevStartsAt?: string | Date | null
+  /** Degraus que já tinham saído para `remindersPrevStartsAt`. */
+  remindersPrevSent?: number | string | null
+}
+
+/** O que o UPDATE grava quando o início muda (`{}` = o início não mudou). */
+export type RecomecoDoLembrete = {
+  remindersSent: number
+  reminderBlock: null
+  reminderBlockAt: null
+  remindersPrevStartsAt?: string
+  remindersPrevSent?: number
+}
+
+/**
+ * O compromisso mudou de horário? Então o lembrete recomeça — a não ser que
+ * tenha VOLTADO para o horário de antes.
  *
  * É a ÚNICA vez em que `reminders_sent` volta: os degraus que ele conta, e o
  * motivo guardado em `reminder_block`, falavam da data ANTIGA. Sem zerar, a
@@ -192,19 +243,50 @@ export function decideImpedimento(args: {
  * pesa em dobro: o contador de um compromisso também cala as cópias dele
  * (meeting-reminder-dedup.ts).
  *
- * Compara o instante até o SEGUNDO, que é o que o Google guarda: um horário
- * do CRM com milissegundos volta do Google sem eles, e isso não é remarcação —
- * zerar ali repetiria para o paciente um degrau que já saiu. Horário ilegível
- * também não zera, pelo mesmo motivo.
+ * 02/10/2026 — moveu e VOLTOU. Zerar sempre fazia a recepção (ou o Google, ou
+ * a IA) que mudava 10h→11h e logo desfazia 11h→10h mandar DE NOVO ao paciente
+ * o lembrete das 10h que já tinha saído. Agora, antes de zerar, o contador
+ * que valia para o início antigo fica guardado (`reminders_prev_*`, migração
+ * 0206) — só se havia degrau gasto: contador 0 não tem o que proteger e não
+ * apaga o que estava guardado (moveu, moveu de novo e voltou ao primeiro
+ * ainda acha o do primeiro). Ao chegar a um início IGUAL, no minuto, ao
+ * guardado, o contador volta a ser o GUARDADO em vez de zerar: nenhum degrau
+ * que o paciente já recebeu para aquele horário sai de novo.
+ *
+ * Só o guardado, nunca o maior dos dois (02/10/2026, revisão): o contador de
+ * agora conta degraus de OUTRO início — o de passagem — e não diz nada sobre
+ * o horário para o qual se volta. Com o maior, degraus [24h, 2h]: sexta 10h
+ * com o de 24h enviado (1) → movida para quinta 15h, onde saem o de 24h e o
+ * de 2h (2) → de volta para sexta 10h ficava 2, e o "2h antes" das 10h, que o
+ * paciente nunca recebeu, não saía.
+ *
+ * Vale igual com ou sem a confirmação ao agendar — a fila dela compara com o
+ * que o paciente sabe e já dá 'semMudanca' no vai-e-volta; isto aqui é só o
+ * lembrete. Uma vaga só: o guardado é sempre o do ÚLTIMO início que tinha
+ * degrau gasto.
+ *
+ * Uma regra para todo caminho que muda o início — o salvar da Agenda, o import
+ * do Google (inclusive o evento remarcado para fora da janela), o mover do
+ * [[AGENDAR]] da IA e o "Desfazer" dessa remarcação aprovada
+ * (orchestration/revert-actions.ts). Não duplicar em SQL à mão.
  */
 export function recomecoDoLembrete(
-  antes: string,
-  depois: string,
-): { remindersSent: 0; reminderBlock: null; reminderBlockAt: null } | Record<string, never> {
-  const a = Math.floor(new Date(antes).getTime() / 1000)
-  const b = Math.floor(new Date(depois).getTime() / 1000)
-  if (Number.isNaN(a) || Number.isNaN(b) || a === b) return {}
-  return { remindersSent: 0, reminderBlock: null, reminderBlockAt: null }
+  antes: LembreteDoCompromisso,
+  depois: string | Date,
+): RecomecoDoLembrete | Record<string, never> {
+  if (!mudouOInicio(antes.startsAt, depois)) return {}
+  const atual = contador(antes.remindersSent)
+  const guardado = contador(antes.remindersPrevSent)
+  const voltou = guardado > 0 && mesmoMinuto(antes.remindersPrevStartsAt, depois)
+  return {
+    // Voltou: SÓ o guardado — `atual` é do horário de passagem (ver acima).
+    remindersSent: voltou ? guardado : 0,
+    reminderBlock: null,
+    reminderBlockAt: null,
+    ...(atual > 0
+      ? { remindersPrevStartsAt: new Date(antes.startsAt).toISOString(), remindersPrevSent: atual }
+      : {}),
+  }
 }
 
 /**

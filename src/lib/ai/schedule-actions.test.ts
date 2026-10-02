@@ -17,6 +17,9 @@ const h = vi.hoisted(() => ({
     title: string
     location: string | null
     confirmationDueAt?: string | null
+    remindersSent?: number | null
+    remindersPrevStartsAt?: string | null
+    remindersPrevSent?: number | null
   }[],
   agendas: [] as { id: string; name: string }[],
   updates: [] as { values: Record<string, unknown> }[],
@@ -518,6 +521,37 @@ describe('scheduleEventFromAi com o 4º campo', () => {
       { startsAt: '2026-10-21T12:30:00.000Z', agenda: 'Dr. Otávio Prates', titulo: 'Avaliação · Léo' },
     ])
     expect(ev.tituloDaIa).toBeUndefined()
+  })
+})
+
+describe('a IA move a consulta: o lembrete recomeça — ou volta, se voltou ao horário de antes (02/10)', () => {
+  it('move com lembrete já enviado: zera e guarda o contador do horário de antes', async () => {
+    h.existentes = [{ ...consulta('leo', '2026-10-21T09:30', 'cal-marta', 30), remindersSent: 1, remindersPrevStartsAt: null, remindersPrevSent: 0 }]
+    await scheduleEventFromAi({ ...base, startsLocal: '2026-10-23T10:00' })
+
+    expect(h.updates[0].values).toMatchObject({
+      startsAt: '2026-10-23T13:00:00.000Z',
+      remindersSent: 0,
+      reminderBlock: null,
+      remindersPrevStartsAt: '2026-10-21T12:30:00.000Z',
+      remindersPrevSent: 1,
+    })
+  })
+
+  it('devolve ao horário de antes: o contador guardado volta e o lembrete que já saiu não sai de novo', async () => {
+    h.existentes = [
+      {
+        ...consulta('leo', '2026-10-23T10:00', 'cal-marta', 30),
+        remindersSent: 0,
+        remindersPrevStartsAt: '2026-10-21 12:30:00+00',
+        remindersPrevSent: 1,
+      },
+    ]
+    const ev = (await scheduleEventFromAi({ ...base, startsLocal: '2026-10-21T09:30' })) as ScheduleResult
+
+    expect(ev.acao).toBe('moveu')
+    expect(h.updates[0].values).toMatchObject({ startsAt: '2026-10-21T12:30:00.000Z', remindersSent: 1 })
+    expect(h.updates[0].values).not.toHaveProperty('remindersPrevStartsAt')
   })
 })
 
