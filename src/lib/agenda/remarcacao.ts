@@ -14,9 +14,15 @@
 // lembretes e a confirmação "remarcada" vão pelo caminho da edição) — ver
 // createEvent em app/(dashboard)/agenda/actions.ts.
 //
-// Aqui: a sugestão de resposta (pelo nome da pessoa no título), o texto de
-// cada opção e a regra de "ainda vai acontecer". Sem banco e sem
-// 'server-only': o modal e a action usam as mesmas funções.
+// Aqui: o destaque "parece ser a mesma pessoa" (pelo nome no título), o texto
+// de cada opção, a regra de "ainda vai acontecer" e o que a remarcação grava
+// em X. Sem banco e sem 'server-only': o modal e a action usam as mesmas
+// funções.
+//
+// 02/10, revisão: a sugestão pelo nome vinha PRÉ-MARCADA e errava (o nome da
+// mãe que o modal põe no título vazio, nome composto, sobrenome de irmãos,
+// "Retorno Davi" × "Avaliação Davi"). Agora nada vem marcado: a recepção
+// RESPONDE, e a sugestão vira só um destaque visual.
 // ============================================================
 
 import { quandoDaConsulta } from './confirmacao-agendamento'
@@ -45,6 +51,25 @@ const GENERICAS = new Set([
   'com', 'para', 'pra', 'pro', 'das', 'dos', 'nas', 'nos', 'aos', 'uma', 'sem', 'por', 'pelo', 'pela',
 ])
 
+/**
+ * O TIPO da consulta, das palavras genéricas (02/10, revisão). "Retorno Davi"
+ * e "Avaliação Davi" são consultas DIFERENTES do mesmo menino — o retorno não
+ * remarca a avaliação. Sinônimos e plurais viram a mesma chave.
+ * "Consulta"/"atendimento" não dizem o tipo: ficam de fora.
+ */
+const TIPOS: ReadonlyMap<string, string> = new Map([
+  ['avaliacao', 'avaliacao'], ['retorno', 'retorno'], ['limpeza', 'limpeza'], ['profilaxia', 'limpeza'],
+  ['revisao', 'revisao'], ['manutencao', 'manutencao'], ['orcamento', 'orcamento'], ['encaixe', 'encaixe'],
+  ['urgencia', 'urgencia'], ['emergencia', 'urgencia'], ['sessao', 'sessao'], ['procedimento', 'procedimento'],
+  ['exame', 'exame'], ['exames', 'exame'], ['raio', 'raio'], ['radiografia', 'raio'], ['tomografia', 'tomografia'],
+  ['cirurgia', 'cirurgia'], ['extracao', 'extracao'], ['implante', 'implante'], ['implantes', 'implante'],
+  ['canal', 'canal'], ['restauracao', 'restauracao'], ['clareamento', 'clareamento'], ['aparelho', 'aparelho'],
+  ['ortodontia', 'ortodontia'], ['protese', 'protese'], ['botox', 'botox'], ['harmonizacao', 'harmonizacao'],
+  ['moldagem', 'moldagem'], ['instalacao', 'instalacao'], ['remocao', 'remocao'], ['controle', 'controle'],
+  ['acompanhamento', 'acompanhamento'], ['tratamento', 'tratamento'], ['continuacao', 'continuacao'],
+  ['reuniao', 'reuniao'],
+])
+
 /** "Dr./Dra./Drª/Doutor(a)": o que vem depois é o PROFISSIONAL, até a próxima pontuação. */
 const TITULO_DE_PROFISSIONAL = new Set(['dr', 'dra', 'drs', 'dras', 'doutor', 'doutora'])
 
@@ -64,10 +89,11 @@ function palavra(token: string): string {
   return semAcento(token).replace(/[^a-z]/g, '')
 }
 
-function palavrasDasAgendas(nomesDeAgendas: readonly string[]): Set<string> {
+/** As palavras (≥ 3 letras) de uma lista de nomes — de agenda ou do contato. */
+function palavrasDosNomes(nomes: readonly (string | null | undefined)[]): Set<string> {
   const out = new Set<string>()
-  for (const nome of nomesDeAgendas) {
-    for (const t of nome.match(TOKEN) ?? []) {
+  for (const nome of nomes) {
+    for (const t of (nome ?? '').normalize('NFC').match(TOKEN) ?? []) {
       const w = palavra(t)
       if (w.length >= 3) out.add(w)
     }
@@ -75,17 +101,46 @@ function palavrasDasAgendas(nomesDeAgendas: readonly string[]): Set<string> {
   return out
 }
 
+/** Os tipos de consulta que um título diz ("Avaliação e limpeza · Davi" → avaliacao, limpeza). */
+export function tiposDoTitulo(titulo: string): Set<string> {
+  const out = new Set<string>()
+  for (const t of titulo.normalize('NFC').match(TOKEN) ?? []) {
+    const tipo = TIPOS.get(palavra(t))
+    if (tipo) out.add(tipo)
+  }
+  return out
+}
+
+/**
+ * Tipos diferentes? Só quando os DOIS títulos dizem o tipo e não dizem o
+ * mesmo. Título sem tipo ("Davi") não contradiz nada.
+ */
+function tiposDiferentes(a: Set<string>, b: Set<string>): boolean {
+  if (a.size === 0 || b.size === 0) return false
+  if (a.size !== b.size) return true
+  for (const t of a) if (!b.has(t)) return true
+  return false
+}
+
 /**
  * As pessoas que um título nomeia, cada uma como a lista das palavras do nome
  * (a primeira é o primeiro nome). Fica de fora: palavra genérica ("avaliação",
- * "retorno"), o profissional ("Dra. Helena"), palavra de nome de agenda e
- * palavra com menos de 3 letras.
+ * "retorno"), o profissional ("Dra. Helena"), palavra de nome de agenda,
+ * palavra do NOME DO CONTATO e palavra com menos de 3 letras.
+ *
+ * O nome do contato sai dos dois lados (02/10, revisão): numa família o
+ * contato é a mãe, o modal põe o nome dela no título vazio e o sobrenome dela
+ * é o dos filhos — "Rosana Moura" casava com "Davi Moura".
  *
  * "Avaliação Dra. Helena · Davi Moura" → [["davi", "moura"]]
  * "Rosana (Davi e Bianca)"              → [["rosana"], ["davi"], ["bianca"]]
  */
-export function pessoasDoTitulo(titulo: string, nomesDeAgendas: readonly string[] = []): string[][] {
-  const ignorar = palavrasDasAgendas(nomesDeAgendas)
+export function pessoasDoTitulo(
+  titulo: string,
+  nomesDeAgendas: readonly string[] = [],
+  nomeDoContato: string | null = null,
+): string[][] {
+  const ignorar = palavrasDosNomes([...nomesDeAgendas, nomeDoContato])
   const pessoas: string[][] = []
   let atual: string[] = []
   let profissional = false
@@ -119,40 +174,101 @@ export function pessoasDoTitulo(titulo: string, nomesDeAgendas: readonly string[
 }
 
 /**
- * Mesma pessoa? O primeiro nome de um aparece no nome do outro. Só o
- * sobrenome NÃO basta: irmãos têm o mesmo ("Bianca Moura" ≠ "Davi Moura").
+ * Mesma pessoa? O nome COMPLETO de um está no nome do outro ("Davi" ⊂ "Davi
+ * Moura"). Até 02/10 bastava o primeiro nome: "Maria Clara" casava com "Maria
+ * Eduarda". Só o sobrenome também não basta: irmãos têm o mesmo.
  */
 function mesmaPessoa(a: string[], b: string[]): boolean {
-  const [pa, pb] = [a[0], b[0]]
-  return (pa !== undefined && b.includes(pa)) || (pb !== undefined && a.includes(pb))
+  if (a.length === 0 || b.length === 0) return false
+  const contido = (x: string[], y: string[]) => x.every((w) => y.includes(w))
+  return contido(a, b) || contido(b, a)
 }
 
 /**
- * A resposta sugerida para "Esta é:" — o id da consulta a remarcar, ou null
- * para "consulta nova".
+ * A consulta que PARECE ser da mesma pessoa do compromisso novo — só um
+ * destaque visual no modal (02/10, revisão). Não marca resposta nenhuma: a
+ * recepção TEM que responder "remarcação de qual" ou "consulta nova". null =
+ * sem destaque.
  *
- * Remarcação só quando o título novo nomeia UMA pessoa e ela é a pessoa de
- * UMA consulta existente. Qualquer dúvida é "nova", como era antes da
- * pergunta existir: remarcar a consulta errada some com o horário de outro
- * paciente da família (pior do que deixar uma sobrando, que a recepção vê).
- * - título novo sem nome ("Avaliação") ou com mais de uma pessoa (o nome do
- *   contato da família, "Rosana (Davi e Bianca)") → nova;
- * - consulta existente cujo título nomeia mais de uma pessoa não serve de pista;
- * - casou com mais de uma consulta → nova.
+ * Destaca só quando é bem provável — errar aqui empurra a recepção para
+ * remarcar a consulta de OUTRA pessoa da família:
+ * - o título novo nomeia UMA pessoa (depois de tirar o nome do contato, das
+ *   agendas e as palavras genéricas);
+ * - o nome completo de um está no nome do outro ("Davi" × "Davi Moura"), e
+ *   não só o primeiro nome ("Maria Clara" × "Maria Eduarda");
+ * - o tipo não é diferente ("Retorno Davi" não destaca "Avaliação Davi");
+ * - casou com UMA consulta só (consulta que nomeia mais de uma pessoa não
+ *   serve de pista).
  */
 export function sugerirRemarcacao(
   tituloNovo: string,
   consultas: readonly { id: string; title: string }[],
   nomesDeAgendas: readonly string[] = [],
+  nomeDoContato: string | null = null,
 ): string | null {
-  const novo = pessoasDoTitulo(tituloNovo, nomesDeAgendas)
+  const novo = pessoasDoTitulo(tituloNovo, nomesDeAgendas, nomeDoContato)
   if (novo.length !== 1) return null
   const quem = novo[0]
+  const tiposNovo = tiposDoTitulo(tituloNovo)
   const casam = consultas.filter((c) => {
-    const p = pessoasDoTitulo(c.title, nomesDeAgendas)
-    return p.length === 1 && mesmaPessoa(quem, p[0])
+    const p = pessoasDoTitulo(c.title, nomesDeAgendas, nomeDoContato)
+    return p.length === 1 && mesmaPessoa(quem, p[0]) && !tiposDiferentes(tiposNovo, tiposDoTitulo(c.title))
   })
   return casam.length === 1 ? casam[0].id : null
+}
+
+/** O que o modal manda na remarcação (o formulário + o que só ela precisa). */
+export type FormularioDaRemarcacao = {
+  title: string
+  startsAt: string
+  endsAt: string
+  allDay?: boolean
+  calendarId?: string | null
+  description?: string | null
+  location?: string | null
+  contactId?: string | null
+  notifyPatient?: boolean
+  descartarConfirmacaoPendente?: boolean
+  conversationId?: string | null
+  /**
+   * A recepção DIGITOU o título (02/10, revisão). O modal põe o nome do
+   * contato no título vazio — isso não conta: é o nome da mãe, não de quem é
+   * a consulta.
+   */
+  tituloDigitado?: boolean
+}
+
+/** O que vai para a edição de X (updateEvent). Título só se digitado. */
+export type CamposDaRemarcacao = Omit<FormularioDaRemarcacao, 'title' | 'tituloDigitado'> & { title?: string }
+
+/**
+ * O que a remarcação grava em X (02/10, revisão). Antes ia o formulário
+ * inteiro: o título de X (onde está o nome de QUAL filho) virava o nome do
+ * contato que o modal pôs no título vazio, e a descrição e o local de X eram
+ * apagados pelos campos em branco do compromisso novo.
+ *
+ * Vai: dia/hora, dia inteiro, agenda, paciente e o que a confirmação precisa.
+ * O título só se a recepção o digitou; descrição e local só se preenchidos.
+ */
+export function camposDaRemarcacao(f: FormularioDaRemarcacao): CamposDaRemarcacao {
+  const titulo = f.title?.trim()
+  const descricao = f.description?.trim()
+  const local = f.location?.trim()
+  return {
+    startsAt: f.startsAt,
+    endsAt: f.endsAt,
+    ...(f.allDay !== undefined ? { allDay: f.allDay } : {}),
+    calendarId: f.calendarId ?? null,
+    contactId: f.contactId ?? null,
+    ...(f.notifyPatient !== undefined ? { notifyPatient: f.notifyPatient } : {}),
+    ...(f.descartarConfirmacaoPendente !== undefined
+      ? { descartarConfirmacaoPendente: f.descartarConfirmacaoPendente }
+      : {}),
+    conversationId: f.conversationId ?? null,
+    ...(f.tituloDigitado === true && titulo ? { title: titulo } : {}),
+    ...(descricao ? { description: descricao } : {}),
+    ...(local ? { location: local } : {}),
+  }
 }
 
 /**
@@ -199,4 +315,22 @@ export function rotuloDaRemarcacao(
   const com = c.calendarName?.trim() ? ` com ${c.calendarName.trim()}` : ''
   const titulo = c.title.trim() ? ` (${c.title.trim()})` : ''
   return `Remarcação da consulta de ${quando}${com}${titulo} — a antiga deixa de valer`
+}
+
+/**
+ * Remarcação com OUTRA agenda (02/10, revisão): a consulta X é com um
+ * profissional e o formulário está com outro. Pode ser de propósito (troca de
+ * profissional), mas a recepção precisa ver antes de salvar. null = mesma
+ * agenda (ou nenhuma escolhida).
+ */
+export function avisoDeTrocaDeProfissional(
+  x: { startsAt: string; allDay: boolean; calendarId: string; calendarName: string | null },
+  agendaDoFormulario: { id: string; name: string | null } | null,
+  tz: string,
+): string | null {
+  if (!agendaDoFormulario || agendaDoFormulario.id === x.calendarId) return null
+  const quando = quandoDaConsulta({ startsAt: x.startsAt, allDay: x.allDay, tz })
+  const deX = x.calendarName?.trim() || 'outra agenda'
+  const outra = agendaDoFormulario.name?.trim() || 'outra agenda'
+  return `A consulta de ${quando} é com ${deX}; você está salvando com ${outra} (troca de profissional).`
 }

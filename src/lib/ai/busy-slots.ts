@@ -173,6 +173,26 @@ export async function loadBusyByCalendar(
 /** Quantas consultas futuras do próprio contato a IA enxerga. */
 export const MAX_COMPROMISSOS_DO_CONTATO = 5
 
+/** Palavras de ligação que não mudam o título ("Retorno do Davi" = "Retorno Davi"). */
+const LIGACOES = new Set(['com', 'para', 'pra', 'pro', 'das', 'dos', 'nas', 'nos', 'uma', 'por', 'pelo', 'pela'])
+
+/**
+ * O título para comparar "é a mesma consulta?" (02/10, revisão): sem acento,
+ * sem caixa, sem pontuação, sem palavra de 1-2 letras ("do", "da", "e") e sem
+ * palavra de ligação. "Avaliação · Davi" = "avaliacao do davi" = "AVALIAÇÃO
+ * DAVI". Usado para juntar a consulta lançada em duas agendas (aqui) e para
+ * reconhecer o [[AGENDAR]] repetido (schedule-actions.ts).
+ */
+export function tituloNormalizado(titulo: string | null | undefined): string {
+  return (titulo ?? '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 3 && !LIGACOES.has(w))
+    .join(' ')
+}
+
 /** Uma consulta/reunião futura JÁ marcada com o contato da conversa. */
 export interface CompromissoDoContato {
   /** Início e fim em ISO (UTC), como vêm do banco. */
@@ -235,6 +255,10 @@ export function horaDeParede(instante: string | Date, tz: string): string {
  * havia uma segunda consulta, nem de quem era cada uma — e não tinha como
  * perguntar "quer remarcar a de quinta com o Dr. Fulano ou marcar outra?".
  * Nunca lança (erro → []).
+ *
+ * Lê UMA a mais que o limite (02/10, revisão): é como formatBookedForPrompt
+ * sabe que a lista foi cortada e escreve "e mais N" — sem isso a IA lia as 5
+ * como TODAS e não perguntava pela sexta.
  */
 export async function loadBookedForContact(
   accountId: string,
@@ -262,7 +286,7 @@ export async function loadBookedForContact(
         ),
       )
       .orderBy(asc(calendarEvents.startsAt))
-      .limit(MAX_COMPROMISSOS_DO_CONTATO)
+      .limit(MAX_COMPROMISSOS_DO_CONTATO + 1)
     return rows.map((r) => ({
       startsAt: r.startsAt,
       endsAt: r.endsAt,
@@ -288,19 +312,49 @@ export async function loadBookedForContact(
  * `comAgenda`: só quando a conta tem MAIS DE UMA agenda. Com uma só, o nome da
  * agenda ("Minha agenda", o e-mail do Google do dono) não diz nada e ainda
  * convida a IA a pôr esse nome no 3º campo do marcador.
+ *
+ * Revisão de 02/10:
+ * - a consulta lançada em DUAS agendas (mesmo instante, mesmo título
+ *   normalizado) vira UMA linha, "agendas: A + B". Em duas linhas a IA contava
+ *   duas consultas e perguntava "qual das duas?" de uma consulta só. Título
+ *   vazio não junta: sem título não dá para dizer que é a mesma.
+ * - passou de MAX_COMPROMISSOS_DO_CONTATO linhas: as primeiras e "e mais N"
+ *   (o loader lê uma a mais justamente para saber).
  */
 export function formatBookedForPrompt(
   itens: CompromissoDoContato[],
   opts: { comAgenda?: boolean } = {},
 ): string | null {
   if (itens.length === 0) return null
-  return itens
-    .map((c) => {
-      const partes = [c.quando]
-      if (c.titulo) partes.push(`"${c.titulo}"`)
-      if (opts.comAgenda && c.agenda) partes.push(`agenda: ${c.agenda}`)
-      partes.push(`ref: ${c.inicioLocal}`)
-      return `- ${partes.join(' · ')}`
-    })
-    .join('\n')
+  const grupos: { c: CompromissoDoContato; agendas: string[] }[] = []
+  for (const c of itens) {
+    const chave = tituloNormalizado(c.titulo)
+    const inicio = new Date(c.startsAt).getTime()
+    const mesma = chave
+      ? grupos.find(
+          (g) =>
+            g.c.allDay === c.allDay &&
+            Math.abs(new Date(g.c.startsAt).getTime() - inicio) < 60_000 &&
+            tituloNormalizado(g.c.titulo) === chave,
+        )
+      : undefined
+    if (mesma) {
+      if (c.agenda && !mesma.agendas.includes(c.agenda)) mesma.agendas.push(c.agenda)
+      continue
+    }
+    grupos.push({ c, agendas: c.agenda ? [c.agenda] : [] })
+  }
+  const linhas = grupos.slice(0, MAX_COMPROMISSOS_DO_CONTATO).map(({ c, agendas }) => {
+    const partes = [c.quando]
+    if (c.titulo) partes.push(`"${c.titulo}"`)
+    if (opts.comAgenda && agendas.length > 1) partes.push(`agendas: ${agendas.join(' + ')}`)
+    else if (opts.comAgenda && agendas.length === 1) partes.push(`agenda: ${agendas[0]}`)
+    partes.push(`ref: ${c.inicioLocal}`)
+    return `- ${partes.join(' · ')}`
+  })
+  const sobra = grupos.length - MAX_COMPROMISSOS_DO_CONTATO
+  if (sobra > 0) {
+    linhas.push(`- e mais ${sobra} (lista cortada: este contato pode ter outras consultas depois destas)`)
+  }
+  return linhas.join('\n')
 }

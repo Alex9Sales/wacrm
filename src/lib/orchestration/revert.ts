@@ -110,10 +110,13 @@ export const REVERT_MATRIX: Record<OrchAction, RevertPlan> = {
   notify_seller: { kind: 'note_only', label: 'Marcar como errado', effect: 'O aviso já foi lido pelo time; só registramos que não era pertinente.' },
   notify_owner: { kind: 'note_only', label: 'Marcar como errado', effect: 'O aviso já foi lido pelo time; só registramos que não era pertinente.' },
   escalate: { kind: 'note_only', label: 'Marcar como errado', effect: 'Só registramos que escalar não era necessário. A IA continua pausada na conversa até você religar.' },
+  // 02/10, revisão: a aprovação pode ter MOVIDO uma consulta que já existia —
+  // desfazer devolve o horário anterior em vez de cancelar (cancelar apagaria
+  // uma consulta de antes, às vezes a do irmão). Ver revert-actions.ts.
   schedule_event: {
     kind: 'undo',
     label: 'Desmarcar',
-    effect: 'Cancela o compromisso na Agenda (e no Google, se sincronizado) e pausa a IA nesta conversa para você combinar outro horário com o cliente.',
+    effect: 'Se a IA criou o compromisso, cancela na Agenda (e no Google, se sincronizado); se remarcou uma consulta que já existia, ela volta para o horário anterior. A IA é pausada nesta conversa para você falar com o cliente.',
   },
 }
 

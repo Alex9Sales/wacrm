@@ -459,7 +459,9 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
             : p.modo?.tipo === 'remarca'
               ? ({ tipo: 'remarca', deLocal: typeof p.modo.deLocal === 'string' ? p.modo.deLocal : null } as const)
               : null
-        const { scheduleEventFromAi } = await import('@/lib/ai/schedule-actions')
+        const { avisoDoQueFicou, motivoSemAlvo, resumoDaRemarcacao, scheduleEventFromAi } = await import(
+          '@/lib/ai/schedule-actions'
+        )
         const ev = await scheduleEventFromAi({
           accountId: input.accountId,
           userId: input.actorUserId,
@@ -468,21 +470,22 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
           startsLocal: p.startsLocal,
           title: p.title || 'Reunião',
           timezone: tz,
+          // Pedido antigo ainda traz 60; os novos não (02/10, revisão).
           durationMin: p.durationMin,
           profissional: typeof p.profissional === 'string' ? p.profissional : null,
           modo,
         })
         if (!ev) return { ok: false, error: 'Não consegui marcar (data/hora inválida ou agenda indisponível).' }
-        if ('naoAchou' in ev) {
-          const de = ev.deLocal ? `${ev.deLocal.slice(8, 10)}/${ev.deLocal.slice(5, 7)} às ${ev.deLocal.slice(11, 16)}` : null
-          return {
-            ok: false,
-            error: !de
-              ? 'O pedido é de remarcação, mas não diz qual consulta — nada foi mexido na Agenda.'
-              : ev.motivo === 'ambiguo'
-                ? `Este contato tem mais de uma consulta em ${de} e não deu para saber qual remarcar — nada foi mexido na Agenda.`
-                : `Não achei a consulta de ${de} deste contato para remarcar — nada foi mexido na Agenda.`,
-          }
+        // Nada foi mexido: o porquê vem do mesmo texto da nota da conversa
+        // (remarca sem alvo, sem dizer nova/remarcação, profissional ocupado,
+        // troca de profissional — 02/10, revisão).
+        if ('naoAchou' in ev) return { ok: false, error: motivoSemAlvo(ev, tz) }
+        // ⚠️ "Manteve" (02/10, revisão): já existe consulta deste contato nesse
+        // horário. Antes isto confirmava ao cliente ("Confirmado! ✅ …") e
+        // gravava um "Desfazer" que CANCELAVA a consulta que já existia — que
+        // podia ser a do irmão. Agora: nada marcado, nada confirmado.
+        if (ev.acao === 'manteve') {
+          return { ok: false, error: `Já existe consulta deste contato nesse horário: "${ev.title}" — nada foi marcado.` }
         }
         const when = new Date(ev.startsAt)
           .toLocaleString('pt-BR', { timeZone: tz, weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
@@ -503,17 +506,37 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         }
         try {
           const { postInternalNote } = await import('@/lib/ai/close-actions')
-          await postInternalNote({
-            conversationId: input.conversationId,
-            text: `📅 Aprovado: "${ev.title}" marcado para ${when}${confirmed ? ' e confirmado pro cliente.' : '. A confirmação ao cliente FALHOU — mande você.'}`,
-          })
+          // Remarcação (02/10, revisão): diz de quem é a consulta movida e se
+          // ficou outra do contato no horário antigo.
+          const text =
+            ev.acao === 'moveu'
+              ? `📅 Aprovado — ${resumoDaRemarcacao(ev, tz)}${confirmed ? '; o cliente foi avisado.' : '. A confirmação ao cliente FALHOU — mande você.'}${avisoDoQueFicou(ev, tz)}`
+              : `📅 Aprovado: "${ev.title}" marcado para ${when}${confirmed ? ' e confirmado pro cliente.' : '. A confirmação ao cliente FALHOU — mande você.'}`
+          await postInternalNote({ conversationId: input.conversationId, text })
         } catch {
           /* nota é rastro */
         }
+        // O "Desfazer" (02/10, revisão): o que a aprovação CRIOU é cancelado;
+        // o que ela MOVEU volta para o horário anterior — cancelar aqui apagaria
+        // uma consulta que já existia antes (às vezes a do irmão). Sem o
+        // horário anterior, sem desfazer automático.
+        const revertState: Record<string, unknown> | undefined =
+          ev.acao === 'criou'
+            ? { acao: 'criou', eventId: ev.eventId, conversationId: input.conversationId }
+            : ev.movidoDe && ev.movidoDeFim
+              ? {
+                  acao: 'moveu',
+                  eventId: ev.eventId,
+                  prevStartsAt: ev.movidoDe,
+                  prevEndsAt: ev.movidoDeFim,
+                  startsAt: ev.startsAt,
+                  conversationId: input.conversationId,
+                }
+              : undefined
         return {
           ok: true,
-          result: { eventId: ev.eventId, startsAt: ev.startsAt, title: ev.title, confirmed },
-          revertState: { eventId: ev.eventId, conversationId: input.conversationId },
+          result: { eventId: ev.eventId, startsAt: ev.startsAt, title: ev.title, confirmed, acao: ev.acao },
+          ...(revertState ? { revertState } : {}),
         }
       }
       case 'send_followup':

@@ -54,6 +54,18 @@ describe('cliente que JÁ TEM consulta(s): a IA pergunta antes de marcar', () =>
     expect(txt).not.toContain('it never creates a second one')
   })
 
+  // Revisão de 02/10: o bloco da equipe dizia "leave the third field out" e o
+  // das consultas dizia "empty". Com 4º campo, "out" põe o modo no lugar do
+  // profissional. Com consulta marcada a regra é uma só: VAZIO.
+  it('várias agendas + consulta marcada: uma regra só para o 3º campo — VAZIO, nunca "out"', () => {
+    const equipe = '- Dra. Marta Teixeira: sem compromissos\n- Dr. Otávio Prates: sem compromissos'
+    const comConsulta = scheduleInstruction({ booked: lista, agendasDaEquipe: equipe })
+    expect(comConsulta).not.toContain('leave the third field out')
+    expect(comConsulta).toContain('leave the third field EMPTY')
+    // Sem consulta marcada não há 4º campo: "out" continua valendo.
+    expect(scheduleInstruction({ booked: null, agendasDaEquipe: equipe })).toContain('leave the third field out')
+  })
+
   it('não reemite à toa e respeita o prompt da conta que manda esses casos para humano', () => {
     expect(txt).toMatch(/Do NOT emit \[\[AGENDAR\]\] again for an appointment that is already booked/)
     expect(txt).toMatch(/If your business instructions below say .* must go to a human .* follow your instructions instead/)

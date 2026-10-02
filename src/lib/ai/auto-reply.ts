@@ -45,13 +45,22 @@ import {
   setVoicePreference,
 } from './close-actions'
 import {
+  avisoDoQueFicou,
   formatMeetingWhen,
   notaDaRemarcacaoSemAlvo,
   notaDoAgendamentoDaIa,
   quandoDaNota,
+  resumoDaRemarcacao,
   scheduleEventFromAi,
+  tituloDoAvisoSemAlvo,
 } from './schedule-actions'
-import { formatBookedForPrompt, loadBookedForContact, loadBusySlots, loadBusyByCalendar } from './busy-slots'
+import {
+  formatBookedForPrompt,
+  loadBookedForContact,
+  loadBusySlots,
+  loadBusyByCalendar,
+  tituloNormalizado,
+} from './busy-slots'
 import { blocoDeAgendasParaPrompt } from './agenda-do-profissional'
 import { loadLeadFormContext } from './lead-form-context'
 import { syncAccountCalendars } from '@/lib/google/sync'
@@ -1195,9 +1204,11 @@ export async function dispatchInboundToAiReply(
         // 📅 Com aprovação: nada é marcado agora. Vira pedido em Precisa de você;
         // aprovar marca e confirma pro cliente; recusar pausa a IA aqui.
         const s = dirs.schedule
-        const when = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s.startsLocal)
-          ? `${s.startsLocal.slice(8, 10)}/${s.startsLocal.slice(5, 7)} às ${s.startsLocal.slice(11, 16)}`
-          : s.startsLocal
+        const curto = (local: string) =>
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(local)
+            ? `${local.slice(8, 10)}/${local.slice(5, 7)} às ${local.slice(11, 16)}`
+            : local
+        const when = curto(s.startsLocal)
         const title = (s.title || 'Reunião').trim().slice(0, 200)
         // 02/10/2026: o profissional (3º campo) e o modo (4º: nova/remarca)
         // vão no pedido — aprovar executa o que foi combinado. Sem o modo,
@@ -1218,11 +1229,14 @@ export async function dispatchInboundToAiReply(
               dealId: null,
               conversationId,
               actionType: 'schedule_event',
+              // Sem durationMin (02/10, revisão): o 60 fixo fazia a aprovação
+              // de uma REMARCAÇÃO esticar a consulta de 30 min para 60 e tomar
+              // o horário seguinte do profissional. Criar já nasce com 60; mover
+              // mantém a duração que a consulta tinha.
               payload: {
                 startsLocal: s.startsLocal,
                 title,
                 timezone: settings.businessTimezone || 'America/Sao_Paulo',
-                durationMin: 60,
                 ...(s.profissional ? { profissional: s.profissional } : {}),
                 ...(s.modo ? { modo: s.modo } : {}),
               },
@@ -1233,20 +1247,60 @@ export async function dispatchInboundToAiReply(
             })
             .onConflictDoNothing()
             .returning({ id: agentActionRequests.id })
+          // ⚠️ Não entrou (02/10, revisão): o índice único deixa UM pedido de
+          // agendamento pendente por contato. A mãe que combina a consulta do
+          // segundo filho com o primeiro pedido ainda na fila ouvia "vou
+          // confirmar" — e esse segundo pedido sumia sem aviso. Se o pendente
+          // é OUTRO (outro horário, ou uma consulta nova que não é a mesma
+          // repetida), a nota diz que este NÃO foi registrado e o dono é
+          // avisado; o marcador só repetido segue com a nota de sempre.
+          let naoRegistrado: string | null = null
+          if (!inserted.length) {
+            const pendente = firstOrNull(
+              await db
+                .select({ payload: agentActionRequests.payload })
+                .from(agentActionRequests)
+                .where(
+                  and(
+                    eq(agentActionRequests.accountId, accountId),
+                    eq(agentActionRequests.contactId, contactId),
+                    eq(agentActionRequests.actionType, 'schedule_event'),
+                    eq(agentActionRequests.status, 'pending'),
+                  ),
+                )
+                .limit(1),
+            )?.payload as { startsLocal?: unknown; title?: unknown; profissional?: unknown } | undefined
+            const pInicio = typeof pendente?.startsLocal === 'string' ? pendente.startsLocal : null
+            const pTitulo = typeof pendente?.title === 'string' ? pendente.title : ''
+            const pProf = typeof pendente?.profissional === 'string' ? pendente.profissional.trim() : ''
+            const mesmoHorario = pInicio !== null && pInicio === s.startsLocal
+            const repetido =
+              mesmoHorario &&
+              tituloNormalizado(pTitulo) === tituloNormalizado(title) &&
+              pProf === (s.profissional ?? '').trim()
+            // Sem o pendente na leitura (resolvido no meio): este também não entrou.
+            if (!pendente || (!repetido && (!mesmoHorario || s.modo?.tipo === 'nova'))) {
+              naoRegistrado = pInicio ? `"${pTitulo || 'Reunião'}" para ${curto(pInicio)}` : 'outro agendamento'
+            }
+          }
           await postInternalNote({
             conversationId,
             text: inserted.length
               ? `📅 IA combinou "${title}" para ${when}${modoTxt} — aguardando sua aprovação em Precisa de você. O cliente foi avisado de que você vai confirmar.`
-              : `📅 IA combinou "${title}" para ${when}${modoTxt} — já havia um pedido pendente deste contato em Precisa de você.`,
+              : naoRegistrado
+                ? `📅 IA combinou "${title}" para ${when}${modoTxt}, mas o agendamento de "${title}" para ${when} NÃO foi registrado porque já há um pedido pendente deste contato em Precisa de você (${naoRegistrado}). Resolva o pendente e marque este na Agenda — o cliente pode ter ouvido que você vai confirmar.`
+                : `📅 IA combinou "${title}" para ${when}${modoTxt} — já havia um pedido pendente deste contato em Precisa de você.`,
           }).catch(() => {})
-          if (inserted.length && configOwnerUserId) {
+          if ((inserted.length || naoRegistrado) && configOwnerUserId) {
             const { notifyUsers } = await import('@/lib/orchestration/actions')
             await notifyUsers({
               accountId,
               userIds: [configOwnerUserId],
               type: 'approval_required',
-              title: `Aprovar: marcar "${title}"`,
-              body: `${when} — combinado com o cliente na conversa. Aprovar marca na Agenda e confirma pra ele.`,
+              title: inserted.length ? `Aprovar: marcar "${title}"` : `NÃO registrado: marcar "${title}"`,
+              body: inserted.length
+                ? `${when} — combinado com o cliente na conversa. Aprovar marca na Agenda e confirma pra ele.`
+                : `${when}${modoTxt} — combinado na conversa, mas já há um pedido pendente deste contato (${naoRegistrado}). Resolva o pendente em Precisa de você e marque este na Agenda.`,
               contactId,
               conversationId,
             }).catch(() => 0)
@@ -1265,17 +1319,20 @@ export async function dispatchInboundToAiReply(
           startsLocal: dirs.schedule.startsLocal,
           title: dirs.schedule.title || 'Reunião',
           profissional: dirs.schedule.profissional,
-          // 02/10/2026: nova / remarca X (4º campo). Ausente = o de sempre.
+          // 02/10/2026: nova / remarca X (4º campo). Ausente: cria sem consulta;
+          // com UMA compatível, move; senão não mexe (revisão de 02/10).
           modo: dirs.schedule.modo ?? null,
           timezone: settings.businessTimezone,
         })
         const tz = settings.businessTimezone || 'America/Sao_Paulo'
         if (ev && 'naoAchou' in ev) {
-          // "remarca X" sem consulta deste contato em X: nada foi mexido, mas a
-          // resposta (que já saiu) pode ter dito ao cliente que remarcou. Fica
-          // visível na conversa e o dono é avisado — falha calada aqui vira
-          // paciente chegando no horário que achava ter remarcado.
-          console.warn('[ai auto-reply] remarcação sem alvo:', JSON.stringify(ev))
+          // O marcador não mexeu em nada (remarca sem alvo; e, desde a revisão
+          // de 02/10, sem dizer nova/remarcação, profissional ocupado, troca de
+          // profissional), mas a resposta (que já saiu) pode ter dito ao
+          // cliente que marcou/remarcou. Fica visível na conversa e o dono é
+          // avisado — falha calada aqui vira paciente chegando no horário que
+          // achava ter marcado.
+          console.warn('[ai auto-reply] agendamento não feito:', JSON.stringify(ev))
           const nota = notaDaRemarcacaoSemAlvo(ev, tz)
           await postInternalNote({ conversationId, text: nota }).catch(() => {})
           if (configOwnerUserId) {
@@ -1284,7 +1341,7 @@ export async function dispatchInboundToAiReply(
               accountId,
               userIds: [configOwnerUserId],
               type: 'agent_action',
-              title: 'IA não conseguiu remarcar',
+              title: tituloDoAvisoSemAlvo(ev),
               body: nota.replace(/^📅\s*/, ''),
               contactId,
               conversationId,
@@ -1303,19 +1360,22 @@ export async function dispatchInboundToAiReply(
           const when = quandoDaNota(ev.startsAt, tz)
           await postInternalNote({
             conversationId,
-            text: notaDoAgendamentoDaIa(ev, tz, { profissional: dirs.schedule.profissional }),
+            text: notaDoAgendamentoDaIa(ev, tz),
           }).catch(() => {})
           // Marcador repetido (nada criado nem movido): sem aviso de novo.
           if (configOwnerUserId && ev.acao !== 'manteve') {
             const { notifyUsers } = await import('@/lib/orchestration/actions')
             const remarcou = ev.acao === 'moveu'
+            // Remarcou (revisão de 02/10): o título é o da consulta movida (de
+            // quem ela é), com o que a IA disse se for outro, e o aviso de
+            // consulta que ficou no horário antigo.
             await notifyUsers({
               accountId,
               userIds: [configOwnerUserId],
               type: 'agent_action',
               title: remarcou ? `IA remarcou: ${ev.title}` : `IA agendou: ${ev.title}`,
               body: remarcou
-                ? `${ev.movidoDe ? `De ${quandoDaNota(ev.movidoDe, tz)} para ` : ''}${when} — remarcado pela IA na conversa. Confira na Agenda.`
+                ? `IA ${resumoDaRemarcacao(ev, tz)} na conversa. Confira na Agenda.${avisoDoQueFicou(ev, tz)}`
                 : `${when} — marcado pela IA na conversa. Confira na Agenda.`,
               contactId,
               conversationId,

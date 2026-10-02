@@ -36,7 +36,16 @@ const h = vi.hoisted(() => ({
   // 🙋 encerramento (perda/troca de funil decide pausa × desliga) e aviso ao dono.
   applyCloseActions: vi.fn(),
   sendOwnerAlert: vi.fn(),
+  // 📅 Agendar (revisão de 02/10): aviso ao dono e o agendamento em si.
+  notifyUsers: vi.fn(),
+  scheduleEventFromAi: vi.fn(),
   state: {
+    // 📅 Pedido de agendamento com aprovação: o que o INSERT devolve (vazio =
+    // conflito no índice de pedido pendente), o que foi inserido e o pedido
+    // pendente que a leitura acha.
+    insertReturning: [] as { id: string }[],
+    inserts: [] as Record<string, unknown>[],
+    pendingSchedule: [] as { payload: unknown }[],
     // 🏁 marcador "até onde a última resposta viu" (reply-marker.ts):
     // string ISO = há marca · null = sem marca · undefined = Redis fora.
     coveredUntil: null as string | null | undefined,
@@ -132,11 +141,41 @@ vi.mock('@/lib/collections/reply-context', async (importOriginal) => ({
   claimReplyNote: h.claimReplyNote,
 }))
 
+// 📅 Agendar: o agendamento, os horários ocupados e o aviso ao dono trocados
+// por stubs (cada um é testado no próprio arquivo).
+vi.mock('./schedule-actions', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./schedule-actions')>()),
+  scheduleEventFromAi: h.scheduleEventFromAi,
+}))
+vi.mock('./busy-slots', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./busy-slots')>()),
+  loadBusySlots: vi.fn(async () => []),
+  loadBusyByCalendar: vi.fn(async () => ({ agendas: [], ocupados: new Map() })),
+  loadBookedForContact: vi.fn(async () => []),
+}))
+vi.mock('@/lib/google/sync', () => ({ syncAccountCalendars: vi.fn(async () => {}) }))
+vi.mock('@/lib/orchestration/actions', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/orchestration/actions')>()),
+  notifyUsers: h.notifyUsers,
+}))
+
 vi.mock('@/db', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/db')>()
   return {
     ...actual,
     db: {
+      // 📅 Pedido de agendamento com aprovação (o único INSERT com RETURNING
+      // que estes testes exercitam).
+      insert: () => ({
+        values: (v: Record<string, unknown>) => {
+          h.state.inserts.push(v)
+          const done = Promise.resolve(undefined)
+          return Object.assign(done, {
+            onConflictDoNothing: () => ({ returning: async () => h.state.insertReturning }),
+            returning: async () => h.state.insertReturning,
+          })
+        },
+      }),
       // Two select chains: automations (auto-responder guard) and
       // conversations (eligibility read). Distinguished by the table
       // passed to .from() — real table objects survive via importOriginal.
@@ -174,6 +213,11 @@ vi.mock('@/db', async (importOriginal) => {
               if (isHandoffContext) {
                 const notes = Promise.resolve(h.state.handoffNotes)
                 return { limit: () => notes, orderBy: () => ({ limit: () => notes }) }
+              }
+              // 📅 O pedido de agendamento pendente (revisão de 02/10).
+              if (table === actual.agentActionRequests && !!fields && 'payload' in fields) {
+                const pend = Promise.resolve(h.state.pendingSchedule)
+                return { limit: () => pend, orderBy: () => ({ limit: () => pend }) }
               }
               return {
                 limit: () => {
@@ -278,6 +322,13 @@ beforeEach(() => {
   h.applyCloseActions.mockResolvedValue({ resolved: false, movedTo: null, lost: false })
   h.sendOwnerAlert.mockReset()
   h.sendOwnerAlert.mockResolvedValue(undefined)
+  h.notifyUsers.mockReset()
+  h.notifyUsers.mockResolvedValue(1)
+  h.scheduleEventFromAi.mockReset()
+  h.scheduleEventFromAi.mockResolvedValue(null)
+  h.state.insertReturning = []
+  h.state.inserts = []
+  h.state.pendingSchedule = []
   h.state.claim = true
   h.state.updatePayload = null
   h.state.sqlCalls = []
@@ -898,5 +949,139 @@ describe('dispatchInboundToAiReply — pausa ao pedir um humano', () => {
     await dispatchInboundToAiReply(ARGS)
     const prompt = (h.generateReply.mock.calls[0][0] as { systemPrompt: string }).systemPrompt
     expect(prompt).not.toContain('HANDED OFF TO A HUMAN')
+  })
+})
+
+// 📅 Revisão de 02/10 — agendar.
+describe('dispatchInboundToAiReply — [[AGENDAR]] com aprovação (Precisa de você)', () => {
+  const comAprovacao = () =>
+    h.loadAiConfig.mockResolvedValue(
+      aiConfig({ tools: ['schedule'], autonomy: { actions: { schedule_event: 'approve' } } } as Partial<AiConfig>),
+    )
+  const notas = () => h.postInternalNote.mock.calls.map((c) => (c[0] as { text: string }).text)
+
+  it('entrou na fila: o pedido vai SEM duração fixa (mover mantém a da consulta) e o dono é chamado para aprovar', async () => {
+    comAprovacao()
+    h.state.insertReturning = [{ id: 'req-1' }]
+    h.generateReply.mockResolvedValue({
+      text: 'Vou confirmar esse horário e já te retorno!\n[[AGENDAR:2026-10-23T10:00|Avaliação · Bianca|Dr. Otávio|nova]]',
+      handoff: false,
+    })
+    await dispatchInboundToAiReply(ARGS)
+
+    expect(h.state.inserts).toHaveLength(1)
+    const payload = h.state.inserts[0].payload as Record<string, unknown>
+    expect(payload).toMatchObject({
+      startsLocal: '2026-10-23T10:00',
+      title: 'Avaliação · Bianca',
+      profissional: 'Dr. Otávio',
+      modo: { tipo: 'nova' },
+    })
+    expect(payload).not.toHaveProperty('durationMin')
+    expect(notas().some((t) => t.includes('aguardando sua aprovação'))).toBe(true)
+    expect(h.notifyUsers).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'approval_required', title: 'Aprovar: marcar "Avaliação · Bianca"' }),
+    )
+  })
+
+  it('já havia OUTRO pedido pendente (outro horário): este NÃO foi registrado — a nota diz e o dono é avisado', async () => {
+    // A mãe combinou a consulta do segundo filho com o primeiro pedido ainda
+    // na fila: o índice único descartava este sem ninguém saber.
+    comAprovacao()
+    h.state.insertReturning = []
+    h.state.pendingSchedule = [{ payload: { startsLocal: '2026-10-21T09:30', title: 'Avaliação · Davi' } }]
+    h.generateReply.mockResolvedValue({
+      text: 'Vou confirmar e te retorno!\n[[AGENDAR:2026-10-23T10:00|Avaliação · Bianca||nova]]',
+      handoff: false,
+    })
+    await dispatchInboundToAiReply(ARGS)
+
+    const nota = notas().find((t) => t.includes('NÃO foi registrado'))
+    expect(nota).toContain(
+      'o agendamento de "Avaliação · Bianca" para 23/10 às 10:00 NÃO foi registrado porque já há um pedido pendente',
+    )
+    expect(nota).toContain('"Avaliação · Davi" para 21/10 às 09:30')
+    expect(h.notifyUsers).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'approval_required', title: 'NÃO registrado: marcar "Avaliação · Bianca"' }),
+    )
+  })
+
+  it('"nova" no MESMO horário de um pendente diferente (dois filhos, duas cadeiras): também avisa', async () => {
+    comAprovacao()
+    h.state.pendingSchedule = [
+      { payload: { startsLocal: '2026-10-23T10:00', title: 'Avaliação · Davi', profissional: 'Dra. Marta' } },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Vou confirmar!\n[[AGENDAR:2026-10-23T10:00|Avaliação · Bianca|Dr. Otávio|nova]]',
+      handoff: false,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(notas().some((t) => t.includes('NÃO foi registrado'))).toBe(true)
+    expect(h.notifyUsers).toHaveBeenCalledTimes(1)
+  })
+
+  it('o MESMO pedido repetido (marcador em turnos seguidos): só a nota de sempre, sem aviso', async () => {
+    comAprovacao()
+    h.state.pendingSchedule = [
+      { payload: { startsLocal: '2026-10-23T10:00', title: 'Avaliação · Bianca', profissional: 'Dr. Otávio' } },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Vou confirmar!\n[[AGENDAR:2026-10-23T10:00|Avaliação  Bianca|Dr. Otávio|nova]]',
+      handoff: false,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(notas().some((t) => t.includes('já havia um pedido pendente deste contato'))).toBe(true)
+    expect(notas().some((t) => t.includes('NÃO foi registrado'))).toBe(false)
+    expect(h.notifyUsers).not.toHaveBeenCalled()
+  })
+})
+
+describe('dispatchInboundToAiReply — [[AGENDAR]] que não mexeu em nada', () => {
+  it('sem dizer nova/remarcação com duas consultas: nota na conversa e aviso ao dono com o porquê', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ tools: ['schedule'] } as Partial<AiConfig>))
+    h.scheduleEventFromAi.mockResolvedValue({
+      naoAchou: true,
+      motivo: 'sem-modo',
+      deLocal: null,
+      startsLocal: '2026-10-23T10:00',
+      titulo: 'Avaliação · Bianca',
+      consultas: 2,
+    })
+    h.generateReply.mockResolvedValue({ text: 'Marquei!\n[[AGENDAR:2026-10-23T10:00|Avaliação · Bianca]]', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+
+    const nota = h.postInternalNote.mock.calls
+      .map((c) => (c[0] as { text: string }).text)
+      .find((t) => t.startsWith('📅'))
+    expect(nota).toContain(
+      'sem dizer se era consulta nova ou remarcação; o contato tem 2 consultas marcadas — nada foi alterado',
+    )
+    expect(h.notifyUsers).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'agent_action', title: 'IA não marcou: faltou dizer se era consulta nova ou remarcação' }),
+    )
+  })
+
+  it('remarcou: o aviso ao dono diz de quem é a consulta e o que ficou no horário antigo', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ tools: ['schedule'] } as Partial<AiConfig>))
+    h.scheduleEventFromAi.mockResolvedValue({
+      eventId: 'ev-davi',
+      startsAt: '2026-10-23T13:00:00.000Z',
+      title: 'Avaliação · Davi',
+      tituloAntigo: 'Avaliação · Davi',
+      tituloDaIa: 'Avaliação · Bianca',
+      acao: 'moveu',
+      rescheduled: true,
+      movidoDe: '2026-10-21T12:30:00.000Z',
+      ficouNoHorarioAntigo: [
+        { startsAt: '2026-10-21T12:30:00.000Z', agenda: 'Dr. Otávio Prates', titulo: 'Avaliação · Davi' },
+      ],
+    })
+    h.generateReply.mockResolvedValue({ text: 'Remarquei!\n[[AGENDAR:2026-10-23T10:00|Avaliação · Bianca]]', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+
+    const aviso = h.notifyUsers.mock.calls[0][0] as { title: string; body: string }
+    expect(aviso.title).toBe('IA remarcou: Avaliação · Davi')
+    expect(aviso.body).toContain('a IA a chamou de "Avaliação · Bianca"')
+    expect(aviso.body).toContain('⚠️ Ficou outra consulta deste contato')
   })
 })

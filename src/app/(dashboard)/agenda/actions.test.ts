@@ -522,7 +522,7 @@ describe('remarcação no modal de compromisso NOVO (02/10)', () => {
       [{ id: 'c-1' }], // o paciente é da conta
     )
 
-    const res = await createEvent({ ...NOVA, calendarId: 'cal-a', remarcaEventoId: X })
+    const res = await createEvent({ ...NOVA, calendarId: 'cal-a', remarcaEventoId: X, tituloDigitado: true })
 
     expect(res).toEqual({ id: X, error: null, confirmacao: null })
     expect(passos()).toEqual(['update', 'google:update'])
@@ -537,6 +537,30 @@ describe('remarcação no modal de compromisso NOVO (02/10)', () => {
       remindersSent: 0,
     })
     expect(h.push).toHaveBeenCalledWith('acc-1', X, 'update')
+  })
+
+  it('revisão de 02/10: título auto-preenchido (nome da mãe) e campos em branco NÃO apagam o que X tinha', async () => {
+    // O modal põe o nome do contato no título vazio; descrição e local nascem
+    // em branco. Antes isso ia inteiro para X: o título "Avaliação · Davi"
+    // virava "Rosana Moura" e a observação de X sumia.
+    h.state.results.push([X_DE_PE], [ANTES_X], [{ googleCalendarId: 'a@group.calendar.google.com', connectionId: 'conn-1' }], [{ id: 'c-1' }])
+
+    const res = await createEvent({
+      ...NOVA,
+      title: 'Rosana Moura',
+      location: '',
+      description: '',
+      calendarId: 'cal-a',
+      remarcaEventoId: X,
+      tituloDigitado: false,
+    })
+
+    expect(res.id).toBe(X)
+    const set = gravado()!
+    expect(set).not.toHaveProperty('title')
+    expect(set).not.toHaveProperty('description')
+    expect(set).not.toHaveProperty('location')
+    expect(set).toMatchObject({ startsAt: '2026-10-14T12:00:00.000Z', endsAt: '2026-10-14T13:00:00.000Z', contactId: 'c-1' })
   })
 
   it('X válida em outra agenda: troca de agenda pelo caminho da edição (apaga na antiga, cria na nova)', async () => {

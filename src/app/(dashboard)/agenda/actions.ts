@@ -32,7 +32,12 @@ import {
   conferirEdicaoSemCaixa,
   descartarConfirmacaoPendente,
 } from '@/lib/agenda/confirmacao-fila'
-import { aindaVaiAcontecer, ERRO_REMARCACAO_INDISPONIVEL, podeRemarcar } from '@/lib/agenda/remarcacao'
+import {
+  aindaVaiAcontecer,
+  camposDaRemarcacao,
+  ERRO_REMARCACAO_INDISPONIVEL,
+  podeRemarcar,
+} from '@/lib/agenda/remarcacao'
 
 export type CalendarRow = {
   id: string
@@ -117,10 +122,18 @@ export type EventInput = {
 export type NovoEventoInput = EventInput & {
   /**
    * A consulta que este salvar REMARCA. Presente: nada é criado — a consulta X
-   * é editada (updateEvent) com o que está no formulário, depois de o servidor
-   * conferir que ela é desta conta, do MESMO paciente, está de pé e é futura.
+   * é editada (updateEvent), depois de o servidor conferir que ela é desta
+   * conta, do MESMO paciente, está de pé e é futura. Desde a revisão de 02/10
+   * vai só o que remarcar muda (camposDaRemarcacao): o título de X fica, salvo
+   * se a recepção digitou outro; descrição e local, só se preenchidos.
    */
   remarcaEventoId?: string | null
+  /**
+   * A recepção DIGITOU o título (02/10, revisão). O nome do contato que o
+   * modal põe no título vazio não conta — na remarcação ele trocaria o nome
+   * do filho, no título de X, pelo da mãe.
+   */
+  tituloDigitado?: boolean
 }
 
 /**
@@ -489,8 +502,11 @@ export async function createEvent(
       return { id: null, error: 'Início e fim são obrigatórios' }
 
     // 🔁 Remarcação (02/10): a recepção respondeu no modal que esta consulta
-    // é a consulta X remarcada. Nada é criado — X é EDITADA com o que está no
-    // formulário, pelo MESMO caminho da edição (updateEvent): o histórico
+    // é a consulta X remarcada. Nada é criado — X é EDITADA pelo MESMO caminho
+    // da edição (updateEvent), só com o que remarcar muda (camposDaRemarcacao,
+    // revisão de 02/10: antes ia o formulário inteiro, e o título de X — o
+    // nome de QUAL filho — virava o nome da mãe, e a descrição e o local de X
+    // eram apagados pelos campos em branco do compromisso novo): o histórico
     // fica, o Google move (inclusive trocando de agenda — planoDaEdicao), os
     // lembretes zeram com a data nova e a confirmação ao paciente sai como
     // "remarcada" (ou "agora é com", se só trocou o profissional) pela fila.
@@ -500,7 +516,7 @@ export async function createEvent(
     // O servidor confere X ANTES de gravar qualquer coisa: desta conta, do
     // MESMO paciente do formulário, de pé e futura. Entre abrir o modal e
     // salvar, X pode ter sido cancelada (no Google, por outra pessoa).
-    const { remarcaEventoId, ...doFormulario } = input
+    const { remarcaEventoId } = input
     if (remarcaEventoId) {
       const alvo =
         UUID.test(remarcaEventoId) && input.contactId
@@ -521,7 +537,7 @@ export async function createEvent(
       if (!podeRemarcar(alvo, input.contactId, new Date())) {
         return { id: null, error: ERRO_REMARCACAO_INDISPONIVEL }
       }
-      const r = await updateEvent(remarcaEventoId, doFormulario)
+      const r = await updateEvent(remarcaEventoId, camposDaRemarcacao(input))
       if (r.error) return { id: null, error: r.error }
       return { id: remarcaEventoId, error: null, confirmacao: r.confirmacao }
     }

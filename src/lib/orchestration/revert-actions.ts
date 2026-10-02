@@ -47,6 +47,43 @@ export interface RevertResult {
   error?: string
 }
 
+/** O mesmo instante (a coluna volta como texto do Postgres; o estado guarda ISO)? */
+function mesmoInstante(a: string, b: string): boolean {
+  const ta = new Date(a).getTime()
+  const tb = new Date(b).getTime()
+  return Number.isFinite(ta) && Number.isFinite(tb) && Math.abs(ta - tb) < 60_000
+}
+
+/**
+ * O que desfazer um `schedule_event` aprovado faz, pelo `revert_state` gravado
+ * na execução (02/10, revisão). Pura.
+ *   - criou   → cancela a consulta criada (como sempre);
+ *   - moveu   → devolve a consulta ao horário anterior (`prevStartsAt`/
+ *               `prevEndsAt`), só se ela ainda está no horário para onde foi
+ *               movida (`movidaPara`);
+ *   - nao-sei → estado antigo, sem `acao`: não dá para saber se criou ou
+ *               moveu — nada é feito sozinho.
+ */
+export function planoDeDesfazerAgendamento(
+  st: Record<string, unknown>,
+):
+  | { tipo: 'cancelar' }
+  | { tipo: 'restaurar'; startsAt: string; endsAt: string; movidaPara: string | null }
+  | { tipo: 'nao-sei' } {
+  if (st.acao === 'criou') return { tipo: 'cancelar' }
+  const prevStartsAt = typeof st.prevStartsAt === 'string' ? st.prevStartsAt : null
+  const prevEndsAt = typeof st.prevEndsAt === 'string' ? st.prevEndsAt : null
+  if (st.acao === 'moveu' && prevStartsAt && prevEndsAt) {
+    return {
+      tipo: 'restaurar',
+      startsAt: prevStartsAt,
+      endsAt: prevEndsAt,
+      movidaPara: typeof st.startsAt === 'string' ? st.startsAt : null,
+    }
+  }
+  return { tipo: 'nao-sei' }
+}
+
 export async function revertOrchestrationAction(input: RevertInput): Promise<RevertResult> {
   const plan = REVERT_MATRIX[input.action]
   const st = input.revertState ?? {}
@@ -129,6 +166,72 @@ async function undoAction(input: RevertInput, st: Record<string, unknown>): Prom
     case 'schedule_event': {
       const eventId = typeof st.eventId === 'string' ? st.eventId : null
       if (!eventId) return { ok: false, done: '', error: 'Não guardamos o compromisso desta ação.' }
+      const plano = planoDeDesfazerAgendamento(st)
+      const pausarIa = async () => {
+        if (input.conversationId) {
+          await db
+            .update(conversations)
+            .set({ aiAutoreplyDisabled: true })
+            .where(and(eq(conversations.id, input.conversationId), eq(conversations.accountId, input.accountId)))
+        }
+      }
+      // 🔁 A aprovação MOVEU uma consulta que já existia (02/10, revisão):
+      // desfazer devolve o horário anterior. Antes cancelava — e a consulta
+      // movida podia ser a do irmão, que nem tinha pedido nada.
+      if (plano.tipo === 'restaurar') {
+        const atual = firstOrNull(
+          await db
+            .select({ startsAt: calEvents.startsAt, status: calEvents.status })
+            .from(calEvents)
+            .where(and(eq(calEvents.id, eventId), eq(calEvents.accountId, input.accountId)))
+            .limit(1),
+        )
+        if (!atual || atual.status !== 'confirmed') {
+          return { ok: false, done: '', error: 'A consulta remarcada não está mais de pé na Agenda — nada foi mexido. Confira na Agenda.' }
+        }
+        // Mexeram nela depois (a recepção remarcou de novo): devolver o
+        // horário antigo desfaria o trabalho de outra pessoa.
+        if (plano.movidaPara && !mesmoInstante(atual.startsAt, plano.movidaPara)) {
+          return {
+            ok: false,
+            done: '',
+            error: 'A consulta já foi mexida depois desta remarcação — nada foi desfeito. Ajuste o horário na Agenda.',
+          }
+        }
+        await db
+          .update(calEvents)
+          .set({
+            startsAt: plano.startsAt,
+            endsAt: plano.endsAt,
+            // Horário mudou de novo: os lembretes recomeçam (como em toda remarcação).
+            remindersSent: 0,
+            reminderBlock: null,
+            reminderBlockAt: null,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(and(eq(calEvents.id, eventId), eq(calEvents.accountId, input.accountId)))
+        try {
+          const { pushEventToGoogle } = await import('@/lib/google/sync')
+          await pushEventToGoogle(input.accountId, eventId, 'update')
+        } catch (err) {
+          console.error('[revert] google update falhou:', err instanceof Error ? err.message : err)
+        }
+        await pausarIa()
+        return {
+          ok: true,
+          done: 'Remarcação desfeita: a consulta voltou para o horário anterior e a IA foi pausada nesta conversa — avise o cliente, que tinha recebido o horário novo.',
+        }
+      }
+      // Sem dizer o que a aprovação fez (pedido executado antes de 02/10):
+      // não dá para saber se ela criou ou moveu — cancelar poderia apagar a
+      // consulta de outra pessoa da família. Fica com a recepção.
+      if (plano.tipo === 'nao-sei') {
+        return {
+          ok: false,
+          done: '',
+          error: 'Este agendamento é de antes da correção de 02/10 e não diz se a IA criou a consulta ou remarcou uma que já existia — desfaça na Agenda.',
+        }
+      }
       await db
         .update(calEvents)
         .set({ status: 'cancelled', updatedAt: new Date().toISOString() })
@@ -139,12 +242,7 @@ async function undoAction(input: RevertInput, st: Record<string, unknown>): Prom
       } catch (err) {
         console.error('[revert] google delete falhou:', err instanceof Error ? err.message : err)
       }
-      if (input.conversationId) {
-        await db
-          .update(conversations)
-          .set({ aiAutoreplyDisabled: true })
-          .where(and(eq(conversations.id, input.conversationId), eq(conversations.accountId, input.accountId)))
-      }
+      await pausarIa()
       return { ok: true, done: 'Compromisso cancelado na Agenda e a IA pausada nesta conversa — combine outro horário com o cliente.' }
     }
     case 'move_deal': {
