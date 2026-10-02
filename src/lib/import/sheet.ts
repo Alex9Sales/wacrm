@@ -5,6 +5,12 @@
 // `exceljs` (só pro XLSX) + um leitor de CSV próprio. A saída continua a
 // mesma: uma linha = um objeto {cabeçalho: valor}, célula vazia = ''.
 
+import { tagRow } from './row-number'
+
+// Cada objeto devolvido leva a linha da planilha de onde veio (02/10/2026 —
+// a prévia da importação aponta "Linha 7: 'a combinar'"). Ver row-number.ts.
+export { sheetRowNumber } from './row-number'
+
 /** Lê um arquivo CSV ou XLSX e devolve as linhas como objetos (chave = cabeçalho). */
 export async function parseSheet(
   file: File,
@@ -66,7 +72,10 @@ export async function parseXlsx(buf: ArrayBuffer): Promise<Record<string, unknow
       if (v !== '' && v != null) hasValue = true
       obj[h.key] = v ?? ''
     }
-    if (hasValue) rows.push(obj)
+    if (hasValue) {
+      tagRow(obj, rowNumber)
+      rows.push(obj)
+    }
   })
   return rows
 }
@@ -131,15 +140,18 @@ export function parseCsv(text: string): Record<string, unknown>[] {
   if (rows.length === 0) return []
   const headers = rows[0].map((h) => h.trim())
   const out: Record<string, unknown>[] = []
-  for (const r of rows.slice(1)) {
-    if (r.every((c) => c.trim() === '')) continue
+  rows.slice(1).forEach((r, idx) => {
+    if (r.every((c) => c.trim() === '')) return
     const obj: Record<string, unknown> = {}
     headers.forEach((h, i) => {
       if (!h) return
       obj[h] = r[i] ?? ''
     })
+    // Registro idx da lista (pós-cabeçalho) = linha idx+2 da planilha; linha
+    // em branco pulada conta, como no Excel.
+    tagRow(obj, idx + 2)
     out.push(obj)
-  }
+  })
   return out
 }
 

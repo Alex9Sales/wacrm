@@ -17,6 +17,11 @@ import {
 import { listPipelines, listStages } from '@/app/(dashboard)/pipelines/actions'
 import type { Pipeline, PipelineStage } from '@/types'
 import { parseSheet, downloadCsv } from '@/lib/import/sheet'
+import {
+  formatMoneyError,
+  readMoneyColumn,
+  type MoneyCellError,
+} from '@/lib/import/money'
 import { Button } from '@/components/ui/button'
 import {
   Upload,
@@ -27,6 +32,7 @@ import {
   Users,
   CheckCircle2,
   Receipt,
+  AlertTriangle,
 } from 'lucide-react'
 
 type ImportType = 'contacts' | 'deals' | 'transactions'
@@ -38,13 +44,9 @@ function norm(s: string) {
     .replace(/[\u0300-\u036f]/g, '')
     .trim()
 }
-function toNum(v: unknown): number {
-  if (typeof v === 'number') return isFinite(v) ? v : 0
-  const s = String(v ?? '').replace(/[^\d.,-]/g, '')
-  if (!s) return 0
-  const n = parseFloat(s.replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.'))
-  return isFinite(n) ? n : 0
-}
+
+/** Quantas linhas com valor inválido a prévia lista por extenso. */
+const MAX_MONEY_ERRORS = 10
 
 /** Casa cada campo a uma coluna do arquivo por regex tolerante ao cabeçalho. */
 function mapColumns(keys: string[], spec: Record<string, RegExp>) {
@@ -108,6 +110,12 @@ export function ImportPanel() {
   const [exporting, setExporting] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [done, setDone] = useState<string | null>(null)
+  // 💰 Valor que não é número (02/10/2026): antes o toNum arrancava o que não
+  // fosse dígito e "a combinar" entrava como R$ 0 calado. Agora a prévia
+  // lista as linhas (com o número da linha da planilha) e a importação só
+  // segue com a pessoa dizendo o que fazer com elas.
+  const [moneyErrors, setMoneyErrors] = useState<MoneyCellError[]>([])
+  const [acceptMoneyErrors, setAcceptMoneyErrors] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -126,6 +134,8 @@ export function ImportPanel() {
     setMatched([])
     setFileName('')
     setDone(null)
+    setMoneyErrors([])
+    setAcceptMoneyErrors(false)
   }, [])
 
   async function handleFile(file: File | undefined) {
@@ -169,6 +179,9 @@ export function ImportPanel() {
             segment: get(r, 'segment') || null,
           })),
         )
+        // Empresas e contatos não têm coluna de dinheiro.
+        setMoneyErrors([])
+        setAcceptMoneyErrors(false)
       } else if (type === 'transactions') {
         if (!cmap.phone) {
           toast.error(
@@ -181,35 +194,55 @@ export function ImportPanel() {
         const mappedCols = new Set(
           Object.values(cmap).filter(Boolean) as string[],
         )
+        // Valor da venda lido AQUI (mesma regra da tela: "1.028,67",
+        // "R$ 1.028,67", "1500 reais"…) e mandado já como número. Venda com
+        // valor que não é número não vai — R$ 0 numa venda é dado falso.
+        const amount = readMoneyColumn(
+          json,
+          cmap.amount,
+          (r) => get(r, 'contactName') || get(r, 'phone'),
+        )
         setRowsT(
-          json.map((r) => {
+          json.flatMap((r, i): ImportTransactionRow[] => {
+            if (amount.cells[i].invalid) return []
             const extra: Record<string, string> = {}
             for (const [k, v] of Object.entries(r)) {
               if (mappedCols.has(k)) continue
               const s = String(v ?? '').trim()
               if (s) extra[k.trim()] = s
             }
-            return {
-              phone: get(r, 'phone') || null,
-              contactName: get(r, 'contactName') || null,
-              occurredAt: get(r, 'occurredAt') || null,
-              amount: cmap.amount ? String(r[cmap.amount] ?? '') : null,
-              product: get(r, 'product') || null,
-              paymentMethod: get(r, 'paymentMethod') || null,
-              externalId: get(r, 'externalId') || null,
-              type: get(r, 'type') || null,
-              status: get(r, 'status') || null,
-              extra: Object.keys(extra).length ? extra : undefined,
-            }
+            return [
+              {
+                phone: get(r, 'phone') || null,
+                contactName: get(r, 'contactName') || null,
+                occurredAt: get(r, 'occurredAt') || null,
+                amount: amount.cells[i].value,
+                product: get(r, 'product') || null,
+                paymentMethod: get(r, 'paymentMethod') || null,
+                externalId: get(r, 'externalId') || null,
+                type: get(r, 'type') || null,
+                status: get(r, 'status') || null,
+                extra: Object.keys(extra).length ? extra : undefined,
+              },
+            ]
           }),
         )
+        setMoneyErrors(amount.errors)
+        setAcceptMoneyErrors(false)
       } else {
         if (!cmap.title && !cmap.companyName && !cmap.contactName) {
           toast.error('Não achei coluna de Oportunidade/Empresa/Contato.')
           return
         }
+        // Valor do negócio: mesma leitura; o inválido é listado na prévia e
+        // só entra (sem valor) se a pessoa marcar.
+        const value = readMoneyColumn(
+          json,
+          cmap.value,
+          (r) => get(r, 'title') || get(r, 'companyName') || get(r, 'contactName'),
+        )
         setRowsD(
-          json.map((r) => ({
+          json.map((r, i) => ({
             title: get(r, 'title') || null,
             companyName: get(r, 'companyName') || null,
             contactName: get(r, 'contactName') || null,
@@ -221,9 +254,11 @@ export function ImportPanel() {
             note: get(r, 'note') || null,
             responsible: get(r, 'responsible') || null,
             stage: get(r, 'stage') || null,
-            value: cmap.value ? toNum(r[cmap.value]) : 0,
+            value: value.cells[i].value ?? 0,
           })),
         )
+        setMoneyErrors(value.errors)
+        setAcceptMoneyErrors(false)
       }
       setFileName(file.name)
     } catch {
@@ -319,8 +354,10 @@ export function ImportPanel() {
     }
   }, [contactsToFunnel, pipelineId])
 
+  const blockedByMoney = moneyErrors.length > 0 && !acceptMoneyErrors
+
   async function runImport() {
-    if (count === 0) return
+    if (count === 0 || blockedByMoney) return
     setImporting(true)
     setDone(null)
     try {
@@ -371,6 +408,8 @@ export function ImportPanel() {
       setRowsT([])
       setFileName('')
       setMatched([])
+      setMoneyErrors([])
+      setAcceptMoneyErrors(false)
     } finally {
       setImporting(false)
     }
@@ -556,8 +595,9 @@ export function ImportPanel() {
         </Button>
       </div>
 
-      {/* Prévia */}
-      {count > 0 && (
+      {/* Prévia (também quando TODAS as vendas caíram por valor inválido —
+          o aviso tem que aparecer mesmo com 0 prontas). */}
+      {(count > 0 || moneyErrors.length > 0) && (
         <div className="space-y-3 rounded-xl border border-border bg-card p-4">
           <p className="flex items-center gap-2 text-sm font-medium text-foreground">
             <Users className="h-4 w-4 text-primary" />
@@ -576,12 +616,53 @@ export function ImportPanel() {
               ))}
             </div>
           )}
+          {moneyErrors.length > 0 && (
+            <div className="space-y-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-xs">
+              <p className="flex items-center gap-1.5 font-medium text-destructive">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                {moneyErrors.length}{' '}
+                {moneyErrors.length === 1
+                  ? 'linha com valor que não entendi'
+                  : 'linhas com valor que não entendi'}
+              </p>
+              <ul className="space-y-0.5 text-foreground">
+                {moneyErrors.slice(0, MAX_MONEY_ERRORS).map((e, i) => (
+                  <li key={`${e.line ?? 'x'}-${i}`}>{formatMoneyError(e)}</li>
+                ))}
+              </ul>
+              {moneyErrors.length > MAX_MONEY_ERRORS && (
+                <p className="text-muted-foreground">
+                  …e mais {moneyErrors.length - MAX_MONEY_ERRORS}.
+                </p>
+              )}
+              <p className="text-muted-foreground">
+                Corrija na planilha (ex.: 1.028,67) e envie o arquivo de novo
+                {type === 'transactions'
+                  ? ' — ou importe sem essas vendas.'
+                  : ' — ou importe deixando essas negociações sem valor.'}
+              </p>
+              <label className="flex items-center gap-2 text-foreground">
+                <input
+                  type="checkbox"
+                  checked={acceptMoneyErrors}
+                  onChange={(e) => setAcceptMoneyErrors(e.target.checked)}
+                  className="size-4 accent-primary"
+                />
+                {type === 'transactions'
+                  ? 'Importar mesmo assim — essas vendas ficam de fora'
+                  : 'Importar mesmo assim — essas negociações entram sem valor (R$ 0)'}
+              </label>
+            </div>
+          )}
           <p className="text-[11px] text-muted-foreground">
             {type === 'transactions'
               ? 'Casa o cliente pelo telefone e liga a venda a ele (cria o cliente se não existir). Re-importar o mesmo arquivo não duplica.'
               : 'Empresas/contatos já existentes são reaproveitados (casa por nome / telefone) — não duplica.'}
           </p>
-          <Button onClick={() => void runImport()} disabled={importing}>
+          <Button
+            onClick={() => void runImport()}
+            disabled={importing || count === 0 || blockedByMoney}
+          >
             {importing && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
             Importar {count}
           </Button>

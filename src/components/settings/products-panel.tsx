@@ -26,6 +26,8 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { parseSheet, downloadCsv } from '@/lib/import/sheet'
+import { mapProductRows } from '@/lib/import/products-sheet'
+import { formatMoneyError } from '@/lib/import/money'
 import {
   Package,
   Wrench,
@@ -41,57 +43,8 @@ function brl(n: number) {
   return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
-/** Header sem acento/caixa, p/ casar colunas de forma tolerante. */
-function norm(s: string) {
-  return s
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-}
-
-/** Valor de célula → número (aceita número, "100", "1.500,00", "150.50"). */
-function toPriceNum(v: unknown): number {
-  if (typeof v === 'number') return isFinite(v) ? v : 0
-  const s = String(v ?? '').replace(/[^\d.,-]/g, '')
-  if (!s) return 0
-  // Remove pontos de milhar (br) e vira o decimal por vírgula em ponto.
-  const n = parseFloat(s.replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.'))
-  return isFinite(n) ? n : 0
-}
-
-interface ParsedImport {
-  name: string
-  description: string | null
-  unitPrice: number
-  kind: ProductKind
-}
-
-/** Lê CSV ou XLSX e mapeia as colunas Nome/Preço/Descrição/Tipo. */
-async function parseSpreadsheet(file: File): Promise<ParsedImport[]> {
-  const json = await parseSheet(file)
-  if (json.length === 0) return []
-  const keys = Object.keys(json[0])
-  const find = (re: RegExp) => keys.find((k) => re.test(norm(k)))
-  const nameKey = find(/nome|produto|servico|item|name/)
-  const priceKey = find(/preco|valor|price/)
-  const descKey = find(/descri|detalhe|description|obs/)
-  const kindKey = find(/tipo|categoria|kind/)
-  if (!nameKey) return []
-  const out: ParsedImport[] = []
-  for (const row of json) {
-    const name = String(row[nameKey] ?? '').trim()
-    if (!name) continue
-    const kindRaw = kindKey ? norm(String(row[kindKey] ?? '')) : ''
-    out.push({
-      name,
-      description: descKey ? String(row[descKey] ?? '').trim() || null : null,
-      unitPrice: priceKey ? toPriceNum(row[priceKey]) : 0,
-      kind: /servi|service/.test(kindRaw) ? 'service' : 'product',
-    })
-  }
-  return out
-}
+/** Quantas linhas com preço inválido o aviso da importação lista por extenso. */
+const MAX_PRICE_ERRORS = 8
 
 type EditValue = {
   id?: string
@@ -247,16 +200,34 @@ export function ProductsPanel() {
     if (!file) return
     setImporting(true)
     try {
-      const parsed = await parseSpreadsheet(file)
+      // Preço (02/10/2026): linha com preço que não é número fica DE FORA e
+      // aparece no aviso com a linha da planilha — antes entrava a R$ 0 calada
+      // (lib/import/products-sheet).
+      const { items: parsed, errors } = mapProductRows(await parseSheet(file))
+      const errorLines = errors.slice(0, MAX_PRICE_ERRORS).map(formatMoneyError)
+      if (errors.length > MAX_PRICE_ERRORS) {
+        errorLines.push(`…e mais ${errors.length - MAX_PRICE_ERRORS}.`)
+      }
       if (parsed.length === 0) {
-        toast.error(
-          'Não achei itens. A planilha precisa de uma coluna de nome (ex.: "Nome do produto").',
-        )
+        if (errors.length > 0) {
+          // Toast não quebra linha — a lista vai separada por ";".
+          toast.error('Nenhum item com preço que eu entenda. Use, por exemplo, 1.028,67.', {
+            description: errorLines.join('; '),
+          })
+        } else {
+          toast.error(
+            'Não achei itens. A planilha precisa de uma coluna de nome (ex.: "Nome do produto").',
+          )
+        }
         return
       }
+      const priceWarning =
+        errors.length > 0
+          ? `\n\n${errors.length} ${errors.length === 1 ? 'linha tem' : 'linhas têm'} preço que não entendi e ${errors.length === 1 ? 'fica' : 'ficam'} DE FORA (corrija na planilha, ex.: 1.028,67, e importe de novo):\n${errorLines.join('\n')}`
+          : ''
       if (
         !window.confirm(
-          `Importar ${parsed.length} ${parsed.length === 1 ? 'item' : 'itens'} do arquivo "${file.name}"? Itens com nome já existente são ignorados.`,
+          `Importar ${parsed.length} ${parsed.length === 1 ? 'item' : 'itens'} do arquivo "${file.name}"? Itens com nome já existente são ignorados.${priceWarning}`,
         )
       )
         return
@@ -268,7 +239,7 @@ export function ProductsPanel() {
       toast.success(
         `${res.created} importado${res.created === 1 ? '' : 's'}${
           res.skipped > 0 ? ` · ${res.skipped} ignorado(s)` : ''
-        }`,
+        }${errors.length > 0 ? ` · ${errors.length} com preço inválido (fora)` : ''}`,
       )
       await load()
     } catch {

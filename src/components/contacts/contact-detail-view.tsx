@@ -31,6 +31,7 @@ import {
   type ScheduledMessageLite,
 } from '@/app/(dashboard)/inbox/schedule-actions';
 import { ScheduleMiniList } from '@/components/inbox/schedule-mini-list';
+import { CustomFieldInput } from '@/components/contacts/custom-field-input';
 import { CallButton } from '@/components/calls/call-button';
 import {
   TemplatePicker,
@@ -795,17 +796,32 @@ export function ContactDetailView({
                         <Label className="text-muted-foreground text-xs capitalize">
                           {field.field_name}
                         </Label>
-                        <Input
-                          value={customValues[field.id] ?? ''}
-                          onChange={(e) =>
-                            setCustomValues((prev) => ({
-                              ...prev,
-                              [field.id]: e.target.value,
-                            }))
-                          }
-                          placeholder={`Enter ${field.field_name}...`}
-                          className="bg-muted border-border text-foreground h-8 text-sm placeholder:text-muted-foreground"
-                        />
+                        {/* Moeda (02/10/2026): o mesmo campo da lateral e do
+                            negócio — aceita "1.028,67" e grava "1028.67"
+                            (lib/custom-fields/currency). Os outros tipos
+                            seguem texto livre aqui, como sempre. */}
+                        {field.field_type === 'currency' ? (
+                          <CustomFieldInput
+                            field={field}
+                            value={customValues[field.id] ?? ''}
+                            onChange={(val) =>
+                              setCustomValues((prev) => ({ ...prev, [field.id]: val }))
+                            }
+                            className="bg-muted border-border text-foreground h-8 text-sm placeholder:text-muted-foreground"
+                          />
+                        ) : (
+                          <Input
+                            value={customValues[field.id] ?? ''}
+                            onChange={(e) =>
+                              setCustomValues((prev) => ({
+                                ...prev,
+                                [field.id]: e.target.value,
+                              }))
+                            }
+                            placeholder={`Enter ${field.field_name}...`}
+                            className="bg-muted border-border text-foreground h-8 text-sm placeholder:text-muted-foreground"
+                          />
+                        )}
                       </div>
                     ))}
                     <Button

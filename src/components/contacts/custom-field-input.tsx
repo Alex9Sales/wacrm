@@ -1,6 +1,15 @@
 "use client";
 
+import { useState } from "react";
 import type { CustomField } from "@/types";
+import { MoneyInput } from "@/components/ui/money-input";
+import {
+  currencyInputToStored,
+  currencyStoredToInput,
+} from "@/lib/custom-fields/currency";
+
+const DEFAULT_CLASS =
+  "h-8 w-full rounded-lg border border-border bg-muted px-2.5 text-xs text-foreground outline-none focus:border-primary";
 
 /**
  * Editor de UM valor de campo personalizado. Renderiza o input conforme o
@@ -19,9 +28,7 @@ export function CustomFieldInput({
   onChange: (value: string) => void;
   className?: string;
 }) {
-  const base =
-    className ??
-    "h-8 w-full rounded-lg border border-border bg-muted px-2.5 text-xs text-foreground outline-none focus:border-primary";
+  const base = className ?? DEFAULT_CLASS;
   const type = field.field_type;
 
   // Lista (select)
@@ -80,23 +87,9 @@ export function CustomFieldInput({
     );
   }
 
-  // Moeda (R$) — input numérico com prefixo; guarda o número em string.
+  // Moeda (R$) — ver CurrencyFieldInput.
   if (type === "currency") {
-    return (
-      <div className="flex items-center gap-1">
-        <span className="text-xs text-muted-foreground">R$</span>
-        <input
-          type="number"
-          min={0}
-          step="0.01"
-          inputMode="decimal"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="0,00"
-          className={`${base} placeholder-muted-foreground`}
-        />
-      </div>
-    );
+    return <CurrencyFieldInput value={value} onChange={onChange} className={className} />;
   }
 
   // Texto (padrão)
@@ -107,5 +100,62 @@ export function CustomFieldInput({
       placeholder="—"
       className={`${base} placeholder-muted-foreground`}
     />
+  );
+}
+
+/**
+ * Campo de MOEDA (02/10/2026, Rafael colava "1.028,67" e o valor sumia: o
+ * antigo <input type="number"> recusa a vírgula e devolvia "" calado).
+ *
+ * Na tela é o MoneyInput (aceita "1.028,67", "R$ 1.028,67", "1028.67" e
+ * formata pt-BR ao sair do campo); pro pai — e pro banco — sobe o MESMO
+ * formato que o type="number" sempre gravou ("1028.67", "1500"), porque o
+ * Disparo, o filtro de público e a IA leem esse texto cru (ver
+ * lib/custom-fields/currency.ts). Texto que não é número sobe como digitado e
+ * o salvar recusa com aviso — nunca vira 0.
+ *
+ * O texto da tela é estado LOCAL: "1.028,67" e "1028.67" gravam igual, então
+ * não dá pra derivar a tela do valor do pai sem reformatar no meio da
+ * digitação. `shown` é o valor gravado que o texto representa; se o pai
+ * trocar o valor por fora (recarregou, outra conversa), a tela acompanha.
+ */
+function CurrencyFieldInput({
+  value,
+  onChange,
+  className,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  className?: string;
+}) {
+  const [text, setText] = useState(() => currencyStoredToInput(value));
+  const [shown, setShown] = useState(value);
+  if (value !== shown) {
+    setShown(value);
+    setText(currencyStoredToInput(value));
+  }
+  return (
+    <div className="flex items-center gap-1">
+      <span className="text-xs text-muted-foreground">R$</span>
+      <MoneyInput
+        value={text}
+        onValueChange={(next) => {
+          setText(next);
+          const stored = currencyInputToStored(next);
+          setShown(stored);
+          // Formatar ao sair do campo ("1028.67" → "1.028,67") não muda o
+          // valor gravado — não pode marcar o formulário como alterado.
+          if (stored !== value) onChange(stored);
+        }}
+        placeholder="0,00"
+        // O Input base traz md:text-sm e fundo próprio no escuro; no padrão
+        // o campo de moeda fica igual aos vizinhos (text-xs, bg-muted).
+        className={
+          className
+            ? `${className} placeholder-muted-foreground`
+            : `${DEFAULT_CLASS} placeholder-muted-foreground md:text-xs dark:bg-muted`
+        }
+      />
+    </div>
   );
 }
