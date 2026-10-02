@@ -2870,6 +2870,14 @@ export const calendarEvents = pgTable("calendar_events", {
 	// Agenda mostra o motivo no compromisso. Ver lib/ai/meeting-reminder-block.ts.
 	reminderBlock: text("reminder_block"),
 	reminderBlockAt: timestamp("reminder_block_at", { withTimezone: true, mode: 'string' }),
+	// Confirmação ao agendar ADIADA (migração 0204, 02/10): o salvar põe na fila
+	// e o worker manda só a versão final. Ver lib/agenda/confirmacao-fila.ts.
+	// due_at NULL = nada pendente; known = o que o paciente já sabe
+	// ({startsAt, calendarId, contactId}); result = último desfecho para a tela.
+	confirmationDueAt: timestamp("confirmation_due_at", { withTimezone: true, mode: 'string' }),
+	confirmationConversationId: uuid("confirmation_conversation_id"),
+	confirmationKnown: jsonb("confirmation_known"),
+	confirmationResult: jsonb("confirmation_result"),
 	// 'local' | 'google'
 	source: text().default('local').notNull(),
 	googleEventId: text("google_event_id"),
@@ -2886,6 +2894,8 @@ export const calendarEvents = pgTable("calendar_events", {
 	index("idx_calendar_events_starts").using("btree", table.startsAt.asc().nullsLast()),
 	index("idx_calendar_events_contact").using("btree", table.contactId.asc().nullsLast().op("uuid_ops")),
 	index("idx_calendar_events_deal").using("btree", table.dealId.asc().nullsLast().op("uuid_ops")),
+	// Só as confirmações pendentes (migração 0204): o worker lê só elas.
+	index("idx_calendar_events_confirmation_due").using("btree", table.confirmationDueAt.asc().nullsLast()).where(sql`(confirmation_due_at IS NOT NULL)`),
 	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "calendar_events_account_id_fkey" }).onDelete("cascade"),
 	foreignKey({ columns: [table.calendarId], foreignColumns: [calendars.id], name: "calendar_events_calendar_id_fkey" }).onDelete("cascade"),
 	foreignKey({ columns: [table.ownerUserId], foreignColumns: [user.id], name: "calendar_events_owner_user_id_fkey" }).onDelete("set null"),

@@ -17,6 +17,15 @@
 //
 // Texto fixo, sem IA: confirmação de horário não pode sair com o dia errado
 // porque um modelo resolveu reescrever a data.
+//
+// 02/10/2026 — a confirmação deixou de sair na hora do "Salvar". Nas primeiras
+// horas em produção, um compromisso criado no horário errado e corrigido em
+// seguida mandou três mensagens seguidas ao paciente ("confirmada às 18h",
+// "remarcada para 18h30", outra). Agora o salvar só põe na FILA
+// (`confirmacao-fila.ts`); o worker espera ATRASO_DA_CONFIRMACAO_MS depois do
+// último salvar e manda só a versão final, comparada com o que o paciente já
+// sabe (`confirmation_known`, migração 0204). A parte pura dessa fila — o que
+// mandar, o que o paciente já sabe, o que a tela diz — também mora aqui.
 // ============================================================
 
 import { firstNameForGreeting } from '@/lib/cdl/names'
@@ -40,7 +49,22 @@ export type TipoConfirmacao = 'marcacao' | 'remarcacao' | 'profissional'
  */
 export type ResultadoConfirmacao = 'enviada' | { naoEnviada: string } | { incerta: string }
 
+/**
+ * O que o modal diz depois de salvar (02/10). Com a fila, o salvar não envia
+ * mais nada: devolve `{ agendada }` (ISO de quando sai), `{ naoEnviada }` (o
+ * que já dá para saber na hora — sem paciente, horário passado, "não
+ * perturbe") ou `{ descartada }` (a caixa foi desmarcada e havia uma na fila).
+ * 'enviada'/`incerta` continuam no tipo: é o mesmo aviso, vindo de quem ainda
+ * manda na hora. `null` = nada a dizer.
+ */
+export type ConfirmacaoNaTela = ResultadoConfirmacao | { agendada: string } | { descartada: true } | null
+
 export const FUSO_PADRAO = 'America/Sao_Paulo'
+
+/** Mesmo minuto? A mensagem só diz hora e minuto ("às 14h30"). */
+function mesmoMinuto(a: string, b: string): boolean {
+  return Math.floor(new Date(a).getTime() / 60_000) === Math.floor(new Date(b).getTime() / 60_000)
+}
 
 // ---------- Quando manda ----------
 
@@ -59,6 +83,11 @@ export const FUSO_PADRAO = 'America/Sao_Paulo'
  *
  * `nomeAgenda` é o nome da agenda de antes/depois; sem ele, troca de agenda
  * não oferece nada (na dúvida, não manda).
+ *
+ * O horário é comparado no MINUTO (02/10): o worker compara o que o paciente
+ * já sabe (gravado do banco) com o estado final, e um evento do Google com
+ * segundos, regravado pelo modal sem eles, viraria "foi remarcada para" o
+ * mesmo horário.
  */
 export function tipoDaConfirmacaoNaEdicao(args: {
   antes: { startsAt: string; calendarId: string; contactId: string | null; nomeAgenda?: string | null }
@@ -67,7 +96,7 @@ export function tipoDaConfirmacaoNaEdicao(args: {
   const { antes, depois } = args
   if (!depois.contactId) return null
   if (depois.contactId !== antes.contactId) return 'marcacao'
-  if (new Date(depois.startsAt).getTime() !== new Date(antes.startsAt).getTime()) return 'remarcacao'
+  if (!mesmoMinuto(depois.startsAt, antes.startsAt)) return 'remarcacao'
   if (depois.calendarId !== antes.calendarId) {
     const novo = profissionalDaAgenda(depois.nomeAgenda)
     if (!novo) return null
@@ -308,4 +337,153 @@ export function textoDaConfirmacao(args: {
   const nome = nomeParaSaudacao(args.nomeContato, args.nameSource)
   const ola = nome ? `Olá, ${nome}!` : 'Olá!'
   return `${ola} ${fraseDaConsulta(args)} Qualquer dúvida, é só responder por aqui.`
+}
+
+// ---------- A fila: espera e manda só a versão final (02/10) ----------
+
+/**
+ * Quanto a confirmação espera depois do ÚLTIMO salvar. Cada salvar com a caixa
+ * marcada empurra a saída para agora + isto; o worker (tick de 30 s) manda o
+ * estado que estiver gravado quando vencer. 3 min cobre o "salvei no horário
+ * errado e corrigi" sem atrasar o paciente que ainda está no balcão.
+ */
+export const ATRASO_DA_CONFIRMACAO_MS = 3 * 60_000
+
+/**
+ * O que o paciente JÁ SABE da consulta (`calendar_events.confirmation_known`,
+ * migração 0204): o estado da última confirmação que saiu, ou a base que a
+ * recepção aceitou ao desmarcar a caixa. null = nada (consulta nova para ele).
+ */
+export type ConfirmacaoConhecida = { startsAt: string; calendarId: string; contactId: string | null }
+
+export function isConfirmacaoConhecida(v: unknown): v is ConfirmacaoConhecida {
+  if (!v || typeof v !== 'object') return false
+  const o = v as Record<string, unknown>
+  return (
+    typeof o.startsAt === 'string' &&
+    Number.isFinite(new Date(o.startsAt).getTime()) &&
+    typeof o.calendarId === 'string' &&
+    (o.contactId === null || typeof o.contactId === 'string')
+  )
+}
+
+/**
+ * O último desfecho da fila, para a tela (`confirmation_result`):
+ * - enviada / incerta / naoEnviada: o que o envio devolveu;
+ * - semMudanca: na hora de sair, nada que o paciente precisa saber tinha
+ *   mudado (moveu e voltou) — não manda;
+ * - descartada: a recepção desmarcou a caixa, ou o compromisso foi cancelado
+ *   / ficou sem paciente antes de sair.
+ */
+export type StatusDaConfirmacao = 'enviada' | 'naoEnviada' | 'incerta' | 'semMudanca' | 'descartada'
+export type DesfechoDaConfirmacao = { status: StatusDaConfirmacao; motivo?: string; at: string }
+
+const STATUS_DA_CONFIRMACAO: readonly string[] = ['enviada', 'naoEnviada', 'incerta', 'semMudanca', 'descartada']
+
+/** A coluna é jsonb livre: valida antes de entregar para a tela. */
+export function isDesfechoDaConfirmacao(v: unknown): v is DesfechoDaConfirmacao {
+  if (!v || typeof v !== 'object') return false
+  const o = v as Record<string, unknown>
+  return (
+    typeof o.status === 'string' &&
+    STATUS_DA_CONFIRMACAO.includes(o.status) &&
+    typeof o.at === 'string' &&
+    (o.motivo === undefined || typeof o.motivo === 'string')
+  )
+}
+
+/**
+ * Contra o que a próxima confirmação deste compromisso é comparada — a MESMA
+ * regra no modal (que caixa mostrar) e na action (o que gravar como "já sabe"):
+ *
+ * - o que o paciente já sabe (`conhecido`), se houver;
+ * - nada (null = consulta nova para ele) se há uma confirmação na fila sem
+ *   base: é uma marcação que ainda não saiu;
+ * - senão, o compromisso como está gravado (`atual`): compromisso antigo, de
+ *   antes da fila, ou criado sem a caixa — o paciente soube dele de outro
+ *   jeito (balcão, lembrete), como o modal sempre supôs. Compromisso novo:
+ *   `atual` null.
+ */
+export function baseDaConfirmacao(args: {
+  conhecido: ConfirmacaoConhecida | null
+  pendente: boolean
+  atual: ConfirmacaoConhecida | null
+}): ConfirmacaoConhecida | null {
+  if (args.conhecido) return args.conhecido
+  if (args.pendente) return null
+  return args.atual
+}
+
+export type DecisaoDaFila =
+  | { acao: 'enviar'; tipo: TipoConfirmacao }
+  | { acao: 'semMudanca' }
+  | { acao: 'descartar'; motivo: string }
+
+/**
+ * Na hora de sair: o que mandar, comparando o estado FINAL com o que o
+ * paciente já sabe. Cancelado ou sem paciente não manda e não vira aviso —
+ * foi a própria recepção que mudou. Sem base: marcação. Nada mudou para o
+ * paciente (moveu e voltou, trocou só o título): não manda.
+ */
+export function decidirNaFila(args: {
+  final: { status: string; startsAt: string; calendarId: string; contactId: string | null; nomeAgenda?: string | null }
+  conhecido: (ConfirmacaoConhecida & { nomeAgenda?: string | null }) | null
+}): DecisaoDaFila {
+  const { final, conhecido } = args
+  if (final.status === 'cancelled') return { acao: 'descartar', motivo: 'o compromisso foi cancelado' }
+  if (!final.contactId) return { acao: 'descartar', motivo: 'o compromisso ficou sem paciente' }
+  if (!conhecido) return { acao: 'enviar', tipo: 'marcacao' }
+  const tipo = tipoDaConfirmacaoNaEdicao({ antes: conhecido, depois: final })
+  return tipo ? { acao: 'enviar', tipo } : { acao: 'semMudanca' }
+}
+
+/** O que o envio devolveu, no formato da coluna `confirmation_result`. */
+export function desfechoDoEnvio(r: ResultadoConfirmacao, agora: Date): DesfechoDaConfirmacao {
+  const at = agora.toISOString()
+  if (r === 'enviada') return { status: 'enviada', at }
+  if ('incerta' in r) return { status: 'incerta', motivo: r.incerta, at }
+  return { status: 'naoEnviada', motivo: r.naoEnviada, at }
+}
+
+/**
+ * A nota interna na conversa do paciente quando a confirmação da fila NÃO saiu
+ * (ou não se sabe). Antes o motivo ia num toast que sumia; agora a recepção já
+ * saiu do modal quando o worker tenta, então o aviso tem que ficar onde ela
+ * olha: na conversa (e no compromisso, pela coluna). null = nada a anotar.
+ */
+export function notaDaConfirmacaoQueNaoSaiu(args: {
+  desfecho: DesfechoDaConfirmacao
+  startsAt: string
+  allDay: boolean
+  tz: string
+}): string | null {
+  const { desfecho } = args
+  const quando = quandoDaConsulta(args)
+  if (desfecho.status === 'incerta') {
+    return `⚠️ Confirmação da consulta de ${quando}: não deu para confirmar se a mensagem saiu; confira a conversa antes de reenviar.`
+  }
+  if (desfecho.status === 'naoEnviada') {
+    return `⚠️ Confirmação da consulta de ${quando} não enviada: ${desfecho.motivo || 'o envio falhou'}.`
+  }
+  return null
+}
+
+/**
+ * "14:06" no fuso da conta — quando a confirmação da fila sai. Arredonda para
+ * CIMA no minuto: o worker passa a cada 30 s, então "sai às 14:05" para um
+ * vencimento às 14:05:40 prometeria um minuto que já passou.
+ */
+export function horaDaFila(iso: string, tz: string): string {
+  const ms = new Date(iso).getTime()
+  if (!Number.isFinite(ms)) return ''
+  const p = partes(new Date(Math.ceil(ms / 60_000) * 60_000), tz)
+  return `${p.hour}:${p.minute}`
+}
+
+/** "01/10 às 14:05" no fuso da conta ("Confirmação enviada em …"). */
+export function diaEHoraNoFuso(iso: string, tz: string): string {
+  const d = new Date(iso)
+  if (!Number.isFinite(d.getTime())) return ''
+  const p = partes(d, tz)
+  return `${p.day}/${p.month} às ${p.hour}:${p.minute}`
 }

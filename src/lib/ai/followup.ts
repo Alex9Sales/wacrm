@@ -2698,6 +2698,20 @@ async function carimbarAtendimento(accountId: string, eventId: string, n: number
 export const MEETING_QUEUE_ORDER: SQL = sql`e.starts_at ASC, date_trunc('milliseconds', e.created_at) ASC, (e.id::text) COLLATE "C" ASC`
 
 /**
+ * ⏳ A confirmação ao agendar ainda está na fila (migração 0204, 02/10): o
+ * lembrete espera por ela. Desde 02/10 a confirmação sai uns minutos depois do
+ * último salvar (lib/agenda/confirmacao-fila.ts), e é ela que reserva os
+ * degraus que já cobre (confirmacao-envio.ts). Sem esta espera, a consulta
+ * marcada hoje para amanhã cedo tinha o degrau "24h antes" vencido no mesmo
+ * minuto: o lembrete passava na frente e o paciente recebia os dois.
+ *
+ * Só enquanto o pendente é RECENTE (15 min depois do vencimento): worker
+ * parado não pode segurar lembrete para sempre. Pular não queima degrau — o
+ * compromisso só não entra nesta varredura; volta na próxima.
+ */
+export const SEM_CONFIRMACAO_NA_FILA: SQL = sql`(e.confirmation_due_at IS NULL OR e.confirmation_due_at < now() - interval '15 minutes')`
+
+/**
  * O lembrete não pôde sair por um motivo REVERSÍVEL: guarda o porquê no
  * compromisso e NÃO queima o degrau — ele volta a ser tentado sozinho quando a
  * condição mudar (a IA for religada, o template for escolhido, o canal voltar).
@@ -2858,6 +2872,9 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
         AND (e.reminder_block IS NULL
              OR e.reminder_block_at IS NULL
              OR e.reminder_block_at < now() - interval '15 minutes')
+        -- Confirmação ao agendar ainda na fila (02/10): o lembrete espera ela
+        -- sair, sem queimar degrau. Ver SEM_CONFIRMACAO_NA_FILA.
+        AND ${SEM_CONFIRMACAO_NA_FILA}
       -- Desempate igual ao de escolherCanonico: o canônico antes das cópias.
       ORDER BY ${MEETING_QUEUE_ORDER}
       LIMIT ${MEETING_CAP}
