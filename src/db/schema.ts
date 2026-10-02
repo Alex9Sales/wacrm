@@ -2872,6 +2872,13 @@ export const calendarEvents = pgTable("calendar_events", {
 	// Agenda mostra o motivo no compromisso. Ver lib/ai/meeting-reminder-block.ts.
 	reminderBlock: text("reminder_block"),
 	reminderBlockAt: timestamp("reminder_block_at", { withTimezone: true, mode: 'string' }),
+	// Moveu e VOLTOU (migração 0206, 02/10): ao mudar o início, o contador que
+	// valia para o início antigo fica guardado aqui; voltar a ele (no minuto)
+	// restaura o contador em vez de zerar, e o lembrete que já saiu não sai de
+	// novo. NULL/0 = nada guardado. Ver recomecoDoLembrete
+	// (lib/ai/meeting-reminder-block.ts).
+	remindersPrevStartsAt: timestamp("reminders_prev_starts_at", { withTimezone: true, mode: 'string' }),
+	remindersPrevSent: integer("reminders_prev_sent").default(0).notNull(),
 	// Confirmação ao agendar ADIADA (migração 0204, 02/10): o salvar põe na fila
 	// e o worker manda só a versão final. Ver lib/agenda/confirmacao-fila.ts.
 	// due_at NULL = nada pendente; known = o que o paciente já sabe

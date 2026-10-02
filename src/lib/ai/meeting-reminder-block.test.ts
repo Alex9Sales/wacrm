@@ -3,9 +3,11 @@ import {
   avisoNaAgenda,
   decideImpedimento,
   isMeetingReminderBlock,
+  mudouOInicio,
   recomecoDoLembrete,
   RECUPERACAO_MS,
   rotuloDoBloqueio,
+  type LembreteDoCompromisso,
   type MeetingReminderBlock,
 } from './meeting-reminder-block'
 
@@ -125,27 +127,113 @@ describe('remarcou: o lembrete recomeça', () => {
   // 01/10: consulta arrastada no Google depois do lembrete de 24h ficava sem
   // lembrete na data nova — o sync mantinha o contador da data antiga.
   const ZERA = { remindersSent: 0, reminderBlock: null, reminderBlockAt: null }
+  /** Compromisso sem nenhum degrau gasto (o recomeço só olha o início). */
+  const em = (startsAt: string): LembreteDoCompromisso => ({ startsAt })
 
   it('horário novo zera o contador e o motivo', () => {
-    expect(recomecoDoLembrete('2026-10-02T13:00:00.000Z', '2026-10-03T16:00:00.000Z')).toEqual(ZERA)
+    expect(recomecoDoLembrete(em('2026-10-02T13:00:00.000Z'), '2026-10-03T16:00:00.000Z')).toEqual(ZERA)
   })
 
   it('o mesmo instante em formatos diferentes NÃO é remarcação', () => {
     // O banco devolve o texto do Postgres; o Google, ISO.
-    expect(recomecoDoLembrete('2026-10-03 13:00:00-03', '2026-10-03T16:00:00.000Z')).toEqual({})
+    expect(recomecoDoLembrete(em('2026-10-03 13:00:00-03'), '2026-10-03T16:00:00.000Z')).toEqual({})
   })
 
   it('milissegundos que o Google não guarda NÃO são remarcação', () => {
     // Zerar aqui repetiria para o paciente um degrau que já saiu.
-    expect(recomecoDoLembrete('2026-10-03 16:00:00.123456+00', '2026-10-03T16:00:00Z')).toEqual({})
+    expect(recomecoDoLembrete(em('2026-10-03 16:00:00.123456+00'), '2026-10-03T16:00:00Z')).toEqual({})
   })
 
   it('um segundo de diferença já é outro horário', () => {
-    expect(recomecoDoLembrete('2026-10-03T16:00:00Z', '2026-10-03T16:00:01Z')).toEqual(ZERA)
+    expect(recomecoDoLembrete(em('2026-10-03T16:00:00Z'), '2026-10-03T16:00:01Z')).toEqual(ZERA)
+    expect(mudouOInicio('2026-10-03T16:00:00Z', new Date('2026-10-03T16:00:01Z'))).toBe(true)
   })
 
   it('horário ilegível não zera — na dúvida, não repete degrau', () => {
-    expect(recomecoDoLembrete('não é data', '2026-10-03T16:00:00Z')).toEqual({})
-    expect(recomecoDoLembrete('2026-10-03T16:00:00Z', '')).toEqual({})
+    expect(recomecoDoLembrete(em('não é data'), '2026-10-03T16:00:00Z')).toEqual({})
+    expect(recomecoDoLembrete(em('2026-10-03T16:00:00Z'), '')).toEqual({})
+    expect(mudouOInicio('2026-10-03T16:00:00Z', 'amanhã')).toBe(false)
+  })
+})
+
+describe('moveu e VOLTOU: o lembrete que já saiu não sai de novo (02/10)', () => {
+  // A recepção (ou o Google, ou a IA) mudava 10h→11h e desfazia 11h→10h: o
+  // contador era zerado nas duas vezes, e o lembrete das 10h que o paciente
+  // já tinha recebido saía DE NOVO. Horários fictícios, em UTC.
+  const DEZ = '2026-10-05T13:00:00.000Z'
+  const ONZE = '2026-10-05T14:00:00.000Z'
+  const MEIO_DIA = '2026-10-05T15:00:00.000Z'
+
+  /** Aplica o UPDATE que o recomeço manda gravar — como o banco ficaria. */
+  const mover = (linha: LembreteDoCompromisso, para: string): LembreteDoCompromisso => ({
+    ...linha,
+    ...recomecoDoLembrete(linha, para),
+    startsAt: para,
+  })
+  /** O degrau que a varredura carimba quando o lembrete sai. */
+  const saiuLembrete = (linha: LembreteDoCompromisso, n: number): LembreteDoCompromisso => ({ ...linha, remindersSent: n })
+
+  it('move e volta → o contador do horário de antes é restaurado', () => {
+    const lembrou = { startsAt: DEZ, remindersSent: 1 }
+    const foi = mover(lembrou, ONZE)
+    expect(foi).toMatchObject({ remindersSent: 0, remindersPrevStartsAt: DEZ, remindersPrevSent: 1 })
+
+    const voltou = recomecoDoLembrete(foi, DEZ)
+    expect(voltou).toMatchObject({ remindersSent: 1, reminderBlock: null, reminderBlockAt: null })
+    // Contador 0 no horário que sai: nada a guardar, e o guardado não é apagado.
+    expect(voltou).not.toHaveProperty('remindersPrevStartsAt')
+    expect(voltou).not.toHaveProperty('remindersPrevSent')
+  })
+
+  it('move para outro horário NOVO → zera (o guardado não é desse horário)', () => {
+    const foi = mover({ startsAt: DEZ, remindersSent: 1 }, ONZE)
+    expect(recomecoDoLembrete(foi, MEIO_DIA)).toEqual({ remindersSent: 0, reminderBlock: null, reminderBlockAt: null })
+  })
+
+  it('move, move de novo, volta ao primeiro → restaura o do primeiro', () => {
+    const primeiro = { startsAt: DEZ, remindersSent: 2 }
+    const segundo = mover(primeiro, ONZE)
+    const terceiro = mover(segundo, MEIO_DIA)
+    // No 11h nada tinha saído: o guardado continua sendo o das 10h.
+    expect(terceiro).toMatchObject({ remindersSent: 0, remindersPrevStartsAt: DEZ, remindersPrevSent: 2 })
+    expect(mover(terceiro, DEZ)).toMatchObject({ startsAt: DEZ, remindersSent: 2 })
+  })
+
+  it('contador 0 não guarda nada', () => {
+    const r = recomecoDoLembrete({ startsAt: DEZ, remindersSent: 0 }, ONZE)
+    expect(r).toEqual({ remindersSent: 0, reminderBlock: null, reminderBlockAt: null })
+    // E não apaga o guardado de antes.
+    const comGuardado = { startsAt: ONZE, remindersSent: 0, remindersPrevStartsAt: DEZ, remindersPrevSent: 1 }
+    expect(recomecoDoLembrete(comGuardado, MEIO_DIA)).not.toHaveProperty('remindersPrevStartsAt')
+  })
+
+  it('volta com o maior dos dois: o que saiu no horário de passagem também conta', () => {
+    // 10h (1 degrau) → 11h, onde saíram 2 → volta às 10h: fica 2, não 1.
+    const passagem = saiuLembrete(mover({ startsAt: DEZ, remindersSent: 1 }, ONZE), 2)
+    const r = recomecoDoLembrete(passagem, DEZ)
+    expect(r).toMatchObject({ remindersSent: 2 })
+    // E o das 11h (2) passa a ser o guardado: voltar às 11h de novo não repete.
+    expect(r).toMatchObject({ remindersPrevStartsAt: ONZE, remindersPrevSent: 2 })
+    expect(recomecoDoLembrete({ startsAt: DEZ, remindersSent: 2, remindersPrevStartsAt: ONZE, remindersPrevSent: 2 }, ONZE)).toMatchObject({
+      remindersSent: 2,
+    })
+  })
+
+  it('volta "no minuto": segundos do Google e o texto do Postgres contam como o mesmo horário', () => {
+    const linha = { startsAt: '2026-10-05 14:00:00+00', remindersSent: 0, remindersPrevStartsAt: '2026-10-05 13:00:00+00', remindersPrevSent: '1' }
+    expect(recomecoDoLembrete(linha, '2026-10-05T13:00:30Z')).toMatchObject({ remindersSent: 1 })
+    // Um minuto inteiro de diferença já é outro horário.
+    expect(recomecoDoLembrete(linha, '2026-10-05T13:01:00Z')).toMatchObject({ remindersSent: 0 })
+  })
+
+  it('o início salvo vai em ISO; guardado ilegível ou zerado não restaura', () => {
+    expect(recomecoDoLembrete({ startsAt: '2026-10-05 13:00:00-03', remindersSent: 1 }, ONZE)).toMatchObject({
+      remindersPrevStartsAt: '2026-10-05T16:00:00.000Z',
+      remindersPrevSent: 1,
+    })
+    const base = { startsAt: ONZE, remindersSent: 0 }
+    expect(recomecoDoLembrete({ ...base, remindersPrevStartsAt: 'lixo', remindersPrevSent: 1 }, DEZ)).toMatchObject({ remindersSent: 0 })
+    expect(recomecoDoLembrete({ ...base, remindersPrevStartsAt: DEZ, remindersPrevSent: 0 }, DEZ)).toMatchObject({ remindersSent: 0 })
+    expect(recomecoDoLembrete({ ...base, remindersPrevStartsAt: null, remindersPrevSent: null }, DEZ)).toMatchObject({ remindersSent: 0 })
   })
 })

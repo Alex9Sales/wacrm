@@ -16,7 +16,7 @@ import type { SQL } from 'drizzle-orm'
 //
 // Dados fictícios (LGPD): nenhum paciente de verdade aqui.
 
-type Rec = { op: string; set?: Record<string, unknown>; where?: SQL; returning?: boolean }
+type Rec = { op: string; set?: Record<string, unknown>; where?: SQL; returning?: boolean; lock?: unknown }
 
 const h = vi.hoisted(() => {
   const state = { selects: [] as unknown[], retornos: [] as unknown[], calls: [] as Rec[] }
@@ -44,6 +44,8 @@ const h = vi.hoisted(() => {
             if (prop === 'set') rec.set = args[0] as Record<string, unknown>
             if (prop === 'where') rec.where = args[0] as SQL
             if (prop === 'returning') rec.returning = true
+            // A releitura travada da remarcação (02/10): SELECT … FOR UPDATE.
+            if (prop === 'for') rec.lock = args[0]
             return self
           }
         },
@@ -316,16 +318,18 @@ describe('importGoogleEvents → varredura de sumidos', () => {
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('invisivel@group.calendar.google.com'))
   })
 
-  it('GET 200 confirmado → não mexe (o evento só mudou de data para fora da janela)', async () => {
+  it('GET 200 confirmado sem data legível → não mexe (não há para onde levar a linha)', async () => {
     inicio()
     listagem({})
     h.state.selects.push([linha({ contactId: 'c-ana' })])
+    // Sem `end`: mapTimes não monta as datas.
     h.getGoogleEvent.mockResolvedValue({ id: 'g-movido', status: 'confirmed', start: { dateTime: '2027-03-01T10:00:00Z' } })
 
     const r = await importGoogleEvents(ACC, CONN)
 
     expect(r.cancelled).toBe(0)
     expect(updatesDeEvento()).toHaveLength(0)
+    expect(h.state.calls.filter((c) => c.op === 'select')).toHaveLength(3) // conexão, agendas, candidatas
   })
 
   it('erro no GET → pula aquela linha e segue com as outras da agenda', async () => {
@@ -412,6 +416,173 @@ describe('importGoogleEvents → varredura de sumidos', () => {
     expect(render(lembrete.set?.remindersSent as SQL).params).toEqual([2])
     expect(paciente.set).toEqual({ contactId: 'c-bia' })
     expect(negocio.set).toEqual({ dealId: 'd-2' })
+  })
+})
+
+describe('importGoogleEvents → evento REMARCADO no Google para fora da janela (02/10)', () => {
+  // A varredura pergunta pelo evento que não veio na listagem; o Google diz
+  // que ele existe (200 confirmado) com OUTRA data, fora de -7d…+60d. Antes a
+  // linha ficava com a data velha: lembrete do dia errado e o mesmo GET a
+  // cada rodada. Agora vai para a data nova, com o recomeço do lembrete.
+  const NOVA = { dateTime: '2027-03-01T10:00:00-03:00' }
+  const NOVA_FIM = { dateTime: '2027-03-01T11:00:00-03:00' }
+  const remarcado = { id: 'g-movido', status: 'confirmed', start: NOVA, end: NOVA_FIM }
+  const selects = () => h.state.calls.filter((c) => c.op === 'select')
+
+  it('200 confirmado com data nova → a linha vai para ela, o lembrete recomeça, com as travas do cancelamento', async () => {
+    inicio()
+    listagem({})
+    const lida = linha({ contactId: 'c-ana', remindersSent: 1 })
+    // Candidatas; depois a releitura travada da linha (o contador de AGORA).
+    h.state.selects.push([lida], [{ startsAt: lida.startsAt, remindersSent: 1, remindersPrevStartsAt: null, remindersPrevSent: 0 }])
+    h.getGoogleEvent.mockResolvedValue(remarcado)
+    h.state.retornos.push([{ id: 'ev-fantasma' }])
+
+    const r = await importGoogleEvents(ACC, CONN)
+
+    // Não é cancelamento: o compromisso segue de pé, na data nova.
+    expect(r.cancelled).toBe(0)
+    expect(cancelamentos()).toHaveLength(0)
+    const [remarcou] = updatesDeEvento()
+    expect(updatesDeEvento()).toHaveLength(1)
+    expect(remarcou.set).toMatchObject({
+      startsAt: '2027-03-01T13:00:00.000Z',
+      endsAt: '2027-03-01T14:00:00.000Z',
+      allDay: false,
+      // O lembrete recomeça na data nova; o degrau da velha fica guardado.
+      remindersSent: 0,
+      reminderBlock: null,
+      reminderBlockAt: null,
+      remindersPrevStartsAt: new Date(Date.parse(lida.startsAt)).toISOString(),
+      remindersPrevSent: 1,
+    })
+    expect(remarcou.set).toHaveProperty('updatedAt')
+    expect(remarcou.set).not.toHaveProperty('status')
+    expect(remarcou.returning).toBe(true)
+    // As MESMAS travas do cancelamento, na releitura travada e no UPDATE.
+    const releitura = selects().at(-1)
+    expect(releitura?.lock).toBe('update')
+    for (const where of [releitura?.where, remarcou.where]) {
+      const q = render(where)
+      expect(q.params).toEqual(['ev-fantasma', ACC, AGENDA_DONA.id, 'g-movido', 'confirmed'])
+      expect(q.sql).toContain(`"calendar_events"."updated_at" < now() - interval '600 seconds'`)
+      expect(q.sql).toContain(`"calendar_events"."created_at" < now() - interval '600 seconds'`)
+    }
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('mudou de data no Google'))
+  })
+
+  it('o contador que decide é o da releitura, não o da varredura (o lembrete da data velha saiu no meio)', async () => {
+    inicio()
+    listagem({})
+    const lida = linha({ remindersSent: 0 })
+    h.state.selects.push([lida], [{ startsAt: lida.startsAt, remindersSent: 2, remindersPrevStartsAt: null, remindersPrevSent: 0 }])
+    h.getGoogleEvent.mockResolvedValue(remarcado)
+    h.state.retornos.push([{ id: 'ev-fantasma' }])
+
+    await importGoogleEvents(ACC, CONN)
+
+    expect(updatesDeEvento()[0].set).toMatchObject({ remindersSent: 0, remindersPrevSent: 2 })
+  })
+
+  it('remarcado de volta ao horário de antes → o contador guardado volta (não repete o lembrete)', async () => {
+    inicio()
+    listagem({})
+    const lida = linha()
+    h.state.selects.push(
+      [lida],
+      [{ startsAt: lida.startsAt, remindersSent: 0, remindersPrevStartsAt: '2027-03-01 13:00:00+00', remindersPrevSent: 1 }],
+    )
+    h.getGoogleEvent.mockResolvedValue(remarcado)
+    h.state.retornos.push([{ id: 'ev-fantasma' }])
+
+    await importGoogleEvents(ACC, CONN)
+
+    const [remarcou] = updatesDeEvento()
+    expect(remarcou.set).toMatchObject({ startsAt: '2027-03-01T13:00:00.000Z', remindersSent: 1 })
+    expect(remarcou.set).not.toHaveProperty('remindersPrevStartsAt')
+  })
+
+  it('200 confirmado com a MESMA data → não mexe (nem relê a linha)', async () => {
+    inicio()
+    listagem({})
+    const lida = linha({ remindersSent: 1 })
+    const inicioIso = new Date(Date.parse(lida.startsAt)).toISOString()
+    const fimIso = new Date(Date.parse(lida.startsAt) + 60 * MIN).toISOString()
+    h.state.selects.push([lida])
+    h.getGoogleEvent.mockResolvedValue({ id: 'g-movido', status: 'confirmed', start: { dateTime: inicioIso }, end: { dateTime: fimIso } })
+
+    const r = await importGoogleEvents(ACC, CONN)
+
+    expect(r.cancelled).toBe(0)
+    expect(updatesDeEvento()).toHaveLength(0)
+    expect(selects()).toHaveLength(3) // conexão, agendas, candidatas
+  })
+
+  it('a recepção mexeu na linha depois da varredura: a releitura travada não acha e nada é gravado', async () => {
+    inicio()
+    listagem({})
+    h.state.selects.push([linha({ remindersSent: 1 })], [])
+    h.getGoogleEvent.mockResolvedValue(remarcado)
+
+    const r = await importGoogleEvents(ACC, CONN)
+
+    expect(r.cancelled).toBe(0)
+    expect(updatesDeEvento()).toHaveLength(0)
+  })
+
+  it('falha ao gravar a data nova: segue com as outras e não vira erro da conexão', async () => {
+    inicio()
+    listagem({})
+    h.state.selects.push([linha({ id: 'a', googleEventId: 'g-a' }), linha({ id: 'b', googleEventId: 'g-b' })])
+    h.state.selects.push(new Error('connection terminated')) // releitura de 'a'
+    h.getGoogleEvent.mockResolvedValueOnce(remarcado).mockResolvedValueOnce({ status: 'gone' })
+    h.state.retornos.push([{ id: 'b' }])
+    h.state.selects.push([]) // gêmeos de 'b': nenhum
+
+    const r = await importGoogleEvents(ACC, CONN)
+
+    expect(r.cancelled).toBe(1)
+    expect(render(cancelamentos()[0].where).params[0]).toBe('b')
+    const conexao = updates().find((c) => c.set && 'lastSyncedAt' in c.set)
+    expect(conexao?.set?.lastSyncError).toBeNull()
+  })
+})
+
+describe('importGoogleEvents → arrastou no Google e arrastou DE VOLTA (02/10)', () => {
+  const EV = (dateTime: string, fim: string) => ({
+    id: 'g-1',
+    status: 'confirmed',
+    summary: 'Consulta Exemplo',
+    start: { dateTime },
+    end: { dateTime: fim },
+  })
+  const doEvento = () => updatesDeEvento().find((c) => c.set && 'title' in c.set)
+
+  it('arrastou: zera e guarda o contador do horário de antes', async () => {
+    inicio()
+    listagem({ [AGENDA_DONA.googleCalendarId]: [EV('2026-10-05T14:00:00Z', '2026-10-05T15:00:00Z')] })
+    h.state.selects.push([{ id: 'ev-1', startsAt: '2026-10-05 13:00:00+00', remindersSent: 1, remindersPrevStartsAt: null, remindersPrevSent: 0 }])
+
+    await importGoogleEvents(ACC, CONN)
+
+    expect(doEvento()?.set).toMatchObject({
+      startsAt: '2026-10-05T14:00:00.000Z',
+      remindersSent: 0,
+      remindersPrevStartsAt: '2026-10-05T13:00:00.000Z',
+      remindersPrevSent: 1,
+    })
+  })
+
+  it('arrastou de volta: o contador guardado volta, e o lembrete que já saiu não sai de novo', async () => {
+    inicio()
+    listagem({ [AGENDA_DONA.googleCalendarId]: [EV('2026-10-05T13:00:00Z', '2026-10-05T14:00:00Z')] })
+    h.state.selects.push([
+      { id: 'ev-1', startsAt: '2026-10-05 14:00:00+00', remindersSent: 0, remindersPrevStartsAt: '2026-10-05 13:00:00+00', remindersPrevSent: 1 },
+    ])
+
+    await importGoogleEvents(ACC, CONN)
+
+    expect(doEvento()?.set).toMatchObject({ startsAt: '2026-10-05T13:00:00.000Z', remindersSent: 1 })
   })
 })
 

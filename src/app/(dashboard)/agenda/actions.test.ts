@@ -196,6 +196,51 @@ describe('trocar o compromisso de agenda', () => {
   })
 })
 
+describe('mudou o horário e DESFEZ: o lembrete que já saiu não sai de novo (02/10)', () => {
+  // A recepção mudava 10h→11h e desfazia 11h→10h: o contador era zerado nas
+  // duas vezes, e o lembrete das 10h que o paciente já tinha recebido saía de
+  // novo. A regra é a do recomecoDoLembrete (testada à parte); aqui, que o
+  // salvar da Agenda lê o que ela precisa e grava o que ela decide.
+  const MESMA_AGENDA = [{ googleCalendarId: 'a@group.calendar.google.com', connectionId: 'conn-1' }]
+
+  it('mudou o horário: zera e guarda o contador do horário de antes', async () => {
+    h.state.results.push([{ ...ANTES_GOOGLE_A, remindersSent: 1, remindersPrevStartsAt: null, remindersPrevSent: 0 }], MESMA_AGENDA)
+
+    await updateEvent('ev-1', { ...INPUT, startsAt: '2026-10-05T15:00:00.000Z', endsAt: '2026-10-05T16:00:00.000Z', calendarId: 'cal-a' })
+
+    expect(gravado()).toMatchObject({
+      startsAt: '2026-10-05T15:00:00.000Z',
+      remindersSent: 0,
+      reminderBlock: null,
+      reminderBlockAt: null,
+      remindersPrevStartsAt: '2026-10-05T14:00:00.000Z',
+      remindersPrevSent: 1,
+    })
+  })
+
+  it('voltou ao horário de antes: o contador guardado volta em vez de zerar', async () => {
+    h.state.results.push(
+      [{ ...ANTES_GOOGLE_A, startsAt: '2026-10-05 15:00:00+00', remindersSent: 0, remindersPrevStartsAt: '2026-10-05 14:00:00+00', remindersPrevSent: 1 }],
+      MESMA_AGENDA,
+    )
+
+    await updateEvent('ev-1', { ...INPUT, calendarId: 'cal-a' })
+
+    expect(gravado()).toMatchObject({ startsAt: '2026-10-05T14:00:00.000Z', remindersSent: 1, reminderBlock: null })
+    // Nada saiu às 15h: o guardado (14h) fica como está.
+    expect(gravado()).not.toHaveProperty('remindersPrevStartsAt')
+  })
+
+  it('salvou sem mudar o horário: não mexe no lembrete', async () => {
+    h.state.results.push([{ ...ANTES_GOOGLE_A, remindersSent: 1 }], MESMA_AGENDA)
+
+    await updateEvent('ev-1', { ...INPUT, calendarId: 'cal-a' })
+
+    expect(gravado()).not.toHaveProperty('remindersSent')
+    expect(gravado()).not.toHaveProperty('remindersPrevSent')
+  })
+})
+
 describe('o que vem da tela tem que ser desta conta', () => {
   it('criar numa agenda de outra conta: recusa, não grava e não vai ao Google', async () => {
     h.state.results.push([]) // a agenda não é da conta
