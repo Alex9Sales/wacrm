@@ -279,6 +279,31 @@ describe('o nome da agenda vira "com {profissional}"?', () => {
     }
   })
 
+  it('setor ou exame depois do título não é gente — "DR. RADIOLOGIA" (02/10)', () => {
+    // A agenda do setor de imagem numa clínica com uma agenda por profissional:
+    // o lembrete diria "sua consulta com o Dr. RADIOLOGIA".
+    for (const nome of [
+      'DR. RADIOLOGIA',
+      'Dr. Radiologia',
+      'DRA RADIOLOGIA',
+      'Dr. Raio-X',
+      'DR RX',
+      'Dra. Tomografia',
+      'Dr. Laboratório',
+      'DR. LABORATORIO',
+      'Dr. Imagem',
+      'Agenda do Dr. Exames de Imagem',
+      'Doutor Ultrassom',
+    ]) {
+      expect(profissionalDaAgenda(nome), nome).toBeNull()
+    }
+    // Gente de verdade continua passando, inclusive em caixa alta.
+    expect(profissionalDaAgenda('DR. BELTRANO TESTE')).toBe('o Dr. BELTRANO TESTE')
+    expect(profissionalDaAgenda('Dra. Fulana Exemplo')).toBe('a Dra. Fulana Exemplo')
+    // Nome que só CONTÉM as letras de um setor não cai ("Salazar" ≠ "sala").
+    expect(profissionalDaAgenda('Dr. Beltrano Salazar')).toBe('o Dr. Beltrano Salazar')
+  })
+
   it('serviço não é gente — nem com uma palavra, nem com duas (01/10, revisão)', () => {
     // Regra positiva: só cita Dr./Dra. ou nome e sobrenome de pessoa.
     for (const nome of [

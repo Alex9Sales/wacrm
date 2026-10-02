@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 //
 // Dados fictícios (LGPD): nenhum paciente de verdade aqui.
 
-type Rec = { op: string; set?: unknown; values?: unknown; returning?: boolean }
+type Rec = { op: string; set?: unknown; values?: unknown; returning?: boolean; where?: unknown }
 
 const h = vi.hoisted(() => {
   const state = { results: [] as unknown[], calls: [] as Rec[], updateFalha: false }
@@ -37,6 +37,8 @@ const h = vi.hoisted(() => {
             if (prop === 'set') rec.set = args[0]
             if (prop === 'values') rec.values = args[0]
             if (prop === 'returning') rec.returning = true
+            // O WHERE vai junto (02/10): a busca de horário ocupado confere o SQL.
+            if (prop === 'where') rec.where = args[0]
             return self
           }
         },
@@ -96,7 +98,15 @@ vi.mock('@/lib/agenda/confirmacao-fila', () => ({
   conferirEdicaoSemCaixa: h.conferir,
 }))
 
-import { createEvent, estadoDaConfirmacao, listarConsultasFuturasDoContato, updateEvent } from './actions'
+import {
+  compromissosNoHorario,
+  createEvent,
+  estadoDaConfirmacao,
+  listarConsultasFuturasDoContato,
+  updateEvent,
+} from './actions'
+import { PgDialect } from 'drizzle-orm/pg-core'
+import type { SQL } from 'drizzle-orm'
 import { ERRO_REMARCACAO_INDISPONIVEL } from '@/lib/agenda/remarcacao'
 
 const INPUT = { title: 'RSC', startsAt: '2026-10-05T14:00:00.000Z', endsAt: '2026-10-05T15:00:00.000Z' }
@@ -745,5 +755,106 @@ describe('consultas futuras do paciente (a pergunta do modal, 02/10)', () => {
     expect(await listarConsultasFuturasDoContato('')).toEqual([])
     expect(await listarConsultasFuturasDoContato('nao-e-uuid')).toEqual([])
     expect(h.state.calls).toEqual([])
+  })
+})
+
+describe('quem já ocupa o horário nesta agenda (aviso do modal, 02/10)', () => {
+  // Uma consulta digitada direto no Google (sem paciente) e outra lançada pelo
+  // CRM no mesmo horário da mesma agenda. Ids e títulos fictícios.
+  const AGENDA = '44444444-4444-4444-8444-444444444444'
+  const OUTRA_AGENDA = '55555555-5555-4555-8555-555555555555'
+  const PROPRIO = '66666666-6666-4666-8666-666666666666'
+  const PEDIDO = { calendarId: AGENDA, startsAt: '2026-10-05T17:00:00.000Z', endsAt: '2026-10-05T18:00:00.000Z' }
+  const linha = (o: Record<string, unknown>) => ({
+    id: '77777777-7777-4777-8777-777777777777',
+    calendarId: AGENDA,
+    title: 'Avaliação',
+    startsAt: '2026-10-05 17:30:00+00',
+    endsAt: '2026-10-05 18:30:00+00',
+    allDay: false,
+    status: 'confirmed',
+    busy: true,
+    ...o,
+  })
+  const dialect = new PgDialect()
+  const whereDaBusca = () => {
+    const sel = h.state.calls.find((c) => c.op === 'select')
+    const q = dialect.sqlToQuery(sel?.where as SQL)
+    return { sql: q.sql.replace(/\s+/g, ' '), params: q.params }
+  }
+
+  it('o SQL: conta, a MESMA agenda, de pé, ocupando, cruzando o intervalo e sem o próprio compromisso', async () => {
+    h.state.results.push([])
+
+    await compromissosNoHorario({ ...PEDIDO, ignorarId: PROPRIO })
+
+    const { sql, params } = whereDaBusca()
+    expect(sql).toContain('"calendar_events"."account_id" = $1')
+    expect(sql).toContain('"calendar_events"."calendar_id" = $2')
+    expect(sql).toContain('"calendar_events"."status" = $3')
+    expect(sql).toContain('"calendar_events"."busy" = $4')
+    expect(sql).toContain('"calendar_events"."starts_at" < $5')
+    expect(sql).toContain('"calendar_events"."ends_at" > $6')
+    expect(sql).toContain('"calendar_events"."id" <> $7')
+    expect(params).toEqual([
+      'acc-1',
+      AGENDA,
+      'confirmed',
+      true,
+      '2026-10-05T18:00:00.000Z',
+      '2026-10-05T17:00:00.000Z',
+      PROPRIO,
+    ])
+  })
+
+  it('compromisso novo: não ignora ninguém', async () => {
+    h.state.results.push([])
+
+    await compromissosNoHorario(PEDIDO)
+
+    expect(whereDaBusca().sql).not.toContain('"calendar_events"."id" <>')
+  })
+
+  it('devolve só quem cruza o intervalo na mesma agenda — e de novo sobre o que o banco trouxe', async () => {
+    h.state.results.push([
+      linha({ id: '88888888-8888-4888-8888-888888888881', title: 'Consulta (lançada no Google)' }),
+      // Desmarcado, "Disponível", outra agenda, o próprio, e o que só encosta: fora.
+      linha({ id: '88888888-8888-4888-8888-888888888882', status: 'cancelled' }),
+      linha({ id: '88888888-8888-4888-8888-888888888883', busy: false }),
+      linha({ id: '88888888-8888-4888-8888-888888888884', calendarId: OUTRA_AGENDA }),
+      linha({ id: PROPRIO }),
+      linha({ id: '88888888-8888-4888-8888-888888888885', startsAt: '2026-10-05 18:00:00+00', endsAt: '2026-10-05 19:00:00+00' }),
+      linha({ id: '88888888-8888-4888-8888-888888888886', startsAt: '2026-10-05 16:00:00+00', endsAt: '2026-10-05 17:00:00+00' }),
+    ])
+
+    const lista = await compromissosNoHorario({ ...PEDIDO, ignorarId: PROPRIO })
+
+    expect(lista).toEqual([
+      {
+        id: '88888888-8888-4888-8888-888888888881',
+        title: 'Consulta (lançada no Google)',
+        startsAt: '2026-10-05T17:30:00.000Z',
+        endsAt: '2026-10-05T18:30:00.000Z',
+        allDay: false,
+      },
+    ])
+  })
+
+  it('fim antes do início: confere como o salvar vai gravar (início + 1h)', async () => {
+    h.state.results.push([])
+
+    await compromissosNoHorario({ ...PEDIDO, endsAt: '2026-10-05T16:00:00.000Z' })
+
+    expect(whereDaBusca().params).toContain('2026-10-05T18:00:00.000Z')
+  })
+
+  it('agenda ou data torta, ou id a ignorar que não é UUID: nem vai ao banco / não entra no SQL', async () => {
+    expect(await compromissosNoHorario({ ...PEDIDO, calendarId: 'nao-e-uuid' })).toEqual([])
+    expect(await compromissosNoHorario({ ...PEDIDO, startsAt: 'ontem' })).toEqual([])
+    expect(h.state.calls).toEqual([])
+
+    h.state.results.push([])
+    await compromissosNoHorario({ ...PEDIDO, ignorarId: "x' OR 1=1" })
+    expect(whereDaBusca().sql).not.toContain('"calendar_events"."id" <>')
   })
 })

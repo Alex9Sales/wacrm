@@ -183,6 +183,24 @@ export function decidirConfirmacao(args: {
 const semAcento = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
 
 /**
+ * Setor, exame ou sala — nunca nome de gente, mesmo depois de "Dr." (02/10).
+ * Numa clínica com uma agenda do Google por profissional, a do setor de
+ * imagem se chamava "DR. RADIOLOGIA": o título fazia ela passar por gente, e o
+ * lembrete diria ao paciente "sua consulta com o Dr. RADIOLOGIA". Comparada
+ * sem acento e sem caixa, palavra por palavra ("Raio-X" → "raio", "x"). A
+ * lista pode errar para MAIS: na dúvida a mensagem fica sem profissional.
+ */
+const SETOR_NAO_E_GENTE = new Set([
+  'radiologia', 'radiologica', 'radiologico', 'radiografia', 'radiografias', 'telerradiografia',
+  'raio', 'raios', 'rx', 'raiox', 'tomografia', 'tomografias', 'tomo', 'tomografo',
+  'laboratorio', 'laboratorios', 'lab', 'imagem', 'imagens', 'exame', 'exames',
+  'ultrassom', 'ultrassonografia', 'usg', 'ressonancia', 'mamografia', 'densitometria',
+  'panoramica', 'panoramicas', 'cefalometria', 'escaneamento', 'scanner', 'documentacao',
+  'diagnostico', 'diagnosticos', 'setor', 'sala', 'plantao', 'triagem', 'recepcao',
+  'odonto', 'odontologia',
+])
+
+/**
  * O nome da agenda serve para "com {profissional}"? Cada dentista tem a sua
  * ("Dr. Igor"). Devolve o trecho pronto para depois de "com" — com o artigo
  * quando há título ("o Dr. Igor Talamoni", "a Dra. Leticia Ghilardi") — ou
@@ -193,6 +211,10 @@ const semAcento = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLo
  * sobrenome sem título bastou ("Primeira Consulta", "Convênio Unimed"). Agora só
  * cita com título — Dr/Dra/Drª/Doutor/Doutora, com ou sem ponto — e com artigo.
  * Na dúvida fica sem: "Sua consulta está confirmada" é sempre verdade.
+ *
+ * 02/10: título não basta quando o que vem depois é setor ou exame ("DR.
+ * RADIOLOGIA", "Dr. Raio-X") — ver SETOR_NAO_E_GENTE. Desde 02/10 o lembrete
+ * da véspera também usa isto para dizer com quem é a consulta.
  */
 export function profissionalDaAgenda(nome: string | null | undefined): string | null {
   let n = (nome ?? '').replace(/\s+/g, ' ').trim()
@@ -210,6 +232,8 @@ export function profissionalDaAgenda(nome: string | null | undefined): string | 
     const resto = (titulo[3] ?? '').trim()
     // "Dr." sozinho, "Dr(a). Ana" (gênero em aberto): não dá para afirmar.
     if (!/^\p{L}/u.test(resto)) return null
+    // "DR. RADIOLOGIA" (02/10): setor/exame com título não vira gente.
+    if (semAcento(resto).split(/[^a-z0-9]+/).some((w) => SETOR_NAO_E_GENTE.has(w))) return null
     return titulo[1] ? `a Dra. ${resto}` : `o Dr. ${resto}`
   }
   // 01/10, 2ª revisão: sem título NÃO cita. "Primeira Consulta", "Convênio
@@ -218,8 +242,13 @@ export function profissionalDaAgenda(nome: string | null | undefined): string | 
   return null
 }
 
-/** Mesmo profissional escrito de dois jeitos ("Dr. Igor" e "Dr. Igor Talamoni")? */
-function mesmoProfissional(a: string, b: string): boolean {
+/**
+ * Mesmo profissional escrito de dois jeitos ("Dr. Igor" e "Dr. Igor Talamoni")?
+ * Recebe o que `profissionalDaAgenda` devolve. Exportada em 02/10: o lembrete
+ * da véspera junta as cópias da consulta em várias agendas e só cita alguém
+ * quando todas apontam para a mesma pessoa (meeting-reminder-profissional.ts).
+ */
+export function mesmoProfissional(a: string, b: string): boolean {
   const palavras = (s: string) =>
     semAcento(s)
       .replace(/^(o|a)\s+dra?\.\s*/, '')

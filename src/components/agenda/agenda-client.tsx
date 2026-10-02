@@ -24,6 +24,7 @@ import {
   listCalendars,
   listEvents,
   listarConsultasFuturasDoContato,
+  compromissosNoHorario,
   createEvent,
   updateEvent,
   deleteEvent,
@@ -39,6 +40,16 @@ import {
   type GoogleStatus,
 } from '@/app/(dashboard)/agenda/actions'
 import { avisoDeTrocaDeProfissional, rotuloDaRemarcacao, sugerirRemarcacao } from '@/lib/agenda/remarcacao'
+import {
+  avisoDeHorarioOcupado,
+  chaveDoHorario,
+  chaveParaConferir,
+  horarioTravaOSalvar,
+  pedidoDaChave,
+  situacaoDoHorario,
+  type ConferenciaDoHorario,
+  type SituacaoDoHorario,
+} from '@/lib/agenda/horario-ocupado'
 import {
   baseDaConfirmacao,
   diaEHoraNoFuso,
@@ -71,6 +82,14 @@ import {
   weekDays,
   weekRangeLabel,
 } from './agenda-dates'
+import {
+  avisoDeLembreteNaGrade,
+  classeDoDesmarcado,
+  contarDesmarcados,
+  ehDesmarcado,
+  tooltipComStatus,
+  visivelNaGrade,
+} from './agenda-desmarcados'
 
 type View = 'month' | 'week' | 'day'
 
@@ -157,6 +176,16 @@ type Draft = {
    * o paciente desfaz; mexer no seletor de agenda torna a escolha da pessoa.
    */
   agendaHerdadaDe: string | null
+  /**
+   * Horário já ocupado nesta agenda? (02/10) A chave (agenda + início + fim)
+   * do compromisso como ABRIU — a edição só confere quando muda agenda ou
+   * horário. null = compromisso novo.
+   */
+  horarioAberto: string | null
+  /** O que o servidor respondeu para a última chave conferida (null = ainda nada). */
+  conferenciaHorario: ConferenciaDoHorario | null
+  /** A chave que a recepção confirmou com "Salvar mesmo assim". */
+  horarioConfirmado: string | null
 }
 
 /** Preferências da conta para o modal (getAgendaPrefs). */
@@ -256,6 +285,35 @@ function baseDoRascunho(d: Draft, remarcacao: ConsultaFutura | null): Draft['ori
  */
 function faltaEscolherAgenda(d: Pick<Draft, 'calendarId'>, calendars: CalendarRow[]): boolean {
   return !d.calendarId && calendars.length > 1
+}
+
+/**
+ * O horário do rascunho a conferir no servidor (02/10), ou null: ver
+ * chaveParaConferir — sem agenda, data inválida, desmarcado, ou edição que
+ * não mexeu na agenda nem no horário.
+ */
+function chaveHorarioDoRascunho(d: Draft): string | null {
+  return chaveParaConferir({
+    id: d.id,
+    status: d.status,
+    calendarId: d.calendarId,
+    iso: draftIso(d),
+    aberto: d.horarioAberto,
+  })
+}
+
+/**
+ * Onde está o horário do rascunho: livre, conferindo, ocupado (com ou sem o
+ * "Salvar mesmo assim")... Na remarcação, a consulta X que este salvar MOVE
+ * não conta como ocupando o horário novo.
+ */
+function situacaoHorarioDoRascunho(d: Draft): SituacaoDoHorario {
+  return situacaoDoHorario({
+    chave: chaveHorarioDoRascunho(d),
+    conferencia: d.conferenciaHorario,
+    confirmadoPara: d.horarioConfirmado,
+    ignorar: [remarcacaoDoRascunho(d)?.id],
+  })
 }
 
 /**
@@ -420,6 +478,12 @@ export function AgendaClient() {
   const [view, setView] = useState<View>('month')
   /** Ver só UMA agenda (id) ou todas (null). Escolha da sessão, não é salva. */
   const [calendarFilter, setCalendarFilter] = useState<string | null>(null)
+  /**
+   * Desmarcados na grade (02/10): escondidos por padrão — a linha cancelada
+   * pelo sync, ao lado da consulta de verdade, parecia duplicata. Estado só da
+   * tela, de propósito: volta escondido a cada visita (agenda-desmarcados.ts).
+   */
+  const [mostrarDesmarcados, setMostrarDesmarcados] = useState(false)
   /** Dia em foco nas visões Dia e Semana (a Semana mostra a semana dele). */
   const [dayDate, setDayDate] = useState<Date>(() => new Date())
   const viewRef = useRef(view)
@@ -640,6 +704,41 @@ export function AgendaClient() {
     }
   }, [contatoParaConsultas])
 
+  // ⏰ Horário já ocupado nesta agenda? (02/10) A mesma consulta foi lançada
+  // duas vezes — uma digitada no Google, sem paciente, e outra aqui — e a
+  // pergunta acima só olha o paciente. Pergunta ao servidor quem já ocupa o
+  // horário na MESMA agenda; espera a pessoa parar de mexer no campo (o
+  // datetime muda a cada dígito) e só a resposta da chave ATUAL grava.
+  const chaveHorario = draft ? chaveHorarioDoRascunho(draft) : null
+  const idDoRascunho = draft?.id ?? null
+  useEffect(() => {
+    if (!chaveHorario) return
+    const pedido = pedidoDaChave(chaveHorario)
+    if (!pedido) return
+    let vivo = true
+    const grava = (conflitos: ConferenciaDoHorario['conflitos']) => {
+      if (!vivo) return
+      setDraft((d) =>
+        d && chaveHorarioDoRascunho(d) === chaveHorario
+          ? { ...d, conferenciaHorario: { chave: chaveHorario, conflitos } }
+          : d,
+      )
+    }
+    const t = window.setTimeout(() => {
+      compromissosNoHorario({ ...pedido, ignorarId: idDoRascunho })
+        .then((conflitos) => grava(conflitos))
+        .catch((err) => {
+          // Não deu para conferir: o modal diz isso e NÃO trava o salvar.
+          console.error('[agenda] horário ocupado:', err)
+          grava(null)
+        })
+    }, 350)
+    return () => {
+      vivo = false
+      window.clearTimeout(t)
+    }
+  }, [chaveHorario, idDoRascunho])
+
   const onSyncGoogle = async () => {
     setSyncing(true)
     try {
@@ -684,13 +783,15 @@ export function AgendaClient() {
       const e = s + 86_400_000 - 1
       return events.filter((ev) => {
         if (calendarFilter && ev.calendarId !== calendarFilter) return false
+        if (!visivelNaGrade(ev, mostrarDesmarcados)) return false
         const es = new Date(ev.startsAt).getTime()
         const ee = new Date(ev.endsAt).getTime()
         return es <= e && ee >= s
       })
     },
-    [events, calendarFilter],
+    [events, calendarFilter, mostrarDesmarcados],
   )
+  const desmarcadosNoPeriodo = useMemo(() => contarDesmarcados(events, calendarFilter), [events, calendarFilter])
 
   /**
    * Em que agenda o compromisso NOVO abre (02/10). Só o que a pessoa escolheu:
@@ -746,6 +847,10 @@ export function AgendaClient() {
       contatoNome: null,
       tituloDigitado: false,
       agendaHerdadaDe: null,
+      // Compromisso novo: confere o horário assim que tiver agenda (02/10).
+      horarioAberto: null,
+      conferenciaHorario: null,
+      horarioConfirmado: null,
     })
   }
 
@@ -819,6 +924,14 @@ export function AgendaClient() {
       // Na edição o título é o do compromisso: vai como sempre foi.
       tituloDigitado: true,
       agendaHerdadaDe: null,
+      // Horário ocupado (02/10): só confere se a edição mudar a agenda ou o
+      // horário — a chave do compromisso como abriu, pelo MESMO caminho do salvar.
+      horarioAberto: chaveDoHorario({
+        calendarId: ev.calendarId,
+        ...(draftIso({ allDay: ev.allDay, start, end }) ?? { startsAt: ev.startsAt, endsAt: ev.endsAt }),
+      }),
+      conferenciaHorario: null,
+      horarioConfirmado: null,
     })
   }
 
@@ -834,7 +947,11 @@ export function AgendaClient() {
     }
   }
 
-  const save = async () => {
+  /**
+   * `mesmoAssim` (02/10): veio do botão "Salvar mesmo assim" do aviso de
+   * horário ocupado — a recepção viu quem já está no horário e confirmou.
+   */
+  const save = async (opts?: { mesmoAssim?: boolean }) => {
     if (!draft || !draft.title.trim()) return
     // O botão já fica desligado e o erro aparece no formulário; isto é a trava.
     if (scheduleError(draft.start, draft.end, draft.allDay)) return
@@ -846,6 +963,11 @@ export function AgendaClient() {
     // remarcação (de qual) ou consulta nova (02/10, revisão). O botão já fica
     // desligado; isto é a trava — nada é decidido no lugar dela.
     if (faltaResponderRemarcacao(draft)) return
+    // Horário já ocupado nesta agenda (02/10): o Salvar de sempre fica
+    // desligado até a resposta chegar e, se ocupado, até o "Salvar mesmo
+    // assim". Isto é a trava; o botão do aviso passa `mesmoAssim`.
+    const situacaoHorario = situacaoHorarioDoRascunho(draft)
+    if (horarioTravaOSalvar(situacaoHorario) && !(opts?.mesmoAssim && situacaoHorario.tipo === 'ocupado')) return
     const iso = draftIso(draft)
     if (!iso) return
     setSaving(true)
@@ -1118,6 +1240,22 @@ export function AgendaClient() {
               </button>
             )
           })}
+          {/* 02/10: desmarcados escondidos por padrão — a linha cancelada ao
+              lado da consulta de verdade parecia duplicata. Só aparece quando
+              há algum no período (ou já está ligado). */}
+          {(desmarcadosNoPeriodo > 0 || mostrarDesmarcados) && (
+            <label
+              className="ml-auto flex cursor-pointer items-center gap-1.5 rounded-full px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted"
+              title="Compromissos desmarcados (cancelados) ficam escondidos. Ligado, aparecem riscados."
+            >
+              <Checkbox
+                checked={mostrarDesmarcados}
+                onCheckedChange={(v) => setMostrarDesmarcados(v === true)}
+                aria-label="Mostrar desmarcados"
+              />
+              Mostrar desmarcados ({desmarcadosNoPeriodo})
+            </label>
+          )}
         </div>
       )}
 
@@ -1162,35 +1300,43 @@ export function AgendaClient() {
                   </span>
                 </div>
                 <div className="flex flex-col gap-1">
-                  {dayEvents.slice(0, 3).map((ev) => (
-                    <span
-                      key={ev.id}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        openEdit(ev)
-                      }}
-                      className="flex items-center gap-1 truncate rounded px-1 py-0.5 text-[11px] font-medium"
-                      style={{ background: ev.calendarColor, color: inkOn(ev.calendarColor) }}
-                      title={
-                        ev.reminderBlock
-                          ? `${ev.title}${ev.contactName ? ` — ${ev.contactName}` : ''}: ${avisoNaAgenda(ev.reminderBlock)}`
-                          : ev.contactName
-                            ? `${ev.title} — ${ev.contactName}`
-                            : ev.title
-                      }
-                    >
-                      {/* A Agenda ABRE no mês: um compromisso cujo paciente não
-                          foi avisado tem que dar sinal aqui, senão o aviso só
-                          existe para quem já foi procurar na visão de dia. */}
-                      {ev.reminderBlock && <AlertTriangle className="h-3 w-3 shrink-0" />}
-                      {!ev.allDay && (
-                        <span className="tabular-nums opacity-90">
-                          {pad(new Date(ev.startsAt).getHours())}:{pad(new Date(ev.startsAt).getMinutes())}
-                        </span>
-                      )}
-                      <span className="truncate">{ev.title}</span>
-                    </span>
-                  ))}
+                  {dayEvents.slice(0, 3).map((ev) => {
+                    const bloqueio = avisoDeLembreteNaGrade(ev)
+                    return (
+                      <span
+                        key={ev.id}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openEdit(ev)
+                        }}
+                        className={cn(
+                          'flex items-center gap-1 truncate rounded px-1 py-0.5 text-[11px] font-medium',
+                          // Desmarcado (só com "Mostrar desmarcados"): riscado e esmaecido.
+                          classeDoDesmarcado(ev),
+                        )}
+                        style={{ background: ev.calendarColor, color: inkOn(ev.calendarColor) }}
+                        title={tooltipComStatus(
+                          ev,
+                          bloqueio
+                            ? `${ev.title}${ev.contactName ? ` — ${ev.contactName}` : ''}: ${avisoNaAgenda(bloqueio)}`
+                            : ev.contactName
+                              ? `${ev.title} — ${ev.contactName}`
+                              : ev.title,
+                        )}
+                      >
+                        {/* A Agenda ABRE no mês: um compromisso cujo paciente não
+                            foi avisado tem que dar sinal aqui, senão o aviso só
+                            existe para quem já foi procurar na visão de dia. */}
+                        {bloqueio && <AlertTriangle className="h-3 w-3 shrink-0" />}
+                        {!ev.allDay && (
+                          <span className="tabular-nums opacity-90">
+                            {pad(new Date(ev.startsAt).getHours())}:{pad(new Date(ev.startsAt).getMinutes())}
+                          </span>
+                        )}
+                        <span className="truncate">{ev.title}</span>
+                      </span>
+                    )
+                  })}
                   {dayEvents.length > 3 && (
                     <span className="px-1 text-[11px] text-muted-foreground">
                       +{dayEvents.length - 3} mais
@@ -1252,11 +1398,15 @@ const MAX_LADO_A_LADO = 3
  * cores parecidas, a cor sozinha não dizia de quem era o horário.
  */
 function eventTooltip(ev: EventRow, showCalendar: boolean, continua: boolean): string {
-  const base = ev.reminderBlock
-    ? `${ev.title}${ev.contactName ? ` — ${ev.contactName}` : ''}: ${avisoNaAgenda(ev.reminderBlock)}`
-    : ev.contactName
-      ? `${ev.title} — ${ev.contactName} (recebe os lembretes)`
-      : `${ev.title} — sem cliente/paciente: ninguém é avisado`
+  const bloqueio = avisoDeLembreteNaGrade(ev)
+  // Desmarcado (02/10): diz isso primeiro, e não promete lembrete.
+  const base = ehDesmarcado(ev)
+    ? tooltipComStatus(ev, ev.contactName ? `${ev.title} — ${ev.contactName}` : ev.title)
+    : bloqueio
+      ? `${ev.title}${ev.contactName ? ` — ${ev.contactName}` : ''}: ${avisoNaAgenda(bloqueio)}`
+      : ev.contactName
+        ? `${ev.title} — ${ev.contactName} (recebe os lembretes)`
+        : `${ev.title} — sem cliente/paciente: ninguém é avisado`
   const linhas = [base]
   if (continua) {
     const s = new Date(ev.startsAt)
@@ -1376,9 +1526,12 @@ function TimeGrid({
                           key={ev.id}
                           type="button"
                           onClick={() => onEdit(ev)}
-                          className="max-w-full truncate rounded px-2 py-0.5 text-left text-xs font-medium"
+                          className={cn(
+                            'max-w-full truncate rounded px-2 py-0.5 text-left text-xs font-medium',
+                            classeDoDesmarcado(ev),
+                          )}
                           style={{ background: ev.calendarColor, color: inkOn(ev.calendarColor) }}
-                          title={showCalendar ? `${ev.title}\nAgenda: ${ev.calendarName}` : ev.title}
+                          title={tooltipComStatus(ev, showCalendar ? `${ev.title}\nAgenda: ${ev.calendarName}` : ev.title)}
                         >
                           {ev.title}
                         </button>
@@ -1446,6 +1599,8 @@ function TimeGrid({
                       className={cn(
                         'absolute cursor-pointer overflow-hidden rounded-md shadow-sm',
                         isWeek ? 'px-1.5 py-0.5 text-[11px] leading-tight' : 'px-2 py-1 text-xs',
+                        // Desmarcado (só com "Mostrar desmarcados"): riscado e esmaecido.
+                        classeDoDesmarcado(ev),
                       )}
                       style={{
                         top: (startMin / 60) * HOUR_H + 1,
@@ -1460,7 +1615,7 @@ function TimeGrid({
                       {/* Fora do bloco do nome de propósito: uma consulta de 30 min é
                           baixa demais para mostrar o nome, e era justamente nela que
                           o alerta sumia. O aviso não pode depender da duração. */}
-                      {ev.reminderBlock && <AlertTriangle className="mr-1 inline h-3 w-3" />}
+                      {avisoDeLembreteNaGrade(ev) && <AlertTriangle className="mr-1 inline h-3 w-3" />}
                       <span className="font-medium tabular-nums">
                         {continua ? '↳' : `${pad(s.getHours())}:${pad(s.getMinutes())}`}
                       </span>{' '}
@@ -1487,7 +1642,7 @@ function TimeGrid({
                   const lista = run.events
                     .map((ev) => {
                       const s = new Date(ev.startsAt)
-                      return `${pad(s.getHours())}:${pad(s.getMinutes())} ${ev.title}${showCalendar ? ` (${ev.calendarName})` : ''}`
+                      return `${pad(s.getHours())}:${pad(s.getMinutes())} ${ehDesmarcado(ev) ? '(desmarcado) ' : ''}${ev.title}${showCalendar ? ` (${ev.calendarName})` : ''}`
                     })
                     .join('\n')
                   const hora = `${pad(Math.floor(run.startMin / 60))}:${pad(run.startMin % 60)}`
@@ -1536,7 +1691,8 @@ function EventModal({
   prefs: AgendaPrefs | null
   saving: boolean
   onToggleAllDay: (v: boolean) => void
-  onSave: () => void
+  /** `mesmoAssim`: o botão do aviso de horário ocupado (02/10). */
+  onSave: (opts?: { mesmoAssim?: boolean }) => void
   onDelete: () => void
   onClose: () => void
 }) {
@@ -1653,6 +1809,15 @@ function EventModal({
   // quando o worker tenta, então "não enviada" fica aqui e na conversa.
   const ultima = draft.ultimaConfirmacao
   const ultimaNaoSaiu = ultima && (ultima.status === 'naoEnviada' || ultima.status === 'incerta') ? ultima : null
+  // ⏰ Horário já ocupado nesta agenda (02/10): o aviso fica no lugar, junto
+  // dos campos de data, e o Salvar de sempre espera a resposta e, se ocupado,
+  // o "Salvar mesmo assim" — que confirma ESTE horário e salva.
+  const horario = situacaoHorarioDoRascunho(draft)
+  const chaveHorario = chaveHorarioDoRascunho(draft)
+  const salvarMesmoAssim = () => {
+    setDraft({ ...draft, horarioConfirmado: chaveHorario })
+    onSave({ mesmoAssim: true })
+  }
 
   return (
     <div
@@ -1676,6 +1841,14 @@ function EventModal({
         </div>
 
         <div className="flex flex-col gap-3">
+          {/* Desmarcado (02/10): a grade só o mostra com "Mostrar desmarcados";
+              aberto, diz o que ele é antes de qualquer outra coisa. */}
+          {draft.id && ehDesmarcado(draft) && (
+            <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              <strong className="text-foreground">Desmarcado.</strong> Não ocupa o horário na agenda e não recebe
+              lembrete.
+            </p>
+          )}
           {/* O lembrete deste compromisso não conseguiu sair. Fica no ALTO do
               formulário, com o que fazer — antes isso não aparecia em lugar
               nenhum e o paciente simplesmente não era avisado. */}
@@ -1927,6 +2100,48 @@ function EventModal({
               {timeError}
             </p>
           )}
+          {/* ⏰ 02/10: a mesma consulta lançada duas vezes na mesma agenda (uma
+              direto no Google, sem paciente). Diz quem já está no horário, no
+              lugar e não num toast, e pede o clique antes de salvar. */}
+          {!timeError && horario.tipo === 'conferindo' && (
+            <p className="-mt-1 text-[11px] text-muted-foreground">Conferindo se o horário está livre nesta agenda…</p>
+          )}
+          {!timeError && horario.tipo === 'naoConferido' && (
+            <p className="-mt-1 flex items-start gap-1 text-xs text-amber-700 dark:text-amber-400">
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+              Não deu para conferir se o horário está livre nesta agenda. Dá para salvar; se puder, confira a agenda.
+            </p>
+          )}
+          {!timeError && horario.tipo === 'ocupado' && (
+            <div
+              role="alert"
+              className="-mt-1 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2"
+            >
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <div className="min-w-0 text-xs">
+                {horario.conflitos.slice(0, 3).map((c) => (
+                  <p key={c.id} className="font-medium text-foreground">
+                    {avisoDeHorarioOcupado(c, tz)}
+                  </p>
+                ))}
+                {horario.conflitos.length > 3 && (
+                  <p className="font-medium text-foreground">E mais {horario.conflitos.length - 3} no mesmo horário.</p>
+                )}
+                <p className="mt-0.5 text-muted-foreground">
+                  Pode ser a mesma consulta lançada duas vezes (uma direto no Google). Confira antes de salvar.
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2"
+                  onClick={salvarMesmoAssim}
+                  disabled={saving || !draft.title.trim() || faltaAgenda || conferindo || faltaResponder}
+                >
+                  {saving ? 'Salvando…' : 'Salvar mesmo assim'}
+                </Button>
+              </div>
+            </div>
+          )}
 
           <div>
             <Label className="mb-1 block text-xs">
@@ -2033,9 +2248,19 @@ function EventModal({
             {/* Conferindo as consultas do paciente (02/10): salvar antes criaria
                 a duplicata que a pergunta existe para evitar. Sem resposta à
                 pergunta (revisão de 02/10) também espera. */}
+            {/* Horário ocupado (02/10): espera a conferência e, se ocupado, o
+                "Salvar mesmo assim" do aviso acima. */}
             <Button
-              onClick={onSave}
-              disabled={saving || !draft.title.trim() || !!timeError || faltaAgenda || conferindo || faltaResponder}
+              onClick={() => onSave()}
+              disabled={
+                saving ||
+                !draft.title.trim() ||
+                !!timeError ||
+                faltaAgenda ||
+                conferindo ||
+                faltaResponder ||
+                horarioTravaOSalvar(horario)
+              }
             >
               {saving ? 'Salvando…' : 'Salvar'}
             </Button>
