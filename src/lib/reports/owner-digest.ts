@@ -23,6 +23,12 @@
 // transferencias-paradas.ts), e "esperando resposta" passou a ignorar nota
 // interna: a conversa transferida pela IA termina numa nota 'bot' interna e,
 // antes, nunca contava como esperando.
+//
+// 02/10/2026 (revisão): no modo 'fechamento', a prévia da tela, o "Enviar
+// teste" e o "resumo" pedido ao Assistente diziam "Dia fechado! Bom descanso"
+// no meio da tarde. O texto agora segue o relógio: antes do fechamento de
+// hoje sai uma PARCIAL ("até as 15h20", sem "dia fechado"); depois, o de fim
+// do dia. A varredura só manda depois do fechamento, então nada muda nela.
 // ============================================================
 
 import { recommend } from '@/lib/orchestration/nba'
@@ -51,6 +57,7 @@ import {
   fusoSeguro,
 } from '@/lib/alerts/expediente'
 import {
+  LIMITE_PARADAS,
   listarTransferenciasParadas,
   rotuloDoContato,
   type TransferenciaParada,
@@ -161,6 +168,16 @@ function clampHour(h: number): number {
 }
 
 /**
+ * O expediente de HOJE já fechou (no fuso da conta)? Dia sem expediente
+ * (domingo da clínica) ou sem horário configurado → false: não houve
+ * fechamento. Mesma regra para "é hora de mandar" e para o texto parcial.
+ */
+export function diaJaFechou(s: AccountSettings, now: Date = new Date()): boolean {
+  const fecha = fechamentoDeHoje(s, now)
+  return fecha != null && localParts(now, fusoSeguro(s.businessTimezone)).minutes >= fecha
+}
+
+/**
  * É hora de mandar o resumo desta conta? Puro (o sweep chama a cada 15 min).
  *  • já mandou hoje (ownerDigestLastSent = data local de hoje) → não;
  *  • 'hora': no tick que cai na hora escolhida;
@@ -176,11 +193,7 @@ export function resumoNaHora(
   const chave = dateKeyInTz(tz, now)
   const modo = modoEfetivo(s)
   if (s.ownerDigestLastSent === chave) return { enviar: false, chave, modo }
-  if (modo === 'fechamento') {
-    const fecha = fechamentoDeHoje(s, now)
-    const enviar = fecha != null && localParts(now, tz).minutes >= fecha
-    return { enviar, chave, modo }
-  }
+  if (modo === 'fechamento') return { enviar: diaJaFechou(s, now), chave, modo }
   return { enviar: hourInTz(tz, now) === clampHour(s.ownerDigestHour), chave, modo }
 }
 
@@ -200,8 +213,10 @@ export interface DigestData {
   // Fase 2: ações da IA esperando aprovação + próximas ações recomendadas (NBA)
   pendingApprovals: number
   nextActions: string[]
-  /** Transferências da IA sem resposta humana (48h), da mais antiga. */
+  /** Transferências da IA sem resposta humana (7 dias), da mais antiga. */
   paradas: TransferenciaParada[]
+  /** A lista bateu no teto (LIMITE_PARADAS): pode haver mais — "200+". */
+  paradasNoTeto?: boolean
 }
 
 /** O resumo do FIM DO DIA (modo 'fechamento'): números de HOJE no fuso da conta. */
@@ -215,6 +230,8 @@ export interface FimDoDiaData {
   /** Transferências da IA ([[HANDOFF]]) feitas hoje. */
   transferenciasHoje: number
   paradas: TransferenciaParada[]
+  /** A lista bateu no teto (LIMITE_PARADAS): pode haver mais — "200+". */
+  paradasNoTeto?: boolean
   vendasHojeCount: number
   vendasHojeValor: number
   openValue: number
@@ -314,20 +331,27 @@ async function numerosDoFunil(
   }
 }
 
-/** A lista nunca derruba o resumo: falhou, o resumo sai sem ela (e o log diz). */
+/** A lista nunca derruba o resumo: falhou, o resumo sai sem ela (e o log diz).
+ *  `noTeto`: voltou com LIMITE_PARADAS itens — pode haver mais, e o resumo
+ *  não pode afirmar um número exato (02/10/2026, revisão). */
 async function paradasDaConta(
   accountId: string,
   cfg: Pick<AccountSettings, 'businessHoursEnabled' | 'businessDays' | 'businessTimezone'>,
   now: Date,
-): Promise<TransferenciaParada[]> {
+): Promise<{ lista: TransferenciaParada[]; noTeto: boolean }> {
   try {
     // 7 dias, não as 48h do padrão: quem espera desde anteontem é justamente quem
     // o dono mais precisa ver na lista (02/10: um paciente transferido em 30/09
     // ainda sem resposta sumiria do resumo). O AVISO imediato segue em 24h.
-    return await listarTransferenciasParadas(accountId, cfg, { now, horas: 24 * 7 })
+    const lista = await listarTransferenciasParadas(accountId, cfg, {
+      now,
+      horas: 24 * 7,
+      limite: LIMITE_PARADAS,
+    })
+    return { lista, noTeto: lista.length >= LIMITE_PARADAS }
   } catch (err) {
     console.error(`[owner-digest] lista de transferências paradas falhou (conta ${accountId}):`, err)
-    return []
+    return { lista: [], noTeto: false }
   }
 }
 
@@ -394,7 +418,8 @@ export async function buildDigestData(
     ...funil,
     waitingCount: num(primeira<{ n?: number }>(waiting).n),
     nextActions,
-    paradas,
+    paradas: paradas.lista,
+    paradasNoTeto: paradas.noTeto,
   }
 }
 
@@ -453,7 +478,8 @@ export async function buildFimDoDiaData(
     respondidasHoje: num(ch.respondidas),
     esperandoAgora: num(primeira<{ n?: number }>(waiting).n),
     transferenciasHoje: num(primeira<{ n?: number }>(transferencias).n),
-    paradas,
+    paradas: paradas.lista,
+    paradasNoTeto: paradas.noTeto,
     vendasHojeCount: num(vh.n),
     vendasHojeValor: num(vh.total),
     ...funil,
@@ -481,19 +507,25 @@ function formatarDinheiro(v: number, currency: string): string {
  * As transferências paradas, uma por linha: "nome · há 2h · motivo". Até
  * MAX_PARADAS_NO_RESUMO; o resto vira "+N". O tempo é de RELÓGIO (o resumo diz
  * desde quando a pessoa espera; o aviso de parada é que conta expediente).
+ * `noTeto`: a lista foi cortada no limite — o total vira "200+" e o resto
+ * "(ou mais)", em vez de um número que parece exato.
  */
 export function linhasDasParadas(
   paradas: ReadonlyArray<TransferenciaParada>,
   max = MAX_PARADAS_NO_RESUMO,
+  noTeto = false,
 ): string[] {
   if (paradas.length === 0) return []
-  const linhas = [`⏰ Transferências da IA sem resposta: ${paradas.length}`]
+  const total = noTeto ? `${paradas.length}+` : String(paradas.length)
+  const linhas = [`⏰ Transferências da IA sem resposta: ${total}`]
   for (const t of paradas.slice(0, max)) {
     const motivo = t.motivo ? ` · ${clipAtWord(t.motivo, 60)}` : ''
     linhas.push(`   • ${rotuloDoContato(t)} · há ${formatarEspera(t.minutosRelogio)}${motivo}`)
   }
   const resto = paradas.length - max
-  if (resto > 0) linhas.push(`   +${resto} ${resto === 1 ? 'outra' : 'outras'}`)
+  if (resto > 0) {
+    linhas.push(`   +${resto} ${resto === 1 ? 'outra' : 'outras'}${noTeto ? ' (ou mais)' : ''}`)
+  }
   return linhas
 }
 
@@ -532,7 +564,7 @@ export function formatDigest(
       ? `💬 Esperando resposta (últimas 24h): ${data.waitingCount} conversa(s)`
       : `💬 Nenhum cliente esperando resposta 👏`,
   )
-  lines.push(...linhasDasParadas(paradas))
+  lines.push(...linhasDasParadas(paradas, MAX_PARADAS_NO_RESUMO, data.paradasNoTeto))
   if (data.monthGoal > 0) {
     const pct = Math.round((data.monthWonValue / data.monthGoal) * 100)
     lines.push(
@@ -564,10 +596,20 @@ export function formatDigest(
 
 const DIAS_DA_SEMANA = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'] as const
 
+/** 920 → "15h20" · 900 → "15h". */
+function horaCurta(minutos: number): string {
+  const h = Math.floor(minutos / 60)
+  const m = minutos % 60
+  return m ? `${h}h${String(m).padStart(2, '0')}` : `${h}h`
+}
+
 /**
  * O resumo do FIM DO DIA (modo 'fechamento'), curto pra ler no WhatsApp.
  * Linha de funil/venda só aparece com número > 0: a clínica que não usa funil
  * não recebe "💰 Vendas hoje: R$ 0" toda noite.
+ *
+ * `parcial`: o dia ainda não fechou (prévia, teste ou pedido ao Assistente
+ * antes do fechamento) — cabeçalho "até as 15h20" e fecho sem "Dia fechado".
  */
 export function formatFimDoDia(
   data: FimDoDiaData,
@@ -575,13 +617,20 @@ export function formatFimDoDia(
   tz: string,
   staleDays: number,
   now: Date = new Date(),
+  opts: { parcial?: boolean } = {},
 ): string {
   const zona = fusoSeguro(tz)
   const money = (v: number) => formatarDinheiro(v, currency)
-  const dia = DIAS_DA_SEMANA[localParts(now, zona).day]
+  const agora = localParts(now, zona)
+  const dia = DIAS_DA_SEMANA[agora.day]
   const ddmm = new Intl.DateTimeFormat('pt-BR', { timeZone: zona, day: '2-digit', month: '2-digit' }).format(now)
 
-  const lines: string[] = [`📊 Resumo de hoje, ${dia} ${ddmm}`, '']
+  const lines: string[] = [
+    opts.parcial
+      ? `📊 Parcial de hoje até as ${horaCurta(agora.minutes)}, ${dia} ${ddmm}`
+      : `📊 Resumo de hoje, ${dia} ${ddmm}`,
+    '',
+  ]
   if (data.chegaramHoje > 0) {
     const resp = data.respondidasHoje === 1 ? '1 respondida' : `${data.respondidasHoje} respondidas`
     lines.push(`💬 Conversas que chegaram hoje: ${data.chegaramHoje} · ${resp}`)
@@ -596,7 +645,7 @@ export function formatFimDoDia(
   if (data.transferenciasHoje > 0) {
     lines.push(`🙋 Transferências da IA hoje: ${data.transferenciasHoje}`)
   }
-  lines.push(...linhasDasParadas(data.paradas))
+  lines.push(...linhasDasParadas(data.paradas, MAX_PARADAS_NO_RESUMO, data.paradasNoTeto))
 
   if (data.vendasHojeCount > 0) {
     const vendas = data.vendasHojeCount === 1 ? '1 venda' : `${data.vendasHojeCount} vendas`
@@ -622,7 +671,16 @@ export function formatFimDoDia(
   }
 
   lines.push('')
-  if (data.paradas.length > 0) {
+  if (opts.parcial) {
+    // O dia segue: o fecho fala do que ainda dá para fazer HOJE.
+    if (data.paradas.length > 0) {
+      lines.push('Ainda dá tempo de dar retorno às transferências paradas hoje. 💜')
+    } else if (data.esperandoAgora > 0) {
+      lines.push('Ainda dá tempo de responder quem está esperando. 💜')
+    } else {
+      lines.push('Tudo em dia até agora. 💜')
+    }
+  } else if (data.paradas.length > 0) {
     lines.push('Vale dar retorno às transferências paradas antes de amanhã. 💜')
   } else if (data.esperandoAgora > 0) {
     lines.push('Quem ficou esperando hoje é o primeiro da fila amanhã. 💜')
@@ -671,7 +729,9 @@ async function sendDigest(
   return true
 }
 
-/** Monta o texto do resumo no modo pedido (ou no da conta). */
+/** Monta o texto do resumo no modo pedido (ou no da conta). No modo
+ *  'fechamento', antes do fechamento de hoje sai a PARCIAL (ver o topo) — vale
+ *  para a prévia, o teste e o Assistente, que passam todos por aqui. */
 async function montarTexto(
   accountId: string,
   s: AccountSettings,
@@ -682,28 +742,36 @@ async function montarTexto(
   const currency = await accountCurrency(accountId)
   if (modoEfetivo(s, modo) === 'fechamento') {
     const data = await buildFimDoDiaData(accountId, s, now)
-    return formatFimDoDia(data, currency, tz, s.staleDealDays, now)
+    return formatFimDoDia(data, currency, tz, s.staleDealDays, now, {
+      parcial: !diaJaFechou(s, now),
+    })
   }
   const data = await buildDigestData(accountId, tz, s.staleDealDays, s, now)
   return formatDigest(data, currency, tz, s.staleDealDays)
 }
 
-/** Monta o texto do resumo para a conta AGORA (não envia) — pro preview na UI.
+/** Monta o texto do resumo para a conta AGORA (não envia) — pro preview na UI
+ *  e para o "resumo" pedido ao Assistente do dono.
  *  `modo` = o que está escolhido na tela (ainda sem salvar); sem ele, o da conta. */
-export async function previewDigest(accountId: string, modo?: DigestMode): Promise<string> {
+export async function previewDigest(
+  accountId: string,
+  modo?: DigestMode,
+  now: Date = new Date(),
+): Promise<string> {
   const s = await getAccountSettings(accountId)
-  return montarTexto(accountId, s, modo ?? toDigestMode(s.ownerDigestMode))
+  return montarTexto(accountId, s, modo ?? toDigestMode(s.ownerDigestMode), now)
 }
 
 /** Envia o resumo AGORA pro número configurado (botão "enviar teste"). */
 export async function sendDigestNow(
   accountId: string,
   modo?: DigestMode,
+  now: Date = new Date(),
 ): Promise<{ ok: boolean; error?: string }> {
   const s = await getAccountSettings(accountId)
   const phone = (s.ownerDigestPhone ?? '').trim()
   if (!phone) return { ok: false, error: 'Configure o número do WhatsApp primeiro.' }
-  const text = await montarTexto(accountId, s, modo ?? toDigestMode(s.ownerDigestMode))
+  const text = await montarTexto(accountId, s, modo ?? toDigestMode(s.ownerDigestMode), now)
   const ok = await sendDigest(accountId, phone, s.ownerDigestChannelId, text)
   return ok
     ? { ok: true }

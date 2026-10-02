@@ -130,6 +130,9 @@ async function dispatch(args: AssistantArgs, intent: AssistantIntent, members: {
       return helpText()
 
     case 'summary':
+      // O mesmo texto do Sócio IA, AGORA. No modo 'fechamento', pedido antes
+      // do fechamento de hoje vem a parcial ("até as 15h20"), não o "Dia
+      // fechado! Bom descanso" (02/10/2026) — previewDigest decide pelo relógio.
       return previewDigest(accountId)
 
     case 'stalled_deals': {

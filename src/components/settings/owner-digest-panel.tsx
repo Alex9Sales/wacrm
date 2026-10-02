@@ -95,19 +95,27 @@ export function OwnerDigestPanel() {
 
   async function handleSave() {
     setSaving(true);
+    // 02/10/2026 (revisão): salvo "no fim do expediente" com o horário de
+    // atendimento desligado, a tela mostra "Num horário" (é o que sai de fato)
+    // e a outra opção fica desabilitada — o dono não escolheu trocar. Mandar
+    // "hora" aqui apagava a escolha dele em QUALQUER Salvar (mudar o telefone,
+    // por exemplo). Sem o campo, o servidor mantém o modo salvo, que volta a
+    // valer quando o horário for religado.
+    const manterModoSalvo =
+      savedMode === "fechamento" && !expedienteOk && mode === "hora";
     const res = await setOwnerDigest({
       enabled,
       hour,
       phone,
       channelId: channelId || null,
-      mode,
+      mode: manterModoSalvo ? undefined : mode,
     });
     setSaving(false);
     if (res.error) {
       toast.error(res.error);
       return;
     }
-    setSavedMode(mode);
+    if (!manterModoSalvo) setSavedMode(mode);
     toast.success("Resumo diário salvo.");
   }
 

@@ -72,6 +72,23 @@ const KIND_TEMPLATE: Partial<
   demo: 'alertDemoTemplate',
 }
 
+/** Por que o aviso não saiu. 'erro' = exceção (banco, canal); os outros são
+ *  configuração e se repetem igual na próxima tentativa. */
+export type FalhaDoAviso = 'desligado' | 'sem_texto' | 'sem_canal' | 'erro'
+
+/**
+ * Resultado do envio. `tentou` = chegou a CHAMAR o provedor do canal (02/10/
+ * 2026, revisão do aviso de transferência parada): falha com tentou=true é
+ * AMBÍGUA — o WAHA pode abortar por tempo (15 s) e ainda assim entregar —,
+ * então quem pode repetir o envio não deve repetir; com tentou=false a falha é
+ * certa e nada saiu.
+ */
+export interface ResultadoDoAviso {
+  ok: boolean
+  tentou: boolean
+  falha?: FalhaDoAviso
+}
+
 /**
  * Envia o aviso do evento pro WhatsApp do responsável — se a conta tiver
  * telefone configurado E o toggle daquele evento ligado. A mensagem sai do
@@ -81,11 +98,12 @@ export async function sendOwnerAlert(
   accountId: string,
   kind: OwnerAlertKind,
   vars: Record<string, string>,
-): Promise<boolean> {
+): Promise<ResultadoDoAviso> {
+  let tentou = false
   try {
     const s = await getAccountSettings(accountId)
     const phone = s.alertPhone.replace(/\D/g, '')
-    if (!phone || !s[KIND_TOGGLE[kind]]) return false
+    if (!phone || !s[KIND_TOGGLE[kind]]) return { ok: false, tentou, falha: 'desligado' }
 
     const templateKey = KIND_TEMPLATE[kind]
     const template = ((templateKey ? s[templateKey] : '') || '').trim() || DEFAULT_ALERT_TEMPLATES[kind]
@@ -101,7 +119,7 @@ export async function sendOwnerAlert(
       clean[k] = nice || (!clean.telefone?.trim() && /[^\s\p{P}]/u.test(raw) ? raw : '')
     }
     const text = renderAlertTemplate(template, clean)
-    if (!text) return false
+    if (!text) return { ok: false, tentou, falha: 'sem_texto' }
 
     const channels = await listChannels(accountId)
     const wa =
@@ -114,15 +132,17 @@ export async function sendOwnerAlert(
         : null) ?? channels.find((c) => WHATSAPP_PROVIDERS.includes(c.provider))
     if (!wa) {
       console.warn(`[owner-alerts] conta ${accountId} sem canal WhatsApp p/ avisar`)
-      return false
+      return { ok: false, tentou, falha: 'sem_canal' }
     }
     // Destino pode ser um canal com IA (ver lib/ai/self-message.ts): marca o
     // texto pra IA não responder ao próprio aviso do sistema.
     const provider = getProvider(wa.provider)
     try {
       await markSelfMessage(text)
+      // Daqui em diante uma exceção NÃO prova que a mensagem não saiu.
+      tentou = true
       await provider.sendText(wa, phone, text)
-      return true
+      return { ok: true, tentou }
     } catch (err) {
       // 🚫 Canal oficial (Meta) fora da janela de 24h recusa texto livre, e o
       // aviso sumia (17/09, Limpeza com Zelo: o resumo da reunião nunca
@@ -140,10 +160,10 @@ export async function sendOwnerAlert(
       console.warn(
         `[owner-alerts] texto recusado pelo canal (${err instanceof Error ? err.message : err}); aviso ${kind} enviado pelo template ${tpl}`,
       )
-      return true
+      return { ok: true, tentou }
     }
   } catch (err) {
     console.error(`[owner-alerts] falha ao enviar aviso ${kind}:`, err)
-    return false
+    return { ok: false, tentou, falha: 'erro' }
   }
 }

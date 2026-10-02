@@ -30,6 +30,13 @@ export interface WaitState {
   pendingByConv: Map<string, number>; // convId → waiting-since (ms epoch)
   responseSumByAgent: Map<string, { sum: number; count: number }>;
   agentRepliedConvs: Set<string>; // convs with ≥1 human-agent message (fromMe or CRM)
+  /** Conversas esperando cuja espera começa na 1ª linha (não interna) que o
+   *  passeio viu — nenhuma resposta antes dela DENTRO da janela de 7 dias.
+   *  A espera pode ter começado ANTES da janela; aí pendingByConv traz só a
+   *  1ª mensagem que ainda cabe nela, e esse início anda conforme as antigas
+   *  saem da janela (02/10/2026: o SLA reancorava o episódio e repetia o
+   *  aviso — ver sla.ts, "âncora"). */
+  pendingMaybeOlder: Set<string>;
 }
 
 /** Uma linha do passeio: mensagens de UMA conta, em ordem de conversa e hora. */
@@ -88,11 +95,18 @@ export function computeWaitState(rows: WalkRow[]): WaitState {
   const pendingByConv = new Map<string, number>();
   const responseSumByAgent = new Map<string, { sum: number; count: number }>();
   const agentRepliedConvs = new Set<string>();
+  const pendingMaybeOlder = new Set<string>();
 
   let currentConv = '';
   let pendingCustomer: number | null = null;
+  // Já passou alguma mensagem que chega ao cliente nesta conversa (na janela)?
+  // Sem nenhuma, a espera pode vir de antes da janela (ver pendingMaybeOlder).
+  let sawReply = false;
   const flush = (conv: string) => {
-    if (conv && pendingCustomer != null) pendingByConv.set(conv, pendingCustomer);
+    if (conv && pendingCustomer != null) {
+      pendingByConv.set(conv, pendingCustomer);
+      if (!sawReply) pendingMaybeOlder.add(conv);
+    }
   };
 
   for (const row of rows) {
@@ -100,6 +114,7 @@ export function computeWaitState(rows: WalkRow[]): WaitState {
       flush(currentConv);
       currentConv = row.conversationId;
       pendingCustomer = null;
+      sawReply = false;
     }
     if (!row.createdAt) continue;
     if (row.isInternal) continue; // nota interna: o cliente não vê (ver acima)
@@ -110,6 +125,7 @@ export function computeWaitState(rows: WalkRow[]): WaitState {
     if (row.senderType === 'customer') {
       if (pendingCustomer == null) pendingCustomer = ts;
     } else {
+      sawReply = true;
       // Agent/bot reply — close a pending sample and attribute it.
       if (pendingCustomer != null) {
         const diffMin = (ts - pendingCustomer) / 60_000;
@@ -125,7 +141,7 @@ export function computeWaitState(rows: WalkRow[]): WaitState {
   }
   flush(currentConv);
 
-  return { pendingByConv, responseSumByAgent, agentRepliedConvs };
+  return { pendingByConv, responseSumByAgent, agentRepliedConvs, pendingMaybeOlder };
 }
 
 /** Per-agent workload overview for the supervision panel. When `hideAdmins`

@@ -13,6 +13,7 @@ vi.mock('@/db', () => ({ db: { execute: h.execute } }))
 
 import { HANDOFF_NOTE_PREFIX } from '@/lib/ai/handoff-pause'
 import {
+  LIMITE_PARADAS,
   linkDaConversa,
   listarTransferenciasParadas,
   rotuloDoContato,
@@ -70,12 +71,50 @@ describe('transferências paradas — consulta', () => {
     await listarTransferenciasParadas('conta-1', CLINICA, { horas: 72, limite: 9999 })
     expect(consulta().params).toEqual(expect.arrayContaining([72, 74, 500]))
   })
+
+  it('o limite corta as MAIS ANTIGAS (antes cortava as novas, que o aviso precisa)', async () => {
+    h.execute.mockResolvedValueOnce({ rows: [] })
+    await listarTransferenciasParadas('conta-1', CLINICA)
+    const q = consulta()
+    expect(q.sql.replace(/\s+/g, ' ')).toMatch(/ORDER BY h\.handoff_at DESC LIMIT \$\d+\s*$/)
+    expect(q.params).toContain(LIMITE_PARADAS)
+  })
+
+  it('só as não avisadas, quando pedido (sem a nota ⏰ depois da transferência)', async () => {
+    h.execute.mockResolvedValueOnce({ rows: [] })
+    await listarTransferenciasParadas('conta-1', CLINICA)
+    const sem = consulta().sql.replace(/\s+/g, ' ')
+    expect(sem).not.toContain('AND NOT EXISTS ( SELECT 1 FROM messages a')
+
+    h.execute.mockReset()
+    h.execute.mockResolvedValueOnce({ rows: [] })
+    await listarTransferenciasParadas('conta-1', CLINICA, { soNaoAvisadas: true })
+    const q = consulta()
+    const com = q.sql.replace(/\s+/g, ' ')
+    expect(com).toContain(
+      "AND NOT EXISTS ( SELECT 1 FROM messages a WHERE a.conversation_id = h.conversation_id AND a.is_internal = true AND a.sender_type = 'bot' AND a.content_text LIKE $",
+    )
+    expect(com).toContain('AND a.created_at >= h.handoff_at ) ORDER BY h.handoff_at DESC')
+    expect(com).not.toMatch(/--/)
+    expect(q.params).toContain('conta-1')
+  })
 })
 
 describe('transferências paradas — cada item', () => {
   it('monta nome, tempos de relógio e de expediente, motivo, link e trava', async () => {
+    // O banco devolve da mais NOVA para a mais antiga (ORDER BY … DESC).
     h.execute.mockResolvedValueOnce({
       rows: [
+        // Data ilegível não vira item (nem derruba a lista).
+        { conversation_id: 'conv-c', handoff_at: null, note_text: '', contact_name: 'X', contact_phone: '' },
+        {
+          conversation_id: 'conv-b',
+          handoff_at: new Date('2026-10-03T11:00:00Z'),
+          note_text: '🙋 *A IA pediu um humano*',
+          contact_name: '.',
+          contact_phone: '5511900000002',
+          avisado_em: '2026-10-03T11:16:00Z',
+        },
         {
           conversation_id: 'conv-a',
           // Sexta 21h; agora é sábado 8h20 → 680 min de relógio, 20 de expediente.
@@ -85,21 +124,12 @@ describe('transferências paradas — cada item', () => {
           contact_phone: '5511900000001',
           avisado_em: null,
         },
-        {
-          conversation_id: 'conv-b',
-          handoff_at: new Date('2026-10-03T11:00:00Z'),
-          note_text: '🙋 *A IA pediu um humano*',
-          contact_name: '.',
-          contact_phone: '5511900000002',
-          avisado_em: '2026-10-03T11:16:00Z',
-        },
-        // Data ilegível não vira item (nem derruba a lista).
-        { conversation_id: 'conv-c', handoff_at: null, note_text: '', contact_name: 'X', contact_phone: '' },
       ],
     })
     const lista = await listarTransferenciasParadas('conta-1', CLINICA, { now: sp('2026-10-03T08:20') })
 
-    expect(lista).toHaveLength(2)
+    // Quem chama recebe da mais antiga para a mais nova.
+    expect(lista.map((t) => t.conversationId)).toEqual(['conv-a', 'conv-b'])
     const [a, b] = lista
     expect(a).toMatchObject({
       conversationId: 'conv-a',

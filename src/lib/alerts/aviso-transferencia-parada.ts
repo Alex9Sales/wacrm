@@ -14,8 +14,17 @@
 //     conta em minutos de expediente (expediente.ts);
 //   • não avisa de novo: a nota interna "⏰ Transferência sem resposta…" na
 //     conversa marca que o aviso saiu. A nota é gravada ANTES de mandar (é a
-//     trava) e apagada se o envio falhar — avisar duas vezes é pior que
-//     tentar de novo no próximo tick (ver o incidente do lembrete em dobro);
+//     trava). Se o envio falha (02/10/2026, revisão):
+//       – depois de CHAMAR o canal, a falha é ambígua (o WAHA aborta em 15 s
+//         e às vezes entrega mesmo assim): a nota FICA, com o texto "pode não
+//         ter saído" — avisar duas vezes é pior que não repetir (ver o
+//         incidente do lembrete em dobro). Antes ela era apagada e o aviso
+//         saía de novo a cada 2 min;
+//       – antes de chamar o canal por configuração (sem canal, aviso
+//         desligado, texto vazio): a próxima tentativa daria no mesmo — a nota
+//         fica com o motivo, em vez de gravar e apagar para sempre;
+//       – antes de chamar o canal por erro (banco fora): nada saiu, a nota é
+//         apagada e tenta de novo no próximo tick, até 3 vezes;
 //   • só transferências das últimas 24h — o primeiro deploy não despeja as
 //     antigas no WhatsApp do dono. Exceção: a que esperou quase tudo com a
 //     empresa FECHADA (sábado 16h50 → segunda 9h05) acabou de passar do limite
@@ -27,7 +36,7 @@
 // "não lida". Sem 'server-only': roda no worker.
 // ============================================================
 
-import { eq, sql } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 
 import { db, messages } from '@/db'
 import {
@@ -35,7 +44,7 @@ import {
   type AccountSettings,
 } from '@/lib/settings/account-settings'
 import { isWithinBusinessHours, localParts } from '@/lib/settings/business-hours'
-import { sendOwnerAlert } from './owner-alerts'
+import { sendOwnerAlert, type FalhaDoAviso } from './owner-alerts'
 import { expedienteConfigurado, formatarEspera, fusoSeguro } from './expediente'
 import {
   listarTransferenciasParadas,
@@ -54,6 +63,18 @@ export const JANELA_ESTENDIDA_HORAS = 72
 export const FOLGA_ESTENDIDA_MIN = 120
 export const AVISOS_POR_CONTA = 5
 export const AVISOS_POR_RODADA = 20
+/** Tentativas da MESMA transferência quando o envio falha por erro antes de
+ *  chamar o canal (nada saiu). Na última, a nota fica com o motivo. */
+export const TENTATIVAS_SEM_ENVIO = 3
+
+/** Falhas "erro antes do canal" por transferência, na memória do worker
+ *  (conta:conversa:hora da transferência → quantas). Um reinício zera — no
+ *  pior caso mais 3 tentativas por deploy, nunca um laço sem fim. */
+export type MemoriaDeFalhas = Map<string, number>
+const falhasDoWorker: MemoriaDeFalhas = new Map()
+/** Chaves de transferências que sumiram da lista (respondidas) ficariam para
+ *  sempre; acima disto a memória recomeça. */
+const MEMORIA_MAX = 500
 
 /** Minutos configurados → inteiro entre 5 e 240 (padrão 15). */
 export function limiarDaTransferenciaParada(v: unknown): number {
@@ -109,6 +130,20 @@ export function textoDaNota(tempo: string): string {
   return `${STALLED_NOTE_PREFIX} há ${tempo} — aviso enviado ao responsável.`
 }
 
+/** A nota quando o aviso não saiu com certeza (com o motivo) ou pode não ter
+ *  saído (sem motivo). Mesmo começo da nota normal: continua sendo a trava. */
+export function textoDaNotaSemAviso(tempo: string, motivo: string | null): string {
+  return motivo
+    ? `${STALLED_NOTE_PREFIX} há ${tempo} — o aviso ao responsável não saiu (${motivo}).`
+    : `${STALLED_NOTE_PREFIX} há ${tempo} — o aviso ao responsável pode não ter saído.`
+}
+
+const MOTIVO_DA_FALHA: Record<Exclude<FalhaDoAviso, 'erro'>, string> = {
+  desligado: 'aviso desligado ou sem telefone',
+  sem_texto: 'texto do aviso vazio',
+  sem_canal: 'nenhum canal WhatsApp conectado',
+}
+
 /** Grava a nota-trava; devolve o id (null = não gravou, então não avisa). */
 async function gravarNota(conversationId: string, tempo: string): Promise<string | null> {
   try {
@@ -130,11 +165,27 @@ async function gravarNota(conversationId: string, tempo: string): Promise<string
   }
 }
 
-async function soltarNota(id: string): Promise<void> {
+// A nota é sempre da conversa que veio da lista DESTA conta (a lista filtra
+// pela conta); o conversation_id no WHERE amarra a nota a ela.
+async function soltarNota(id: string, conversationId: string): Promise<void> {
   try {
-    await db.delete(messages).where(eq(messages.id, id))
+    await db
+      .delete(messages)
+      .where(and(eq(messages.id, id), eq(messages.conversationId, conversationId)))
   } catch (err) {
     console.error('[handoff-stalled] não consegui apagar a nota do aviso que falhou:', err)
+  }
+}
+
+/** Troca o texto da nota-trava (ela continua travando: mesmo começo). */
+async function reescreverNota(id: string, conversationId: string, texto: string): Promise<void> {
+  try {
+    await db
+      .update(messages)
+      .set({ contentText: texto })
+      .where(and(eq(messages.id, id), eq(messages.conversationId, conversationId)))
+  } catch (err) {
+    console.error('[handoff-stalled] não consegui reescrever a nota do aviso que falhou:', err)
   }
 }
 
@@ -144,6 +195,7 @@ export async function avisarTransferenciasParadasDaConta(
   s: AccountSettings,
   now: Date,
   maximo: number,
+  falhas: MemoriaDeFalhas = falhasDoWorker,
 ): Promise<number> {
   if (!s.alertOnHandoffStalled || !(s.alertPhone ?? '').replace(/\D/g, '')) return 0
   // Fora do expediente comercial não avisa (o relógio de expediente também
@@ -151,30 +203,58 @@ export async function avisarTransferenciasParadasDaConta(
   if (expedienteConfigurado(s) && !isWithinBusinessHours(s, now)) return 0
 
   const limiar = limiarDaTransferenciaParada(s.handoffStalledMinutes)
+  // Só as ainda sem nota ⏰: as já avisadas não ocupam o limite da lista.
   const lista = await listarTransferenciasParadas(accountId, s, {
     now,
     horas: JANELA_ESTENDIDA_HORAS,
+    soNaoAvisadas: true,
   })
   const vencidas = transferenciasParaAvisar(lista, limiar).slice(0, Math.max(0, maximo))
+  if (falhas.size > MEMORIA_MAX) falhas.clear()
   let enviados = 0
   for (const t of vencidas) {
     const tempo = textoDaEspera(t, s.businessTimezone)
     const notaId = await gravarNota(t.conversationId, tempo)
     if (!notaId) continue
-    const ok = await sendOwnerAlert(accountId, 'handoff_stalled', {
+    const r = await sendOwnerAlert(accountId, 'handoff_stalled', {
       cliente: t.nome,
       telefone: t.telefone,
       tempo,
       motivo: t.motivo,
       link: t.link,
     })
-    if (!ok) {
-      await soltarNota(notaId)
-      console.warn(
-        `[handoff-stalled] aviso não saiu (conta ${accountId}, conversa ${t.conversationId}) — tenta no próximo tick`,
-      )
+    const chave = `${accountId}:${t.conversationId}:${t.transferidaEm.toISOString()}`
+    if (!r.ok) {
+      const onde = `conta ${accountId}, conversa ${t.conversationId}`
+      if (r.tentou) {
+        // Ambígua: pode ter chegado. A nota fica (trava) e diz isso a quem
+        // abrir a conversa; não há nova tentativa.
+        falhas.delete(chave)
+        await reescreverNota(notaId, t.conversationId, textoDaNotaSemAviso(tempo, null))
+        console.warn(`[handoff-stalled] aviso pode não ter saído (${onde}) — não repete`)
+        continue
+      }
+      if (r.falha && r.falha !== 'erro') {
+        // Configuração (sem canal, desligado…): tentar de novo daria no mesmo.
+        falhas.delete(chave)
+        await reescreverNota(notaId, t.conversationId, textoDaNotaSemAviso(tempo, MOTIVO_DA_FALHA[r.falha]))
+        console.warn(`[handoff-stalled] aviso não saiu (${onde}): ${r.falha} — não repete`)
+        continue
+      }
+      // Erro antes de chamar o canal: nada saiu. Tenta no próximo tick, com teto.
+      const n = (falhas.get(chave) ?? 0) + 1
+      if (n >= TENTATIVAS_SEM_ENVIO) {
+        falhas.delete(chave)
+        await reescreverNota(notaId, t.conversationId, textoDaNotaSemAviso(tempo, `falhou ${n} vezes`))
+        console.warn(`[handoff-stalled] aviso não saiu (${onde}) — desistiu depois de ${n} falhas`)
+        continue
+      }
+      falhas.set(chave, n)
+      await soltarNota(notaId, t.conversationId)
+      console.warn(`[handoff-stalled] aviso não saiu (${onde}) — tenta no próximo tick (${n}/${TENTATIVAS_SEM_ENVIO})`)
       continue
     }
+    falhas.delete(chave)
     enviados++
     console.log(
       `[handoff-stalled] aviso enviado (conta ${accountId}, conversa ${t.conversationId}, ${t.minutosExpediente} min de expediente)`,

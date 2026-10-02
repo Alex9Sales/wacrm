@@ -46,16 +46,19 @@ vi.mock('@/lib/alerts/transferencias-paradas', async (importOriginal) => ({
 }))
 
 import {
+  diaJaFechou,
   formatDigest,
   formatFimDoDia,
   linhasDasParadas,
+  previewDigest,
   resumoNaHora,
   runOwnerDigestSweep,
+  sendDigestNow,
   type DigestData,
   type FimDoDiaData,
 } from './owner-digest'
 import { DEFAULT_ACCOUNT_SETTINGS, type AccountSettings } from '@/lib/settings/account-settings'
-import type { TransferenciaParada } from '@/lib/alerts/transferencias-paradas'
+import { LIMITE_PARADAS, type TransferenciaParada } from '@/lib/alerts/transferencias-paradas'
 
 const sp = (isoLocal: string) => new Date(`${isoLocal}:00-03:00`)
 
@@ -237,6 +240,99 @@ describe('texto do fim do dia', () => {
     ])
     const nove = Array.from({ length: 9 }, (_, i) => parada(i + 1))
     expect(linhasDasParadas(nove).at(-1)).toBe('   +1 outra')
+  })
+
+  it('lista cortada no teto: "200+" e "(ou mais)", nunca um número que parece exato', () => {
+    const cheia = Array.from({ length: LIMITE_PARADAS }, (_, i) => parada(i + 1))
+    const linhas = linhasDasParadas(cheia, 8, true)
+    expect(linhas[0]).toBe(`⏰ Transferências da IA sem resposta: ${LIMITE_PARADAS}+`)
+    expect(linhas.at(-1)).toBe(`   +${LIMITE_PARADAS - 8} outras (ou mais)`)
+  })
+
+  it('parcial (o dia ainda não fechou): "até as 15h20" e nada de "Dia fechado"', () => {
+    const agora = sp('2026-10-02T15:20')
+    const vazio = formatFimDoDia(FIM_VAZIO, 'BRL', 'America/Sao_Paulo', 7, agora, { parcial: true })
+    expect(vazio.split('\n')[0]).toBe('📊 Parcial de hoje até as 15h20, sexta 02/10')
+    expect(vazio).not.toContain('Dia fechado')
+    expect(vazio).not.toContain('Bom descanso')
+    expect(vazio).not.toContain('amanhã')
+    expect(vazio.trim().endsWith('Tudo em dia até agora. 💜')).toBe(true)
+
+    const esperando = formatFimDoDia({ ...FIM_VAZIO, esperandoAgora: 2 }, 'BRL', 'America/Sao_Paulo', 7, agora, {
+      parcial: true,
+    })
+    expect(esperando.trim().endsWith('Ainda dá tempo de responder quem está esperando. 💜')).toBe(true)
+    const comParadas = formatFimDoDia({ ...FIM_VAZIO, paradas: [parada(1)] }, 'BRL', 'America/Sao_Paulo', 7, agora, {
+      parcial: true,
+    })
+    expect(comParadas.trim().endsWith('Ainda dá tempo de dar retorno às transferências paradas hoje. 💜')).toBe(true)
+    // Hora cheia sai sem ":00".
+    expect(
+      formatFimDoDia(FIM_VAZIO, 'BRL', 'America/Sao_Paulo', 7, sp('2026-10-02T09:00'), { parcial: true }).split('\n')[0],
+    ).toBe('📊 Parcial de hoje até as 9h, sexta 02/10')
+  })
+})
+
+describe('prévia, teste e Assistente — o texto segue o relógio', () => {
+  beforeEach(() => {
+    h.getSettings.mockReset()
+    h.getSettings.mockResolvedValue({ ...CLINICA })
+    h.execute.mockResolvedValue({ rows: [{ n: 0, total: 0, chegaram: 0, respondidas: 0 }] })
+    h.listar.mockResolvedValue([])
+  })
+
+  it('o dia já fechou? só depois do fechamento de hoje; dia sem expediente nunca', () => {
+    expect(diaJaFechou(CLINICA, sp('2026-10-02T15:20'))).toBe(false)
+    expect(diaJaFechou(CLINICA, sp('2026-10-02T20:30'))).toBe(true)
+    expect(diaJaFechou(CLINICA, sp('2026-10-04T21:00'))).toBe(false) // domingo fechado
+    expect(diaJaFechou({ ...CLINICA, businessHoursEnabled: false }, sp('2026-10-02T21:00'))).toBe(false)
+  })
+
+  it('modo fechamento, no meio da tarde: parcial, sem "Dia fechado! Bom descanso"', async () => {
+    const out = await previewDigest('conta-clinica', undefined, sp('2026-10-02T15:20'))
+    expect(out.split('\n')[0]).toBe('📊 Parcial de hoje até as 15h20, sexta 02/10')
+    expect(out).not.toContain('Dia fechado')
+  })
+
+  it('modo fechamento, depois do fechamento: o resumo do fim do dia', async () => {
+    const out = await previewDigest('conta-clinica', undefined, sp('2026-10-02T20:40'))
+    expect(out.split('\n')[0]).toBe('📊 Resumo de hoje, sexta 02/10')
+    expect(out.trim().endsWith('Dia fechado! Bom descanso. 💜')).toBe(true)
+  })
+
+  it('domingo (dia sem expediente): parcial — não houve fechamento', async () => {
+    const out = await previewDigest('conta-clinica', undefined, sp('2026-10-04T21:00'))
+    expect(out.split('\n')[0]).toBe('📊 Parcial de hoje até as 21h, domingo 04/10')
+    expect(out).not.toContain('Dia fechado')
+  })
+
+  it('"Enviar teste" no meio da tarde manda a parcial', async () => {
+    expect(await sendDigestNow('conta-clinica', 'fechamento', sp('2026-10-02T15:20'))).toEqual({ ok: true })
+    const [, , text] = h.sendText.mock.calls[0]
+    expect(text).toMatch(/^📊 Parcial de hoje até as 15h20/)
+    expect(text).not.toContain('Dia fechado')
+  })
+
+  it('modo hora não muda (o Assistente pede o resumo da conta)', async () => {
+    h.getSettings.mockResolvedValue({ ...CLINICA, ownerDigestMode: 'hora' })
+    const out = await previewDigest('conta-manha', undefined, sp('2026-10-02T15:20'))
+    expect(out.startsWith('☀️ Bom dia! Seu resumo da Fluxia')).toBe(true)
+  })
+
+  it('lista de paradas no teto vira "200+" no resumo (e pede o teto à lista)', async () => {
+    h.listar.mockResolvedValue(Array.from({ length: LIMITE_PARADAS }, (_, i) => parada(i + 1)))
+    const out = await previewDigest('conta-clinica', undefined, sp('2026-10-02T20:40'))
+    expect(out).toContain(`⏰ Transferências da IA sem resposta: ${LIMITE_PARADAS}+`)
+    expect(out).toContain('(ou mais)')
+    expect(h.listar).toHaveBeenCalledWith('conta-clinica', expect.anything(), {
+      now: sp('2026-10-02T20:40'),
+      horas: 24 * 7,
+      limite: LIMITE_PARADAS,
+    })
+
+    h.listar.mockResolvedValue([parada(1), parada(2)])
+    const poucas = await previewDigest('conta-clinica', undefined, sp('2026-10-02T20:40'))
+    expect(poucas).toContain('⏰ Transferências da IA sem resposta: 2\n')
   })
 })
 

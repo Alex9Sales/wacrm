@@ -40,9 +40,19 @@
 //     recebe (SLA_REASSIGN_TITLE) desde o início do episódio.
 // Uma memória no processo do worker evita reconsultar isso a cada minuto; se
 // ela some (deploy/restart), o banco responde a mesma coisa.
+//
+// 02/10/2026 (revisão) — ÂNCORA. O passeio de mensagens olha só 7 dias: numa
+// espera mais longa que isso, a 1ª mensagem do cliente sai da janela e o
+// "início do episódio" pula para a seguinte. As marcas acima (aviso e
+// redistribuição) eram procuradas a partir desse início que anda, então
+// sumiam — e o aviso e a troca voltavam, inclusive para quem já tinha tido a
+// conversa. Agora as marcas são procuradas desde a ÂNCORA: a última mensagem
+// que chegou ao cliente antes da espera (sem limite de dias; nenhuma = desde
+// sempre). Só custa uma consulta quando a espera parece cortada pela janela
+// (pendingMaybeOlder), uma vez por episódio.
 // ============================================================
 
-import { and, asc, desc, eq, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, lt, ne, sql } from 'drizzle-orm';
 
 import {
   db,
@@ -52,6 +62,7 @@ import {
   sectorMembers,
   notifications,
   contacts,
+  messages,
 } from '@/db';
 import type { AccountSettings } from '@/lib/settings/account-settings';
 import { publishEvent } from '@/lib/events/publish';
@@ -120,10 +131,15 @@ interface ConvRef {
 }
 
 export interface SlaStore {
-  waitState(accountId: string): Promise<Pick<WaitState, 'pendingByConv' | 'agentRepliedConvs'>>;
+  waitState(
+    accountId: string,
+  ): Promise<Pick<WaitState, 'pendingByConv' | 'agentRepliedConvs' | 'pendingMaybeOlder'>>;
   openAssignedConversations(accountId: string): Promise<SlaConversation[]>;
   members(accountId: string): Promise<{ userId: string; role: string }[]>;
   sectorMemberIds(sectorId: string): Promise<string[]>;
+  /** Hora (ISO) da última mensagem que CHEGOU ao cliente (não é do cliente
+   *  nem nota interna) antes de beforeIso, sem limite de dias. null = nunca. */
+  lastReplyBefore(q: ConvRef & { beforeIso: string }): Promise<string | null>;
   /** Já existe aviso SLA_ALERT_TITLE desta conversa criado a partir de sinceIso? */
   hasSlaAlertSince(q: ConvRef & { sinceIso: string; userIds: string[] }): Promise<boolean>;
   /** Trocas de dono desta conversa a partir de sinceIso, mais antiga primeiro. */
@@ -132,14 +148,16 @@ export interface SlaStore {
   holderBefore(
     q: ConvRef & { beforeIso: string; notBeforeIso: string; userIds: string[] },
   ): Promise<string | null>;
-  /** Troca o dono SE ainda for fromAgentId (outra pessoa pode ter mexido) e
-   *  grava a notificação-marca para quem recebe. true = trocou. */
+  /** Troca o dono SE ainda for fromAgentId (outra pessoa pode ter mexido) E
+   *  ninguém respondeu ao cliente desde episodeStartIso, e grava a
+   *  notificação-marca para quem recebe. true = trocou. */
   reassign(
     r: ConvRef & {
       contactId: string | null;
       fromAgentId: string;
       toAgentId: string;
       waitedMin: number;
+      episodeStartIso: string;
     },
   ): Promise<boolean>;
   insertSlaAlert(
@@ -199,6 +217,28 @@ export const dbSlaStore: SlaStore = {
       .from(sectorMembers)
       .where(eq(sectorMembers.sectorId, sectorId));
     return rows.map((r) => r.userId);
+  },
+
+  async lastReplyBefore({ accountId, conversationId, beforeIso }) {
+    // Uma conversa só, pelo índice (conversation_id, created_at DESC); o JOIN
+    // prende à conta (cada conta só os próprios dados). O lt() já descarta
+    // created_at NULL, então o DESC não traz NULL na frente.
+    const [row] = await db
+      .select({ at: messages.createdAt })
+      .from(messages)
+      .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+      .where(
+        and(
+          eq(messages.conversationId, conversationId),
+          eq(conversations.accountId, accountId),
+          ne(messages.senderType, 'customer'),
+          eq(messages.isInternal, false),
+          lt(messages.createdAt, beforeIso),
+        ),
+      )
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+    return row?.at ?? null;
   },
 
   async hasSlaAlertSince({ accountId, conversationId, sinceIso, userIds }) {
@@ -267,7 +307,15 @@ export const dbSlaStore: SlaStore = {
     return row?.userId ?? null;
   },
 
-  async reassign({ accountId, conversationId, contactId, fromAgentId, toAgentId, waitedMin }) {
+  async reassign({
+    accountId,
+    conversationId,
+    contactId,
+    fromAgentId,
+    toAgentId,
+    waitedMin,
+    episodeStartIso,
+  }) {
     const contactName = await contactNameOf(contactId);
     const moved = await db.transaction(async (tx) => {
       // Cala o gatilho notify_conversation_assigned (o genérico "Nova conversa
@@ -286,9 +334,24 @@ export const dbSlaStore: SlaStore = {
             // Só se ainda está com quem lemos: não atropela quem transferiu
             // ou fechou a conversa à mão no meio do tick.
             eq(conversations.assignedAgentId, fromAgentId),
+            // 02/10/2026 (revisão): e só se a espera continua. O passeio de
+            // mensagens foi lido no começo do tick; se o atendente respondeu
+            // depois disso, a conversa iria para outra pessoa logo após a
+            // resposta. Resposta = o que chega ao cliente (não é do cliente
+            // nem nota interna), desde o início da espera. Subconsulta com
+            // nomes escritos à mão e a conversa como parâmetro: interpolar a
+            // coluna do Drizzle aqui sairia sem qualificar.
+            sql`NOT EXISTS (
+              SELECT 1 FROM messages r
+              WHERE r.conversation_id = ${conversationId}
+                AND r.sender_type <> 'customer'
+                AND r.is_internal = false
+                AND r.created_at >= ${episodeStartIso}
+            )`,
           ),
         )
         .returning({ id: conversations.id });
+      // Não trocou (outra pessoa mexeu ou alguém respondeu): sem a marca.
       if (rows.length === 0) return false;
       await tx.insert(notifications).values({
         accountId,
@@ -332,6 +395,10 @@ export const dbSlaStore: SlaStore = {
 
 interface EpisodeMemo {
   episodeStart: number;
+  /** Desde quando procurar as marcas deste episódio (ms). Sem espera cortada
+   *  pela janela é o próprio episodeStart; com, a última resposta antes dela
+   *  (0 = nunca houve). undefined = ainda não calculada. */
+  anchor?: number;
   /** Já há aviso SLA_ALERT_TITLE neste episódio → o SLA terminou com ela. */
   alerted: boolean;
   /** O SLA já redistribuiu neste episódio. */
@@ -359,7 +426,7 @@ export async function runSlaReassignForAccount(
   const now = deps.now ?? Date.now();
   const windowMs = Math.max(1, minutes) * 60_000;
 
-  const { pendingByConv, agentRepliedConvs } = await store.waitState(accountId);
+  const { pendingByConv, agentRepliedConvs, pendingMaybeOlder } = await store.waitState(accountId);
   const convs = await store.openAssignedConversations(accountId);
 
   // Handling-role members of the account, and the current open load per agent.
@@ -402,10 +469,20 @@ export async function runSlaReassignForAccount(
     if (episodeStart == null) continue; // not awaiting a reply
 
     const prev = known?.get(c.id);
+    // Mesma espera de antes? Igual início, ou — espera cortada pela janela de
+    // 7 dias — o início só andou porque a 1ª mensagem saiu da janela. Uma
+    // resposta entre os dois ticks estaria dentro da janela (então a conversa
+    // não estaria em pendingMaybeOlder), logo é o mesmo episódio e a âncora
+    // e as marcas já sabidas continuam valendo (sem reconsultar a cada tick).
+    const sameEpisode =
+      prev != null &&
+      (prev.episodeStart === episodeStart ||
+        (pendingMaybeOlder.has(c.id) &&
+          prev.anchor !== undefined &&
+          episodeStart > prev.episodeStart));
     const memo: EpisodeMemo =
-      prev && prev.episodeStart === episodeStart
-        ? prev
-        : { episodeStart, alerted: false, slaReassigned: false };
+      prev && sameEpisode ? prev : { episodeStart, alerted: false, slaReassigned: false };
+    memo.episodeStart = episodeStart;
     memos.set(c.id, memo);
 
     const assignedAtMs = c.assignedAt ? Date.parse(c.assignedAt) || 0 : 0;
@@ -413,10 +490,28 @@ export async function runSlaReassignForAccount(
     if (now - clockStart < windowMs) continue; // still within the window
 
     const ref = { accountId, conversationId: c.id };
-    const sinceIso = new Date(episodeStart).toISOString();
     const alert = async (reason: SlaAlertReason) => {
       await store.insertSlaAlert({ ...ref, contactId: c.contactId, userIds: adminUserIds, reason });
       memo.alerted = true;
+    };
+    // Âncora das marcas (ver o topo): uma consulta por episódio, e só quando a
+    // espera pode ter começado antes da janela do passeio.
+    const anchorOf = async (): Promise<number> => {
+      if (memo.anchor === undefined) {
+        if (pendingMaybeOlder.has(c.id)) {
+          const last = await store.lastReplyBefore({
+            ...ref,
+            beforeIso: new Date(episodeStart).toISOString(),
+          });
+          // Nunca houve resposta → desde sempre (0). Hora ilegível → o início
+          // visto, como antes da âncora: 0 ali acharia marcas de outra espera.
+          const at = last ? Date.parse(last) : 0;
+          memo.anchor = Number.isFinite(at) ? at : episodeStart;
+        } else {
+          memo.anchor = episodeStart;
+        }
+      }
+      return memo.anchor;
     };
 
     try {
@@ -425,9 +520,16 @@ export async function runSlaReassignForAccount(
       if (!memo.alerted) {
         memo.alerted =
           adminUserIds.length === 0 ||
-          (await store.hasSlaAlertSince({ ...ref, sinceIso, userIds: adminUserIds }));
+          (await store.hasSlaAlertSince({
+            ...ref,
+            sinceIso: new Date(await anchorOf()).toISOString(),
+            userIds: adminUserIds,
+          }));
       }
       if (memo.alerted) continue;
+
+      const anchor = await anchorOf();
+      const sinceIso = new Date(anchor).toISOString();
 
       // 2) Already engaged (a human agent replied at least once) → alert only.
       if (agentRepliedConvs.has(c.id)) {
@@ -437,9 +539,12 @@ export async function runSlaReassignForAccount(
 
       // 3) Já redistribuí nesta espera? Só é possível se a atribuição atual é
       //    de pelo menos uma janela depois do início (o SLA nunca age antes),
-      //    então a conversa nova, atribuída na chegada, nem consulta o banco.
+      //    então a conversa nova, atribuída na chegada, nem consulta o banco
+      //    aqui. Conta a partir da âncora (≤ início real da espera): com a
+      //    espera cortada pela janela, o episodeStart visto é posterior ao
+      //    real e esconderia uma troca feita antes dele.
       let history: SlaAssignment[] | null = null;
-      if (!memo.slaReassigned && assignedAtMs >= episodeStart + windowMs) {
+      if (!memo.slaReassigned && assignedAtMs >= anchor + windowMs) {
         history = await store.assignmentsSince({ ...ref, sinceIso, userIds: memberIds });
         memo.slaReassigned = history.some((h) => h.bySla);
       }
@@ -452,6 +557,8 @@ export async function runSlaReassignForAccount(
       // 4) Redistribui (uma vez), nunca para quem já teve a conversa nesta
       //    espera: quem está com ela, quem a recebeu desde o início da espera
       //    e — se ela trocou de mãos — quem estava com ela quando começou.
+      //    Tudo a partir da âncora; âncora 0 (nunca houve resposta) já traz
+      //    todas as trocas da conversa e o holderBefore não acha nada antes.
       const episodeHistory =
         history ?? (await store.assignmentsSince({ ...ref, sinceIso, userIds: memberIds }));
       const holders = new Set<string>([fromAgentId, ...episodeHistory.map((h) => h.userId)]);
@@ -459,7 +566,7 @@ export async function runSlaReassignForAccount(
         const atStart = await store.holderBefore({
           ...ref,
           beforeIso: sinceIso,
-          notBeforeIso: new Date(episodeStart - HOLDER_LOOKBACK_MS).toISOString(),
+          notBeforeIso: new Date(anchor - HOLDER_LOOKBACK_MS).toISOString(),
           userIds: memberIds,
         });
         if (atStart) holders.add(atStart);
@@ -486,8 +593,11 @@ export async function runSlaReassignForAccount(
         fromAgentId,
         toAgentId: target,
         waitedMin: Math.max(0, Math.floor((now - episodeStart) / 60_000)),
+        episodeStartIso: new Date(episodeStart).toISOString(),
       });
-      if (!moved) continue; // alguém mexeu na conversa no meio — o próximo tick relê
+      // Alguém mexeu na conversa ou respondeu no meio do tick: não trocou e não
+      // gravou marca — o próximo tick relê.
+      if (!moved) continue;
       memo.slaReassigned = true;
       loadByAgent.set(fromAgentId, (loadByAgent.get(fromAgentId) ?? 1) - 1);
       loadByAgent.set(target, (loadByAgent.get(target) ?? 0) + 1);
