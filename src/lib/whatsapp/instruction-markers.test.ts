@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { stripInstructionMarkers } from './instruction-markers'
+import { avisoDeAcaoMalFechada, stripInstructionMarkers } from './instruction-markers'
 
 /**
  * Esta função é a última porta antes do cliente. O que precisa de teste não é
@@ -151,5 +151,87 @@ describe('marcador conhecido MAL FECHADO (02/10/2026)', () => {
 
   it('[[AUDIO]] e [[foto:…]] continuam passando', () => {
     expect(stripInstructionMarkers('[[AUDIO]] Bom dia [[RESUMO:x] ]').text).toBe('[[AUDIO]] Bom dia')
+  })
+})
+
+// 02/10/2026, revisão: "[[ETIQUETA:Lead quente]" com UM "]" no fim da linha e
+// a resposta na linha de baixo. Sem "]]" adiante, o marcador ia até o fim do
+// texto e a resposta INTEIRA sumia.
+describe('"]" sozinho no fim da linha fecha o marcador (02/10/2026, revisão)', () => {
+  it('"[[ETIQUETA:x]\nresposta" mantém a resposta', () => {
+    const r = stripInstructionMarkers('[[ETIQUETA:x]\nresposta')
+    expect(r.text).toBe('resposta')
+    expect(r.removed).toEqual(['[[ETIQUETA:x]'])
+  })
+
+  it('o caso da revisão: a saudação inteira continua', () => {
+    expect(stripInstructionMarkers('[[ETIQUETA:Lead quente]\nOlá Maria! Vi que você quer saber da franquia.').text).toBe(
+      'Olá Maria! Vi que você quer saber da franquia.',
+    )
+  })
+
+  it('"Oi\n[[NOTA:y]\nQual cidade?" mantém as duas linhas', () => {
+    expect(stripInstructionMarkers('Oi\n[[NOTA:y]\nQual cidade?').text).toBe('Oi\nQual cidade?')
+  })
+
+  it('espaço/tab depois do "]" no fim da linha também fecha', () => {
+    expect(stripInstructionMarkers('[[FUNIL:Qualificado] \t\nPode me passar seu e-mail?').text).toBe(
+      'Pode me passar seu e-mail?',
+    )
+  })
+
+  it('com "]]"/"] ]" válido mais adiante, o "]" do fim da linha é do conteúdo e o marcador vai até lá', () => {
+    expect(stripInstructionMarkers('Perfeito!\n[[RESUMO:Ana [Centro]\norçamento] ]\nAté já.').text).toBe(
+      'Perfeito!\nAté já.',
+    )
+    expect(stripInstructionMarkers('Oi.\n[[NOTA:linha [1]\nlinha 2]]\nTchau.').text).toBe('Oi.\nTchau.')
+  })
+
+  it('o "]]" do PRÓXIMO marcador não conta como fechamento deste', () => {
+    const r = stripInstructionMarkers('[[ETIQUETA:x]\nQual seu bairro?\n[[NOTA:pediu bairro]]')
+    expect(r.text).toBe('Qual seu bairro?')
+    expect(r.removed).toEqual(['[[ETIQUETA:x]', '[[NOTA:pediu bairro]]'])
+  })
+
+  it('"]" no fim do TEXTO continua sumindo inteiro (sem resposta depois)', () => {
+    expect(stripInstructionMarkers('Já te passo. [[TRANSFERIR:Vendas|Ana]').text).toBe('Já te passo.')
+  })
+})
+
+describe('aviso de AÇÃO mal fechada (02/10/2026, revisão)', () => {
+  it('ação mal fechada → UMA nota dizendo que não foi executada, com o trecho', () => {
+    const r = stripInstructionMarkers('[[ETIQUETA:Lead quente]\nOlá Maria!')
+    const aviso = avisoDeAcaoMalFechada(r.removed)
+    expect(aviso).toContain('⚠️ A IA escreveu [[ETIQUETA…] ] com o fechamento errado — a ação NÃO foi executada; confira.')
+    expect(aviso).toContain('[[ETIQUETA:Lead quente]')
+  })
+
+  it('várias numa resposta: um aviso só, com todas', () => {
+    const aviso = avisoDeAcaoMalFechada(['[[AGENDAR:2026-10-08T14:00|Consulta] ]', '[[GANHO]', '[[cobrança:promessa] ]'])
+    expect(aviso?.match(/⚠️/g)).toHaveLength(1)
+    expect(aviso).toContain('[[AGENDAR…] ], [[GANHO…] ] e [[COBRANÇA…] ]')
+    expect(aviso).toContain('as ações NÃO foram executadas')
+  })
+
+  it('cada nome de ação da lista avisa', () => {
+    for (const n of [
+      'AGENDAR', 'TRANSFERIR', 'AGENTE', 'FUNIL', 'PERDER', 'GANHO', 'IGNORAR', 'ETIQUETA', 'CRIARCARD',
+      'NOTA', 'ATRIBUTO', 'COBRAR', 'COBRANCA', 'TELEFONE', 'AVISARDONO', 'RESOLVER', 'ENVIAR',
+    ]) {
+      expect(avisoDeAcaoMalFechada([`[[${n}:x] ]`]), n).toContain(`[[${n}…] ]`)
+    }
+  })
+
+  it('bem fechado, RESUMO/HANDOFF (parser tolerante: a ação rodou) e marcador desconhecido: sem aviso', () => {
+    expect(avisoDeAcaoMalFechada(['[[ETIQUETA:x]]', '[[NOTA:linha 1\nlinha 2]]'])).toBeNull()
+    expect(avisoDeAcaoMalFechada(['[[RESUMO:Ana] ]', '[[HANDOFF] ]', '[[SILENT]'])).toBeNull()
+    expect(avisoDeAcaoMalFechada(['[[QUALQUER_COISA]]', '[[NOTAS] ]'])).toBeNull()
+    expect(avisoDeAcaoMalFechada([])).toBeNull()
+  })
+
+  it('o trecho é curto, mesmo quando o marcador sem fechamento levou o resto da resposta', () => {
+    const aviso = avisoDeAcaoMalFechada([`[[NOTA:${'x'.repeat(500)}`]) ?? ''
+    expect(aviso.length).toBeLessThan(400)
+    expect(aviso).toContain('…')
   })
 })

@@ -8,7 +8,11 @@ import {
   sqlAgendaPrincipal,
   type MeetingReminder,
 } from './followup'
-import { fatoDoProfissional, profissionalDoLembrete } from './meeting-reminder-profissional'
+import {
+  contaComVariosProfissionais,
+  fatoDoProfissional,
+  profissionalDoLembrete,
+} from './meeting-reminder-profissional'
 
 /**
  * 02/10 — o lembrete da véspera passa a dizer com QUEM é a consulta. Numa
@@ -123,7 +127,7 @@ describe('o fato do profissional no prompt do lembrete', () => {
   it('com profissional: diz com quem é, com o nome exato, e vale mais que o nome do texto do operador', () => {
     const p = buildMeetingReminderPrompt(r, QUI_14H, SP, null, null, {
       nome: 'o Dr. Beltrano Teste',
-      contaComVariasAgendas: true,
+      contaComVariosProfissionais: true,
     })
     expect(p).toContain('A consulta é com o Dr. Beltrano Teste.')
     expect(p).toContain('using exactly this name ("o Dr. Beltrano Teste")')
@@ -134,20 +138,20 @@ describe('o fato do profissional no prompt do lembrete', () => {
     expect(p).not.toContain('Não cite profissional')
   })
 
-  it('sem profissional, numa conta com várias agendas: não cite profissional', () => {
+  it('sem profissional, numa conta com várias agendas de profissional: não cite profissional', () => {
     const p = buildMeetingReminderPrompt(r, QUI_14H, SP, null, null, {
       nome: null,
-      contaComVariasAgendas: true,
+      contaComVariosProfissionais: true,
     })
     expect(p).toContain('Não cite profissional')
     expect(p).not.toContain('A consulta é com')
     expect(p).toContain(`Operator guidance:\n${r.instructions}`)
   })
 
-  it('conta com uma agenda só e sem profissional: nada muda (sem fato)', () => {
+  it('conta sem várias agendas de profissional e sem profissional: nada muda (sem fato)', () => {
     const sem = buildMeetingReminderPrompt(r, QUI_14H, SP, null, null, {
       nome: null,
-      contaComVariasAgendas: false,
+      contaComVariosProfissionais: false,
     })
     expect(sem).not.toContain('Appointment fact')
     // Igual ao prompt de antes (o parâmetro é opcional).
@@ -158,6 +162,34 @@ describe('o fato do profissional no prompt do lembrete', () => {
     expect(fatoDoProfissional('a Dra. Ciclana Modelo', false)).toContain('A consulta é com a Dra. Ciclana Modelo.')
     expect(fatoDoProfissional(null, true)).toContain('Não cite profissional')
     expect(fatoDoProfissional(null, false)).toBeNull()
+  })
+
+  it('sem profissional: não chama de "sua consulta" — usa a palavra que a conversa já usa', () => {
+    // 02/10, revisão: "sua consulta" fixo virava "consulta" uma reunião comercial.
+    const f = fatoDoProfissional(null, true) ?? ''
+    expect(f).not.toContain('sua consulta')
+    expect(f).toContain('using the same word the conversation already uses')
+  })
+})
+
+describe('várias agendas DE PROFISSIONAL (02/10, revisão)', () => {
+  it('duas ou mais agendas com Dr./Dra. no nome: sim', () => {
+    expect(contaComVariosProfissionais(['Dra. Fulana Exemplo', 'Dr. Beltrano Teste'])).toBe(true)
+    expect(
+      contaComVariosProfissionais(['clinica.exemplo@gmail.com', 'Agenda do Dr. Beltrano', 'Dra Ciclana', 'Recepção']),
+    ).toBe(true)
+  })
+
+  it('franquia com seis agendas do Google sem "Dr.": não — o nome do operador continua valendo', () => {
+    const franquia = ['comercial@exemplo.com', 'Comercial', 'Franquias SP', 'Franquias RJ', 'Expansão', 'Reuniões']
+    expect(contaComVariosProfissionais(franquia)).toBe(false)
+  })
+
+  it('uma só de profissional, setor com título ou nome vazio: não', () => {
+    expect(contaComVariosProfissionais(['Dra. Fulana Exemplo', 'Minha agenda', 'Feriados'])).toBe(false)
+    expect(contaComVariosProfissionais(['Dra. Fulana Exemplo', 'DR. RADIOLOGIA'])).toBe(false)
+    expect(contaComVariosProfissionais([null, undefined, ''])).toBe(false)
+    expect(contaComVariosProfissionais([])).toBe(false)
   })
 })
 
@@ -173,12 +205,17 @@ describe('template do lembrete: {profissional}', () => {
     ).toEqual(['Ana', 'com o Dr. Beltrano Teste', '08/10 às 14:00'])
   })
 
-  it('sem profissional: vazio — nunca a chave crua no celular do paciente', () => {
+  it('sem profissional: "nossa equipe" — nunca a chave crua no celular do paciente, nem parâmetro vazio', () => {
+    // 02/10, revisão: vazio a Meta recusa e o degrau do lembrete travava.
     expect(aplicarTokensDoTemplate(['{profissional}', '{PROFISSIONAL}'], { ...base, profissional: null })).toEqual([
-      '',
-      '',
+      'nossa equipe',
+      'nossa equipe',
     ])
-    expect(aplicarTokensDoTemplate(['{Profissional}'], base)).toEqual([''])
+    expect(aplicarTokensDoTemplate(['{Profissional}'], base)).toEqual(['nossa equipe'])
+    expect(aplicarTokensDoTemplate(['com {profissional}'], { ...base, profissional: '  ' })).toEqual([
+      'com nossa equipe',
+    ])
+    expect(aplicarTokensDoTemplate(['{profissional}'], { ...base, profissional: null }).every((p) => p !== '')).toBe(true)
   })
 
   it('os tokens de antes continuam iguais', () => {

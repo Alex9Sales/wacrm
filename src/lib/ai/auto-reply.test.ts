@@ -817,6 +817,51 @@ describe('dispatchInboundToAiReply — handoff', () => {
   })
 })
 
+// 02/10/2026, revisão: a rede de segurança tira o marcador de AÇÃO mal fechado
+// do texto — o cliente não vê —, mas a ação não roda. Sem nota, sumia sem
+// rastro. Agora: UMA nota interna por resposta dizendo o que não foi feito.
+describe('dispatchInboundToAiReply — ação mal fechada vira nota interna (02/10/2026, revisão)', () => {
+  const enviados = () => h.engineSendText.mock.calls.map((c) => (c[0] as { text: string }).text)
+  const avisos = () =>
+    (h.postInternalNote.mock.calls as [{ conversationId: string; text: string }][])
+      .map((c) => c[0])
+      .filter((n) => n.text.includes('com o fechamento errado'))
+
+  it('"[[ETIQUETA:Lead quente]" + saudação: a saudação sai e a equipe é avisada uma vez', async () => {
+    h.generateReply.mockResolvedValue({ text: '[[ETIQUETA:Lead quente]\nOlá Maria! Como posso ajudar?', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(enviados()).toEqual(['Olá Maria! Como posso ajudar?'])
+    expect(avisos()).toHaveLength(1)
+    expect(avisos()[0]).toMatchObject({ conversationId: 'conv-1' })
+    expect(avisos()[0].text).toContain('⚠️ A IA escreveu [[ETIQUETA…] ] com o fechamento errado — a ação NÃO foi executada; confira.')
+  })
+
+  it('duas ações mal fechadas na mesma resposta: um aviso só', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'Combinado!\n[[NOTA:quer orçamento] ]\n[[AGENDAR:2026-10-08T14:00|Visita]',
+      handoff: false,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(enviados()).toEqual(['Combinado!'])
+    expect(avisos()).toHaveLength(1)
+    expect(avisos()[0].text).toContain('[[NOTA…] ] e [[AGENDAR…] ]')
+  })
+
+  it('marcador desconhecido bem fechado: sai do texto, sem aviso', async () => {
+    h.generateReply.mockResolvedValue({ text: 'Oi! [[XYZ:qualquer]]', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(avisos()).toHaveLength(0)
+    expect(enviados()).toEqual(['Oi!'])
+  })
+
+  it('resumo mal fechado (o parser dele aceita "] ]"): sem aviso', async () => {
+    h.generateReply.mockResolvedValue({ text: 'Oi! Já te ajudo.\n[[RESUMO:quer orçamento] ]', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(avisos()).toHaveLength(0)
+    expect(enviados()).toEqual(['Oi! Já te ajudo.'])
+  })
+})
+
 // 🙋 29/09 (reunião, caso Zelo): a IA transferiu, o dono marcou a reunião à mão
 // pelo WhatsApp e o card nunca andou — o [[HANDOFF]] desligava a IA de vez. Com
 // pausa configurada ela fica quieta N min e volta; perda, troca de funil e a 2ª

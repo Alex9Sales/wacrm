@@ -1163,15 +1163,27 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                     ))}
                   </select>
                   {m.templateName && (
-                    <Input
-                      value={m.templateParamsText}
-                      onChange={(e) =>
-                        setRem(i, { templateParamsText: e.target.value })
-                      }
-                      placeholder="params por vírgula — ex.: {nome}, {hora}"
-                      disabled={!canEdit}
-                      className="mt-1 h-8"
-                    />
+                    <>
+                      <Input
+                        value={m.templateParamsText}
+                        onChange={(e) =>
+                          setRem(i, { templateParamsText: e.target.value })
+                        }
+                        placeholder="params por vírgula — ex.: {nome}, {hora}"
+                        disabled={!canEdit}
+                        className="mt-1 h-8"
+                      />
+                      {/* 02/10: {profissional} existia no motor mas não estava
+                          na tela — quem não sabe do token não o usa. */}
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        Um valor por parâmetro do modelo. Tokens:{' '}
+                        <strong>{'{nome}'}</strong> (contato),{' '}
+                        <strong>{'{hora}'}</strong> e <strong>{'{data}'}</strong>{' '}
+                        (da reunião) e <strong>{'{profissional}'}</strong> (com
+                        quem é, pela agenda — ex.: &quot;o Dr. Fulano&quot;; sem
+                        profissional na agenda, vai &quot;nossa equipe&quot;).
+                      </p>
+                    </>
                   )}
                 </div>
               </div>

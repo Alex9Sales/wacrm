@@ -123,9 +123,22 @@ export const WIN_DIRECTIVE = /\[\[\s*ganho\s*\]\]/i
  *   - o lazy para no PRIMEIRO fechamento válido, então o que vem depois de um
  *     "]]" certo nunca entra no resumo; e o resumo não atravessa "[[" (mesma
  *     regra do PERDER), senão um marcador sem fechamento comeria o seguinte;
- *   - não começa com "]": "[[RESUMO:]]" não vira o resumo "]". */
+ *   - não começa com "]": "[[RESUMO:]]" não vira o resumo "]".
+ *
+ *  02/10, revisão:
+ *   - "]" sozinho no FIM DA LINHA fecha ("[[RESUMO:Ana quer orçamento]" e a
+ *     despedida na linha de baixo), quando não há "]]"/"] ]" mais adiante
+ *     antes do próximo "[[" — a mesma regra da rede de segurança do envio
+ *     (whatsapp/instruction-markers.ts, FECHA_NO_FIM_DA_LINHA). Antes a
+ *     despedida ia parar DENTRO do resumo;
+ *   - nada de "\s*" entre o resumo e o fechamento: dois "\s*" encostados num
+ *     lazy davam backtracking quadrático/exponencial (8 s com 2.000 brancos no
+ *     meio). O branco do fim sai no trim de quem extrai, e o "]" solto do fim
+ *     (fechamento "até o fim"/"até o próximo [[") também — por isso o grupo 2
+ *     guarda o "]]": fechado com "]]", o "]" do fim do grupo 1 é do próprio
+ *     resumo ("[[RESUMO:Ana [Centro]]]" → "Ana [Centro]"). */
 export const HANDOFF_SUMMARY_DIRECTIVE =
-  /\[\[\s*resumo\s*:\s*((?!\])(?:(?!\[\[)[\s\S])+?)\s*(?:\]\s*\](?!\])|\]?\s*(?=\[\[)|\]?\s*$)/i
+  /\[\[\s*resumo\s*:\s*((?!\])(?:(?!\[\[)[\s\S])+?)(?:(\]\s*\])(?!\])|\][ \t]*(?=\n)(?!(?:(?!\[\[)[\s\S])*?\]\s*\](?!\]))|(?=\[\[)|$)/i
 /** Não responder: a mensagem não pede resposta (ex.: "ok"/emoji). */
 export const SKIP_DIRECTIVE = /\[\[\s*ignorar\s*\]\]/i
 /** Etiquetar o contato com uma etiqueta EXISTENTE (captura o nome). Global. */
@@ -319,7 +332,9 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
   const lose = pm ? splitLoseArg(pm[1] || '') : null
   const win = WIN_DIRECTIVE.test(raw)
   const hsm = raw.match(HANDOFF_SUMMARY_DIRECTIVE)
-  const handoffSummary = hsm ? hsm[1].trim() || null : null
+  // Fechado com "]]" (grupo 2): o grupo 1 é o resumo como está. Sem ele (até
+  // o fim, até o próximo "[["), um "]" solto no fim é o fechamento errado.
+  const handoffSummary = hsm ? (hsm[2] ? hsm[1] : hsm[1].replace(/\]\s*$/, '')).trim() || null : null
   const sm = raw.match(SCHEDULE_DIRECTIVE)
   let schedule: AgentDirectives['schedule'] = null
   if (sm) {

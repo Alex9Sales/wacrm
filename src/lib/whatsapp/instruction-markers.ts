@@ -93,10 +93,21 @@ const SEM_ARGUMENTO = ['handoff', 'ganho', 'resolver', 'ignorar', 'silent']
  *
  * O nome tem que terminar ali ("[[NOTAS…" não é NOTA). Vale também para o
  * marcador BEM fechado, que é removido igual.
+ *
+ * Fechado com UM "]" no FIM DA LINHA (02/10, revisão): "[[ETIQUETA:Lead
+ * quente]" e, na linha de baixo, "Olá Maria! …". Sem "]]" adiante e sem outro
+ * "[[", o marcador ia até o fim do texto e a resposta INTEIRA sumia. Agora o
+ * "]" no fim da linha fecha — mas só quando não há um fechamento válido ("]]",
+ * "] ]") mais adiante antes do próximo "[[" (FECHA_NO_FIM_DA_LINHA): o resumo
+ * em várias linhas com um "[Centro]" no fim de uma delas continua indo até o
+ * "]]" dele. A mesma regra está no RESUMO de ai/defaults.ts
+ * (HANDOFF_SUMMARY_DIRECTIVE), senão a despedida ia parar dentro do resumo.
  */
+const FECHA_NO_FIM_DA_LINHA = String.raw`\][ \t]*(?=\n)(?!(?:(?!\[\[)[\s\S])*?\]\s*\](?!\]))`
+
 const MARCADOR_DE_CONTROLE =
   String.raw`\[\[\s*(?:(?:${SEM_ARGUMENTO.join('|')})\s*\](?:\s*\])?|` +
-  String.raw`(?:${NOMES_DE_MARCADOR.join('|')})(?![\p{L}\p{N}_])(?:(?!\[\[)[\s\S])*?(?:\]\s*\](?!\])|(?=\[\[)|$))`
+  String.raw`(?:${NOMES_DE_MARCADOR.join('|')})(?![\p{L}\p{N}_])(?:(?!\[\[)[\s\S])*?(?:\]\s*\](?!\])|${FECHA_NO_FIM_DA_LINHA}|(?=\[\[)|$))`
 
 /**
  * Regex NOVA a cada chamada (com /g, uma instância compartilhada guardaria o
@@ -153,4 +164,59 @@ export function stripInstructionMarkers(raw: string | null | undefined): Strippe
   const text = mantidas.join('\n').replace(/\n{3,}/g, '\n\n').trim()
 
   return { text, removed }
+}
+
+/**
+ * Marcadores de AÇÃO: mal fechados, a rede acima os tira do texto e a ação
+ * NÃO roda (o parser de cada um, em ai/defaults.ts, só aceita "]]"). Ficam de
+ * fora os que não perdem nada: RESUMO e HANDOFF já têm parser tolerante (a
+ * ação roda mesmo com "] ]"), SILENT não é ação do atendimento e LEAD é da
+ * captura do site. Marcador NOVO da lista acima nasce como ação — na dúvida,
+ * avisa.
+ */
+const NOMES_SEM_ACAO_PERDIDA = new Set(['resumo', 'handoff', 'silent', 'lead'])
+const ACAO_NO_INICIO = new RegExp(
+  String.raw`^\[\[\s*(${NOMES_DE_MARCADOR.filter((n) => !NOMES_SEM_ACAO_PERDIDA.has(n)).join('|')})(?![\p{L}\p{N}_])`,
+  'iu',
+)
+
+/** Até onde o trecho do marcador entra na nota (o sem fechamento pode ter
+ *  levado o resto da resposta junto). */
+const TRECHO_MAX = 160
+
+/**
+ * ⚠️ A nota interna para marcador de AÇÃO mal fechado (02/10/2026, revisão).
+ *
+ * A rede de segurança passou a tirar "[[ETIQUETA:x] ]", "[[AGENDAR:…]" etc. do
+ * texto — certo, o cliente não pode ver o encanamento. Mas a ação daquele
+ * marcador não roda, e antes ninguém ficava sabendo: o marcador cru no
+ * WhatsApp do cliente era feio, mas pelo menos alguém via. Agora a conversa
+ * ganha UMA nota por resposta dizendo o que não foi feito.
+ *
+ * Recebe o que a rede removeu (StrippedText.removed, ou o que o auto-reply
+ * coleta da controlMarkerRegex) e devolve o texto da nota, ou null quando não
+ * há ação mal fechada. Bem fechado ("]]") não entra: esse aviso é sobre o
+ * fechamento errado. Pura, sem banco — quem chama grava a nota.
+ */
+export function avisoDeAcaoMalFechada(removidos: readonly string[]): string | null {
+  const nomes: string[] = []
+  const trechos: string[] = []
+  for (const r of removidos) {
+    const m = r.trim()
+    if (/\]\]$/.test(m)) continue
+    const nome = ACAO_NO_INICIO.exec(m)?.[1]
+    if (!nome) continue
+    const NOME = nome.toUpperCase()
+    if (!nomes.includes(NOME)) nomes.push(NOME)
+    const t = m.replace(/\s+/g, ' ')
+    trechos.push(t.length > TRECHO_MAX ? `${t.slice(0, TRECHO_MAX).trimEnd()}…` : t)
+  }
+  if (!nomes.length) return null
+  const quais = nomes.map((n) => `[[${n}…] ]`)
+  const lista = quais.length === 1 ? quais[0] : `${quais.slice(0, -1).join(', ')} e ${quais[quais.length - 1]}`
+  const acao = nomes.length === 1 ? 'a ação NÃO foi executada' : 'as ações NÃO foram executadas'
+  return (
+    `⚠️ A IA escreveu ${lista} com o fechamento errado — ${acao}; confira.\n` +
+    `O que ela escreveu: ${trechos.join(' · ')}`
+  )
 }

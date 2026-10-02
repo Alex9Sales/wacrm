@@ -454,7 +454,7 @@ describe("textoDaIaParaOCliente (nó de IA dos Fluxos)", () => {
     const r = textoDaIaParaOCliente(
       "Perfeito! Já te passo pro responsável.\n[[RESUMO:Cliente quer o kit; esclarecer as medidas.] ]",
     );
-    expect(r).toEqual({ text: "Perfeito! Já te passo pro responsável.", calar: false });
+    expect(r).toEqual({ text: "Perfeito! Já te passo pro responsável.", calar: false, avisoAcaoMalFechada: null });
   });
 
   it("marcador conhecido mal fechado em várias linhas e o bem fechado também saem", () => {
@@ -468,15 +468,32 @@ describe("textoDaIaParaOCliente (nó de IA dos Fluxos)", () => {
   });
 
   it("só marcador → texto vazio (quem chama manda pro caminho de saída)", () => {
-    expect(textoDaIaParaOCliente("[[RESUMO:Ana, Centro")).toEqual({ text: "", calar: false });
+    expect(textoDaIaParaOCliente("[[RESUMO:Ana, Centro")).toEqual({ text: "", calar: false, avisoAcaoMalFechada: null });
   });
 
   it("[[IGNORAR]] → calar, sem texto", () => {
-    expect(textoDaIaParaOCliente("[[IGNORAR]]")).toEqual({ text: "", calar: true });
+    expect(textoDaIaParaOCliente("[[IGNORAR]]")).toEqual({ text: "", calar: true, avisoAcaoMalFechada: null });
   });
 
   it("texto sem marcador sai idêntico", () => {
     const t = "Linha 1\n\nLinha 2 [conforme tabela]";
     expect(textoDaIaParaOCliente(t).text).toBe(t);
+  });
+
+  // 02/10/2026, revisão: "]" sozinho no fim da linha fecha — a resposta da
+  // linha de baixo não some mais junto.
+  it("\"[[ETIQUETA:x]\" no fim da linha: a resposta de baixo fica", () => {
+    expect(textoDaIaParaOCliente("[[ETIQUETA:Lead quente]\nOlá Maria! Qual sua cidade?").text).toBe(
+      "Olá Maria! Qual sua cidade?",
+    );
+  });
+
+  it("ação mal fechada → aviso para a nota interna; bem fechada ou resumo → sem aviso", () => {
+    const r = textoDaIaParaOCliente("Oi!\n[[ETIQUETA:quente]]\n[[NOTA:linha 1\nlinha 2] ]");
+    expect(r.avisoAcaoMalFechada).toContain(
+      "⚠️ A IA escreveu [[NOTA…] ] com o fechamento errado — a ação NÃO foi executada; confira.",
+    );
+    expect(textoDaIaParaOCliente("Oi! [[ETIQUETA:quente]]").avisoAcaoMalFechada).toBeNull();
+    expect(textoDaIaParaOCliente("Oi! [[RESUMO:Ana] ]").avisoAcaoMalFechada).toBeNull();
   });
 });

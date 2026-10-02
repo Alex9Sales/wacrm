@@ -95,7 +95,7 @@ const NA_AGENDA_DA_DONA = {
 }
 
 /** O banco falso: responde pelo texto da consulta. */
-function banco(args: { agente: unknown; compromisso: unknown; agendasDaConta?: number }) {
+function banco(args: { agente: unknown; compromisso: unknown; agendasDaConta?: (string | null)[] }) {
   let primeira = true
   h.execute.mockImplementation(async (q) => {
     if (primeira) {
@@ -117,7 +117,8 @@ function banco(args: { agente: unknown; compromisso: unknown; agendasDaConta?: n
           },
         ],
       }
-    if (t.includes('count(*)::int AS n FROM calendars')) return { rows: [{ n: args.agendasDaConta ?? 1 }] }
+    if (t.includes('SELECT name FROM calendars WHERE account_id'))
+      return { rows: (args.agendasDaConta ?? ['Minha agenda']).map((name) => ({ name })) }
     return { rows: [] }
   })
 }
@@ -189,7 +190,7 @@ describe('a varredura leva o profissional ao lembrete', () => {
     banco({
       agente: agente(LEMBRETE),
       compromisso: { ...NA_AGENDA_DA_DONA, calendar_name: 'DR. RADIOLOGIA', calendar_principal: false, duplicados: null },
-      agendasDaConta: 12,
+      agendasDaConta: ['clinica.exemplo@gmail.com', 'Dra. Fulana Exemplo', 'Dr. Beltrano Teste', 'DR. RADIOLOGIA'],
     })
 
     await runMeetingReminderSweep()
@@ -204,12 +205,53 @@ describe('a varredura leva o profissional ao lembrete', () => {
     banco({
       agente: agente(LEMBRETE),
       compromisso: { ...NA_AGENDA_DA_DONA, calendar_name: 'Minha agenda', calendar_principal: false, duplicados: null },
-      agendasDaConta: 1,
+      agendasDaConta: ['Minha agenda'],
     })
 
     await runMeetingReminderSweep()
 
     const prompt = h.generate.mock.calls[0]?.[0].systemPrompt ?? ''
     expect(prompt).not.toContain('Appointment fact')
+  })
+
+  it('franquia com seis agendas do Google SEM "Dr.": sem fato — o nome que o operador mandou citar continua valendo (02/10, revisão)', async () => {
+    // Antes contava TODAS as agendas: seis → "não cite nenhum profissional,
+    // nem o da instrução do operador; chame só de 'sua consulta'".
+    h.convProvider = 'waha'
+    const instrucao = 'Lembre da reunião com o consultor Fulano Exemplo e peça para confirmar.'
+    banco({
+      agente: agente({ ...LEMBRETE, instructions: instrucao }),
+      compromisso: { ...NA_AGENDA_DA_DONA, calendar_name: 'Franquias SP', calendar_principal: false, duplicados: null },
+      agendasDaConta: ['comercial@exemplo.com', 'Comercial', 'Franquias SP', 'Franquias RJ', 'Expansão', 'Reuniões'],
+    })
+
+    await runMeetingReminderSweep()
+
+    const prompt = h.generate.mock.calls[0]?.[0].systemPrompt ?? ''
+    expect(prompt).not.toContain('Appointment fact')
+    expect(prompt).not.toContain('Não cite profissional')
+    expect(prompt).not.toContain('sua consulta')
+    expect(prompt).toContain(`Operator guidance:\n${instrucao}`)
+    const select = h.execute.mock.calls.map((c) => textoDe(c[0])).find((t) => t.includes('FROM calendars WHERE'))
+    expect(select).toContain('SELECT name FROM calendars WHERE account_id')
+  })
+
+  it('a leitura das agendas falhou: sem fato (como era antes), e o lembrete sai', async () => {
+    h.convProvider = 'waha'
+    banco({
+      agente: agente(LEMBRETE),
+      compromisso: { ...NA_AGENDA_DA_DONA, calendar_name: 'Minha agenda', calendar_principal: false, duplicados: null },
+    })
+    const responder = h.execute.getMockImplementation()!
+    h.execute.mockImplementation(async (q) => {
+      if (textoDe(q).includes('SELECT name FROM calendars WHERE account_id')) throw new Error('banco fora')
+      return responder(q)
+    })
+
+    await runMeetingReminderSweep()
+
+    const prompt = h.generate.mock.calls[0]?.[0].systemPrompt ?? ''
+    expect(prompt).not.toContain('Appointment fact')
+    expect(h.sendText).toHaveBeenCalledTimes(1)
   })
 })

@@ -92,7 +92,7 @@ import {
 import { runHttpFetch } from "./http-fetch";
 import { generateFlowAiReply, splitIntoMessages } from "@/lib/ai/flow-agent";
 import { parseCloseDirectives } from "@/lib/ai/defaults";
-import { stripInstructionMarkers } from "@/lib/whatsapp/instruction-markers";
+import { avisoDeAcaoMalFechada, stripInstructionMarkers } from "@/lib/whatsapp/instruction-markers";
 import { getAccountSettings } from "@/lib/settings/account-settings";
 import { aiHoursAllows } from "@/lib/ai/hours-gate";
 
@@ -1758,10 +1758,15 @@ export async function resumeTimedOutRuns(
  *
  * `calar`: a IA escreveu [[IGNORAR]] ("ok", emoji — nada a responder). Quem
  * chama decide; o texto que sobrou, se sobrou, é o que vai.
+ *
+ * `avisoAcaoMalFechada` (02/10, revisão): a nota interna para marcador de
+ * AÇÃO mal fechado ("[[ETIQUETA:x] ]") que a limpeza tirou — o mesmo aviso
+ * do auto-reply (avisoDeAcaoMalFechada). null quando não há. Quem chama grava.
  */
 export function textoDaIaParaOCliente(raw: string | null | undefined): {
   text: string;
   calar: boolean;
+  avisoAcaoMalFechada: string | null;
 } {
   const dirs = parseCloseDirectives(raw ?? "");
   const limpo = stripInstructionMarkers(dirs.text);
@@ -1770,7 +1775,11 @@ export function textoDaIaParaOCliente(raw: string | null | undefined): {
     .replace(/\[\[\s*foto\s*:[^\]\n]*\](?:\s*\])?[ \t]*/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-  return { text, calar: dirs.skipReply };
+  return {
+    text,
+    calar: dirs.skipReply,
+    avisoAcaoMalFechada: avisoDeAcaoMalFechada(limpo.removed),
+  };
 }
 
 /**
@@ -1852,6 +1861,24 @@ async function runAiTurn(
   // ver textoDaIaParaOCliente): resposta que era só marcador cai no "não
   // produziu nada", em vez de virar bolha com o marcador ou envio vazio.
   const resposta = textoDaIaParaOCliente(result.text);
+  // ⚠️ Ação mal fechada (02/10, revisão): a limpeza tirou o marcador e a ação
+  // não roda — a equipe fica sabendo por UMA nota interna ('bot' +
+  // is_internal, que não acorda a IA), como no auto-reply. Antes de qualquer
+  // saída: a resposta deste turno é usada em todos os caminhos abaixo.
+  if (resposta.avisoAcaoMalFechada) {
+    try {
+      await db.insert(messages).values({
+        conversationId: run.conversation_id,
+        senderType: "bot",
+        contentType: "text",
+        contentText: resposta.avisoAcaoMalFechada,
+        isInternal: true,
+        status: "sent",
+      });
+    } catch (err) {
+      console.error("[flows] aviso de ação mal fechada falhou:", err);
+    }
+  }
   // AI defers to a human, or produced nothing → exit path.
   if (result.handoff || (!resposta.text && !resposta.calar)) {
     await leave("ai_handoff", "handoff");

@@ -95,6 +95,51 @@ describe('[[RESUMO:…]] mal fechado (02/10/2026)', () => {
   })
 })
 
+// 02/10/2026, revisão: "]" sozinho no fim da linha fecha o resumo (a despedida
+// da linha de baixo não vai mais para DENTRO dele), e o regex não tem mais
+// backtracking quadrático com muitos brancos no meio (8 s com 2.000).
+describe('[[RESUMO:…]] — fechamento no fim da linha e tempo (02/10/2026, revisão)', () => {
+  const resumo = (raw: string) => parseCloseDirectives(raw)
+
+  it('"]" no fim da linha fecha: a despedida da linha de baixo fica no texto, fora do resumo', () => {
+    const d = resumo('[[RESUMO:Ana quer orçamento]\nObrigada pelo contato, já te chamam!')
+    expect(d.handoffSummary).toBe('Ana quer orçamento')
+    expect(d.text).toBe('Obrigada pelo contato, já te chamam!')
+  })
+
+  it('com "] ]" válido adiante, o "]" do fim de uma linha é do resumo', () => {
+    const d = resumo('Perfeito!\n[[RESUMO:Ana [Centro]\norçamento 2x/mês] ]\nAté já.')
+    expect(d.handoffSummary).toBe('Ana [Centro]\norçamento 2x/mês')
+    // (a linha vazia no lugar do marcador é a de sempre do parseCloseDirectives)
+    expect(d.text.split(/\n+/)).toEqual(['Perfeito!', 'Até já.'])
+  })
+
+  it('o "]]" do próximo marcador não fecha o resumo', () => {
+    const d = resumo('[[RESUMO:Ana, Centro]\nJá te passo.\n[[GANHO]]')
+    expect(d.handoffSummary).toBe('Ana, Centro')
+    expect(d.win).toBe(true)
+    expect(d.text).toBe('Já te passo.')
+  })
+
+  it('5.000 brancos no meio do resumo: < 100 ms, em todas as formas de fechamento', () => {
+    const brancos = ' '.repeat(2500) + '\n'.repeat(1000) + '\t \n'.repeat(500)
+    for (const fecho of ['', ']', ']]', '] ]', ']\nTchau', ' x', '\n[[GANHO]]']) {
+      const raw = `Já te passo.\n[[RESUMO:Ana${brancos}Centro${fecho}`
+      const t0 = performance.now()
+      const d = resumo(raw)
+      const ms = performance.now() - t0
+      expect(ms, JSON.stringify(fecho)).toBeLessThan(100)
+      expect(d.handoffSummary?.startsWith('Ana')).toBe(true)
+      expect(d.handoffSummary?.endsWith('Centro') || d.handoffSummary?.endsWith('Centro x')).toBe(true)
+    }
+    // Só brancos depois de um "]" (o caso que travava o "\]?\s*$").
+    const t0 = performance.now()
+    resumo(`[[RESUMO:Ana]${' '.repeat(5000)}x`)
+    resumo(`[[RESUMO:${' '.repeat(5000)}`)
+    expect(performance.now() - t0).toBeLessThan(100)
+  })
+})
+
 describe('crossFunnelInstruction', () => {
   it('teaches the close-and-open combinations', () => {
     const t = crossFunnelInstruction([{ name: '4. Individual', stages: ['Novo lead'] }])

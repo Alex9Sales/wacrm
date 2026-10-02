@@ -26,6 +26,15 @@
 // Quem ENVIA o lembrete continua sendo o canônico (o criado primeiro); o
 // profissional é do atendimento, então sai do grupo inteiro.
 //
+// "Não cite profissional" (o fato sem profissional) só vale numa conta com
+// VÁRIAS AGENDAS DE PROFISSIONAL — duas ou mais agendas cujo nome passa em
+// `profissionalDaAgenda` (02/10, revisão). Antes bastava a conta ter duas
+// agendas quaisquer: uma franquia com seis agendas do Google sem "Dr." no nome
+// recebia "não cite nenhum profissional, nem o da instrução do operador; chame
+// só de 'sua consulta'" — calava o nome que o operador mandou citar e chamava
+// reunião comercial de consulta. Sem agenda de profissional não há de quem
+// errar: o prompt fica como era antes.
+//
 // Sem 'server-only' e sem banco: roda no worker e é testado puro.
 // ============================================================
 
@@ -62,16 +71,35 @@ export function profissionalDoLembrete(agendas: AgendaDoCompromisso[]): string |
 }
 
 /**
+ * A conta tem VÁRIAS AGENDAS DE PROFISSIONAL? Duas ou mais agendas cujo nome
+ * vira profissional em `profissionalDaAgenda` ("Dr. Igor", "Agenda da Dra.
+ * Ana"). É só aí que um lembrete sem profissional pode citar a pessoa errada
+ * (o caso da dona). Agendas de equipe, de setor ou de sala ("Comercial",
+ * "Franquias SP", "DR. RADIOLOGIA") não contam — ver o cabeçalho.
+ */
+export function contaComVariosProfissionais(nomesDasAgendas: (string | null | undefined)[]): boolean {
+  let n = 0
+  for (const nome of nomesDasAgendas) {
+    if (profissionalDaAgenda(nome) && ++n >= 2) return true
+  }
+  return false
+}
+
+/**
  * O FATO que entra no prompt do lembrete, como contexto do sistema — o texto
  * do operador não muda. Com profissional: diz com quem é, e que esse nome vale
  * mais que qualquer outro do texto do operador ou do perfil. Sem profissional,
- * numa conta com VÁRIAS agendas: não citar ninguém (citar seria chute — foi o
- * caso da dona). Conta com uma agenda só: null, nada muda para ela — lá não há
- * de quem errar, e o operador pode ter escrito com quem é a reunião.
+ * numa conta com VÁRIAS AGENDAS DE PROFISSIONAL (`contaComVariosProfissionais`):
+ * não citar ninguém (citar seria chute — foi o caso da dona). Qualquer outra
+ * conta: null, nada muda — lá não há de quem errar, e o operador pode ter
+ * escrito com quem é a reunião (esse nome tem que continuar valendo).
+ *
+ * O compromisso é chamado com a palavra que a conversa já usa (02/10,
+ * revisão): "sua consulta" fixo virava "consulta" uma reunião comercial.
  */
 export function fatoDoProfissional(
   profissional: string | null,
-  contaComVariasAgendas: boolean,
+  contaComVariosProfissionais: boolean,
 ): string | null {
   if (profissional) {
     return (
@@ -81,11 +109,11 @@ export function fatoDoProfissional(
       'never say or imply that it is with anyone else — a person named in the business name or in the guidance is not who attends this appointment.'
     )
   }
-  if (!contaComVariasAgendas) return null
+  if (!contaComVariosProfissionais) return null
   return (
-    'Appointment fact (from the calendar): it does not say which professional attends this appointment. ' +
+    'Appointment fact (from the calendar): this business has several professionals, and the calendar does not say which one attends this appointment. ' +
     'Não cite profissional: do NOT name or imply any doctor, dentist or other professional as the one the appointment is with ' +
     '(no "com o Dr./a Dra. …") — not even one named in the operator guidance, the business profile or the business name. ' +
-    'Refer to it only as the appointment ("sua consulta").'
+    'Refer to it only as the appointment, using the same word the conversation already uses.'
   )
 }

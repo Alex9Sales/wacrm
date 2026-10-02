@@ -92,7 +92,7 @@ import {
 } from '@/lib/flows/meta-send'
 import { splitIntoMessages } from '@/lib/ai/flow-agent'
 import { AUDIO_MARKER, PHOTO_DIRECTIVE } from '@/lib/ai/defaults'
-import { controlMarkerRegex } from '@/lib/whatsapp/instruction-markers'
+import { avisoDeAcaoMalFechada, controlMarkerRegex } from '@/lib/whatsapp/instruction-markers'
 import { resolveProductPhoto } from '@/lib/ai/catalog'
 import { synthesizeSpeech } from '@/lib/ai/tts'
 import { planStageFollowUp } from '@/lib/ai/followup'
@@ -1051,12 +1051,26 @@ export async function dispatchInboundToAiReply(
     // primeiro: o genérico iria do "[[RESUMO" até o "]]" de outro marcador e
     // comeria o texto do meio.
     const unknownMarker = /\[\[(?!\s*(?:audio\s*\]\]|foto\s*:))[\s\S]*?\]\]/gi
-    const semMarcador = dirs.text.replace(controlMarkerRegex(), '').replace(unknownMarker, '')
+    // O que a rede tirou fica guardado (02/10, revisão): marcador de AÇÃO mal
+    // fechado sai do texto e a ação NÃO roda — sem isto, sumia sem rastro.
+    const removidosPelaRede: string[] = []
+    const semMarcador = dirs.text
+      .replace(controlMarkerRegex(), (m) => {
+        removidosPelaRede.push(m)
+        return ''
+      })
+      .replace(unknownMarker, '')
     if (semMarcador !== dirs.text) {
       console.warn('[ai auto-reply] marcador desconhecido ou mal fechado removido da resposta:', conversationId)
       dirs.text = semMarcador.replace(/\n{3,}/g, '\n\n').trim()
     }
     const text = dirs.text
+    // ⚠️ Ação mal fechada ("[[ETIQUETA:x] ]", "[[AGENDAR:…]"): vira UMA nota
+    // interna por resposta ('bot' + is_internal — não acorda a IA). Gravada no
+    // applyTags, que roda em todo caminho em que a resposta é aproveitada; a
+    // resposta descartada (corrida, sem vaga) não deixa nota de nada.
+    const avisoAcaoMalFechada = avisoDeAcaoMalFechada(removidosPelaRede)
+    let avisoAcaoMalFechadaGravado = false
 
     // 🧾 Trava do marcador [[COBRANCA:]] (16/09, dois devedores da GoLink): as mesmas do
     // detector silencioso — contexto de cobrança, palavra que confirma o tipo,
@@ -1083,6 +1097,12 @@ export async function dispatchInboundToAiReply(
 
     // Ações "leves" da conversa: etiquetar, nota interna, atributo, voz.
     const applyTags = async () => {
+      // O aviso da ação mal fechada vem primeiro e fora das travas de
+      // ferramenta: ele é sobre o que NÃO rodou. Uma vez só por resposta.
+      if (avisoAcaoMalFechada && !avisoAcaoMalFechadaGravado) {
+        avisoAcaoMalFechadaGravado = true
+        await postInternalNote({ conversationId, text: avisoAcaoMalFechada }).catch(() => {})
+      }
       if (has('tag') && dirs.tags.length) {
         const applied = await applyTagsByName({
           accountId,
