@@ -107,15 +107,59 @@ export const SKIP_DIRECTIVE = /\[\[\s*ignorar\s*\]\]/i
 /** Etiquetar o contato com uma etiqueta EXISTENTE (captura o nome). Global. */
 export const TAG_DIRECTIVE = /\[\[\s*etiqueta\s*:\s*([^\]]+?)\s*\]\]/gi
 /**
- * Agendar: `[[AGENDAR:YYYY-MM-DDTHH:MM|título|profissional]]`
+ * Agendar: `[[AGENDAR:YYYY-MM-DDTHH:MM|título|profissional|modo]]`
  *
  * O 3º campo (opcional) é de quem é a agenda — clínica com vários dentistas
  * marca cada paciente na agenda do profissional certo (30/09, Dra. Joyce: 10
  * profissionais). Sem ele, cai na agenda padrão da conta, como sempre foi:
  * quem só tem uma agenda não precisa saber que este campo existe.
+ *
+ * O 4º campo (opcional, 02/10/2026) diz o que fazer quando o contato JÁ TEM
+ * consulta futura. Antes não havia escolha: o [[AGENDAR]] sempre movia a mais
+ * próxima, então a mãe que marcava para o segundo filho, ou o paciente que
+ * queria uma limpeza além da cirurgia já marcada, perdia a consulta que tinha.
+ *   - `nova`  → cria um compromisso ADICIONAL; nunca move nada.
+ *   - `remarca YYYY-MM-DDTHH:MM` → move EXATAMENTE a consulta deste contato que
+ *     começa nesse dia/hora (fuso da conta). Não achou = não mexe em nada.
+ *   - sem 4º campo → o de sempre (move a mais próxima), para os prompts e as
+ *     conversas que já existem continuarem iguais.
+ * Com 4º campo o 3º pode vir vazio: `[[AGENDAR:2026-10-21T10:00|Limpeza||nova]]`.
+ * O 3º campo não aceita mais "|": antes ele engolia o resto até o "]]".
  */
 export const SCHEDULE_DIRECTIVE =
-  /\[\[\s*agendar\s*:\s*(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2})\s*(?:\|\s*([^|\]]*?))?\s*(?:\|\s*([^\]]*?))?\s*\]\]/i
+  /\[\[\s*agendar\s*:\s*(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2})\s*(?:\|\s*([^|\]]*?))?\s*(?:\|\s*([^|\]]*?))?\s*(?:\|\s*([^\]]*?))?\s*\]\]/i
+
+/**
+ * O que o [[AGENDAR]] faz com quem já tem consulta (4º campo do marcador).
+ * `deLocal` = hora de PAREDE ("YYYY-MM-DDTHH:MM", fuso da conta) da consulta a
+ * mover, ou null quando a IA disse "remarca" sem dizer qual.
+ */
+export type ModoAgendamento = { tipo: 'nova' } | { tipo: 'remarca'; deLocal: string | null }
+
+/**
+ * 4º campo do [[AGENDAR]] → modo. null = sem campo ou campo que não dá para
+ * entender, e aí vale o comportamento de sempre.
+ *
+ * O vocabulário é mais largo que o documentado ("nova"/"remarca") porque o
+ * modelo às vezes escreve "novo", "outra", "mudar"… Um "remarca" sem data NÃO
+ * vira o comportamento de sempre (mover a mais próxima): a IA quis mexer numa
+ * consulta específica e não disse qual — mover a errada é pior que não mover.
+ * Uma data solta, sem palavra nenhuma, é remarcação dela.
+ */
+export function parseModoAgendamento(raw: string | null | undefined): ModoAgendamento | null {
+  const texto = (raw ?? '').trim()
+  if (!texto) return null
+  const norm = texto
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+  const data = texto.match(/(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/)
+  const deLocal = data ? `${data[1]}T${data[2]}` : null
+  if (/^(remarc|reagend|mov|mud|troc|alter)/.test(norm)) return { tipo: 'remarca', deLocal }
+  if (/^(nov[ao]|adicional|outr[ao]|extra|mais|mant)/.test(norm)) return { tipo: 'nova' }
+  if (deLocal && /^\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}$/.test(norm)) return { tipo: 'remarca', deLocal }
+  return null
+}
 /**
  * 🧾 Cobrança (Fase 3): o que o devedor acabou de fazer.
  *   [[COBRANCA:promessa|YYYY-MM-DD]] · [[COBRANCA:comprovante]]
@@ -175,8 +219,10 @@ export interface AgentDirectives {
   win: boolean
   /** Resumo pra quem assume no handoff ([[RESUMO:…]]), ou null. */
   handoffSummary: string | null
-  /** Agendamento: horário combinado (hora local "YYYY-MM-DDTHH:MM") + título. */
-  schedule: { startsLocal: string; title: string; profissional: string | null } | null
+  /** Agendamento: horário combinado (hora local "YYYY-MM-DDTHH:MM") + título.
+   *  `modo` (4º campo) é AUSENTE — não undefined/null — quando não veio: o
+   *  marcador de sempre continua igual a si mesmo para quem compara. */
+  schedule: { startsLocal: string; title: string; profissional: string | null; modo?: ModoAgendamento } | null
   /** Transferência: etiqueta de roteamento + resumo pro atendente. */
   transfer: { tag: string; summary: string } | null
   /** Criar card no funil: título do negócio, ou null. */
@@ -225,14 +271,21 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
   const hsm = raw.match(HANDOFF_SUMMARY_DIRECTIVE)
   const handoffSummary = hsm ? hsm[1].trim() || null : null
   const sm = raw.match(SCHEDULE_DIRECTIVE)
-  const schedule = sm
-    ? {
-        startsLocal: sm[1].trim(),
-        title: (sm[2] || '').trim(),
-        // De quem é a agenda (3º campo). Vazio = agenda padrão da conta.
-        profissional: (sm[3] || '').trim() || null,
-      }
-    : null
+  let schedule: AgentDirectives['schedule'] = null
+  if (sm) {
+    schedule = {
+      startsLocal: sm[1].trim(),
+      title: (sm[2] || '').trim(),
+      // De quem é a agenda (3º campo). Vazio = agenda padrão da conta.
+      profissional: (sm[3] || '').trim() || null,
+    }
+    // Nova / remarca (4º campo, 02/10). Sem ele, a chave nem existe.
+    const modo = parseModoAgendamento(sm[4])
+    if (modo) schedule.modo = modo
+    else if ((sm[4] || '').trim()) {
+      console.warn(`[ai directives] 4º campo do [[AGENDAR]] não reconhecido ("${(sm[4] || '').trim().slice(0, 60)}") — segue o comportamento de sempre`)
+    }
+  }
   const chm = raw.match(CHARGE_DIRECTIVE)
   const charge = chm
     ? { valueRaw: chm[1].trim(), dueRaw: chm[2].trim(), description: (chm[3] || '').trim() }
@@ -397,8 +450,22 @@ export function scheduleInstruction(opts: { approval?: boolean; busySlots?: stri
         : ' The calendar has no booked appointments in the next days.'
   // 18/09 (Zelo): sem saber que a reunião do lead já estava marcada, a IA
   // re-emitia [[AGENDAR]] a cada resposta e chegou a "ajustar" o horário.
+  // 02/10/2026: `booked` agora é a LISTA das consultas futuras do contato (até
+  // 5, com profissional e a referência de cada uma — formatBookedForPrompt).
+  // Antes a IA via só a primeira, sem dizer com quem, e o [[AGENDAR]] sempre
+  // movia essa: a mãe que marcava para o segundo filho, ou o paciente que
+  // queria uma limpeza além da cirurgia, perdia a consulta que tinha. O pedido
+  // do dono do produto: "se o paciente quiser um novo agendamento mantendo o
+  // outro que já está adiante, tem que ter uma pergunta para isso". Daí: na
+  // dúvida, PERGUNTA; depois diz no 4º campo se é nova ou qual remarca. E o
+  // prompt da conta continua mandando — clínica que manda esses casos para a
+  // recepção segue mandando.
   const booked = opts.booked
-    ? ` THIS customer ALREADY HAS a meeting booked: ${opts.booked} (business timezone). That slot is taken by THIS meeting, not by a conflict — do not offer other times because of it, do not say you need to adjust it, and do NOT emit [[AGENDAR]] again unless the customer explicitly asks to change the day or time. For this customer, [[AGENDAR]] MOVES that existing meeting — it never creates a second one. If they want an ADDITIONAL appointment, or one for another person, do not emit [[AGENDAR]]: hand it to a human.`
+    ? ` THIS customer ALREADY HAS the following appointment(s) booked (business timezone, soonest first):\n${opts.booked}\n` +
+      'Those times are taken by THIS customer\'s own appointments, not by a conflict — do not offer other times because of them and do not say you need to adjust them. Do NOT emit [[AGENDAR]] again for an appointment that is already booked unless the customer explicitly asks to change it.' +
+      ' When this customer asks to book and it is NOT clear whether they want to CHANGE one of these appointments or book ANOTHER one while keeping what they have (for example for another person in the family, or for a different procedure), ASK before booking — e.g. "Você quer remarcar a consulta de <dia> com <profissional>, ou marcar uma nova e manter essa?" (with more than one appointment, say which one you mean). Emit [[AGENDAR]] only AFTER they answer. If the request is already clear (e.g. "quero mudar minha consulta de quinta", "quero marcar outra para a minha filha"), do not ask again.' +
+      ' For this customer, ALWAYS add a 4th field to the marker saying what it does: to book an ADDITIONAL appointment and keep the existing ones, "[[AGENDAR:YYYY-MM-DDTHH:MM|<short title>|<professional>|nova]]"; to MOVE one of the appointments above, "[[AGENDAR:<new YYYY-MM-DDTHH:MM>|<short title>|<professional>|remarca YYYY-MM-DDTHH:MM]]", copying after "remarca" EXACTLY the ref of that appointment as listed above. When there is no professional, leave the third field empty ("|<short title>||nova"). A new appointment must not take one of the times above with the same professional.' +
+      ' If your business instructions below say that an additional appointment, an appointment for another person or a reschedule must go to a human (e.g. the reception), follow your instructions instead: in those cases do not emit [[AGENDAR]].'
     : ''
   // 30/09 (clínica da Dra. Joyce, 10 profissionais): a lista única de horários
   // ocupados não dizia DE QUEM era cada um, então um compromisso de uma dentista
@@ -408,14 +475,20 @@ export function scheduleInstruction(opts: { approval?: boolean; busySlots?: stri
   // 01/10: "livre" aqui é só "não ocupado". Dentista que vem duas terças por mês
   // aparece "sem compromissos" justamente nos dias em que não está — o
   // expediente mora no prompt da conta, e esta instrução manda respeitá-lo.
-  // E para quem já tem compromisso, o [[AGENDAR]] MOVE o que existe
-  // (scheduleEventFromAi deduplica por contato): pedir "mais uma consulta"
-  // moveria a outra.
+  // Para quem já tem compromisso, o que acontece (mover ou criar outro) é o
+  // 4º campo do marcador que decide — ver `booked` acima.
   const equipe = opts.agendasDaEquipe
     ? ` THIS BUSINESS HAS SEVERAL CALENDARS, one per professional. Each one has its OWN availability — a time booked in one calendar does NOT block the others. Here is who exists and when each is busy (business timezone):\n${opts.agendasDaEquipe}\nThis list shows only BUSY times: an empty line does NOT mean the professional is working. Offer only times inside that professional's working hours as given in your instructions — outside them the professional is simply not there. When the customer asks for a specific professional, first follow your instructions on whether that professional can be booked for THIS customer; only then check THAT professional's line and offer only times that do not overlap it. When the customer has no preference, follow your instructions on whom to offer. When you book, put the professional's name in the THIRD field of the marker: "[[AGENDAR:YYYY-MM-DDTHH:MM|<short title>|<professional name>]]", copying the name EXACTLY as written in the list above. If the customer did not name a professional and you did not pick one, leave the third field out. NEVER invent a professional who is not in the list, and never promise a time that overlaps that professional's busy list.`
     : ''
+  // 02/10/2026: só o PRIMEIRO [[AGENDAR]] de cada resposta é executado
+  // (parseCloseDirectives não usa /g) — os outros somem do texto sem aviso. Com
+  // a consulta adicional, a mãe que marca para dois filhos na mesma resposta
+  // ouviria "marquei os dois" com um só na agenda.
+  const umPorResposta =
+    'Only ONE [[AGENDAR]] per reply is carried out: when two appointments are needed (e.g. for two people), book one now and the other in a following reply, after confirming it with the customer. '
   return (
     'Scheduling: when you and the customer clearly AGREE on a specific date and time for a meeting, call, or appointment, emit ONCE the marker "[[AGENDAR:YYYY-MM-DDTHH:MM|<short title>]]" — computing the ABSOLUTE date/time from the current date/time given above (business timezone). Resolve relative times ("tomorrow at 3pm", "friday morning") to the real date, use 24h time (e.g. 15:00), and put a short title after the "|" (e.g. the customer name and topic). Emit it ONLY when a concrete time is actually agreed — never for a vague "sometime". ' +
+    umPorResposta +
     closing +
     busy +
     equipe +
@@ -557,7 +630,8 @@ export function buildSystemPrompt(args: {
   busySlots?: string[]
   /** Uma linha por profissional, com os horários ocupados dele. */
   agendasDaEquipe?: string
-  /** 📅 Reunião JÁ marcada com ESTE lead (formatada), ou null. */
+  /** 📅 Consultas/reuniões JÁ marcadas com ESTE contato — a lista formatada
+   *  por formatBookedForPrompt (busy-slots.ts), uma por linha — ou null. */
   bookedForLead?: string | null
   /** Etapas do funil ligado (pra ferramenta move_card escolher pelo nome). */
   pipelineStages?: string[]

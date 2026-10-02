@@ -44,8 +44,14 @@ import {
   listContactFieldNames,
   setVoicePreference,
 } from './close-actions'
-import { formatMeetingWhen, scheduleEventFromAi } from './schedule-actions'
-import { loadBookedForContact, loadBusySlots, loadBusyByCalendar } from './busy-slots'
+import {
+  formatMeetingWhen,
+  notaDaRemarcacaoSemAlvo,
+  notaDoAgendamentoDaIa,
+  quandoDaNota,
+  scheduleEventFromAi,
+} from './schedule-actions'
+import { formatBookedForPrompt, loadBookedForContact, loadBusySlots, loadBusyByCalendar } from './busy-slots'
 import { blocoDeAgendasParaPrompt } from './agenda-do-profissional'
 import { loadLeadFormContext } from './lead-form-context'
 import { syncAccountCalendars } from '@/lib/google/sync'
@@ -889,13 +895,20 @@ export async function dispatchInboundToAiReply(
       // A reunião DESTE lead não conta como ocupada — e vai à parte pro prompt
       // (a IA não "ajusta o horário" da própria reunião; Zelo 18/09).
       busySlots = await loadBusySlots(accountId, tz, undefined, { excludeContactId: contactId })
-      bookedForLead = contactId ? await loadBookedForContact(accountId, contactId, tz) : null
       const porAgenda = await loadBusyByCalendar(accountId, tz, undefined, {
         excludeContactId: contactId,
       })
       if (porAgenda.agendas.length > 1) {
         agendasDaEquipe = blocoDeAgendasParaPrompt(porAgenda.agendas, porAgenda.ocupados)
       }
+      // 02/10/2026: TODAS as consultas futuras do contato (até 5), com a agenda
+      // de cada uma quando há mais de uma agenda — a IA pergunta "remarcar a de
+      // quinta com o Dr. Fulano ou marcar outra?" em vez de mover a primeira.
+      bookedForLead = contactId
+        ? formatBookedForPrompt(await loadBookedForContact(accountId, contactId, tz), {
+            comAgenda: porAgenda.agendas.length > 1,
+          })
+        : null
     }
 
     // 🙋 A IA já pediu um humano nesta conversa nas últimas 24h (e voltou —
@@ -1186,6 +1199,15 @@ export async function dispatchInboundToAiReply(
           ? `${s.startsLocal.slice(8, 10)}/${s.startsLocal.slice(5, 7)} às ${s.startsLocal.slice(11, 16)}`
           : s.startsLocal
         const title = (s.title || 'Reunião').trim().slice(0, 200)
+        // 02/10/2026: o profissional (3º campo) e o modo (4º: nova/remarca)
+        // vão no pedido — aprovar executa o que foi combinado. Sem o modo,
+        // aprovar uma consulta NOVA moveria a que o paciente já tinha.
+        const modoTxt =
+          s.modo?.tipo === 'nova'
+            ? ' (consulta NOVA, mantendo as que o contato já tem)'
+            : s.modo?.tipo === 'remarca'
+              ? ` (remarcação da consulta de ${s.modo.deLocal ? `${s.modo.deLocal.slice(8, 10)}/${s.modo.deLocal.slice(5, 7)} às ${s.modo.deLocal.slice(11, 16)}` : 'horário não informado'})`
+              : ''
         try {
           const inserted = await db
             .insert(agentActionRequests)
@@ -1196,8 +1218,15 @@ export async function dispatchInboundToAiReply(
               dealId: null,
               conversationId,
               actionType: 'schedule_event',
-              payload: { startsLocal: s.startsLocal, title, timezone: settings.businessTimezone || 'America/Sao_Paulo', durationMin: 60 },
-              reason: `Cliente combinou ${title} para ${when} na conversa.`,
+              payload: {
+                startsLocal: s.startsLocal,
+                title,
+                timezone: settings.businessTimezone || 'America/Sao_Paulo',
+                durationMin: 60,
+                ...(s.profissional ? { profissional: s.profissional } : {}),
+                ...(s.modo ? { modo: s.modo } : {}),
+              },
+              reason: `Cliente combinou ${title} para ${when}${modoTxt} na conversa.`,
               decision: 'approve',
               policy: 'schedule_event: nível da matriz exige aprovação',
               status: 'pending',
@@ -1207,8 +1236,8 @@ export async function dispatchInboundToAiReply(
           await postInternalNote({
             conversationId,
             text: inserted.length
-              ? `📅 IA combinou "${title}" para ${when} — aguardando sua aprovação em Precisa de você. O cliente foi avisado de que você vai confirmar.`
-              : `📅 IA combinou "${title}" para ${when} — já havia um pedido pendente deste contato em Precisa de você.`,
+              ? `📅 IA combinou "${title}" para ${when}${modoTxt} — aguardando sua aprovação em Precisa de você. O cliente foi avisado de que você vai confirmar.`
+              : `📅 IA combinou "${title}" para ${when}${modoTxt} — já havia um pedido pendente deste contato em Precisa de você.`,
           }).catch(() => {})
           if (inserted.length && configOwnerUserId) {
             const { notifyUsers } = await import('@/lib/orchestration/actions')
@@ -1236,29 +1265,58 @@ export async function dispatchInboundToAiReply(
           startsLocal: dirs.schedule.startsLocal,
           title: dirs.schedule.title || 'Reunião',
           profissional: dirs.schedule.profissional,
+          // 02/10/2026: nova / remarca X (4º campo). Ausente = o de sempre.
+          modo: dirs.schedule.modo ?? null,
           timezone: settings.businessTimezone,
         })
-        if (ev) {
-          console.log('[ai auto-reply] agendou:', JSON.stringify(ev))
-          // 📅 09/09 (GoLink, "a IA marcou reunião sem autorização"): o
-          // agendamento era invisível na conversa e aparecia na agenda como se
-          // o dono tivesse criado. Agora: nota interna + aviso ao dono.
-          const tz = settings.businessTimezone || 'America/Sao_Paulo'
-          const when = new Date(ev.startsAt)
-            .toLocaleString('pt-BR', { timeZone: tz, weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-            .replace('.,', '')
-          await postInternalNote({
-            conversationId,
-            text: `📅 IA agendou "${ev.title}" para ${when}. Se não era pra marcar, cancele na Agenda — e, pra ela não marcar sozinha, desligue a ferramenta "Agendar" no agente (Agentes IA).`,
-          }).catch(() => {})
+        const tz = settings.businessTimezone || 'America/Sao_Paulo'
+        if (ev && 'naoAchou' in ev) {
+          // "remarca X" sem consulta deste contato em X: nada foi mexido, mas a
+          // resposta (que já saiu) pode ter dito ao cliente que remarcou. Fica
+          // visível na conversa e o dono é avisado — falha calada aqui vira
+          // paciente chegando no horário que achava ter remarcado.
+          console.warn('[ai auto-reply] remarcação sem alvo:', JSON.stringify(ev))
+          const nota = notaDaRemarcacaoSemAlvo(ev, tz)
+          await postInternalNote({ conversationId, text: nota }).catch(() => {})
           if (configOwnerUserId) {
             const { notifyUsers } = await import('@/lib/orchestration/actions')
             await notifyUsers({
               accountId,
               userIds: [configOwnerUserId],
               type: 'agent_action',
-              title: `IA agendou: ${ev.title}`,
-              body: `${when} — marcado pela IA na conversa. Confira na Agenda.`,
+              title: 'IA não conseguiu remarcar',
+              body: nota.replace(/^📅\s*/, ''),
+              contactId,
+              conversationId,
+            }).catch(() => 0)
+          }
+          return
+        }
+        if (ev) {
+          console.log('[ai auto-reply] agendou:', JSON.stringify(ev))
+          // 📅 09/09 (GoLink, "a IA marcou reunião sem autorização"): o
+          // agendamento era invisível na conversa e aparecia na agenda como se
+          // o dono tivesse criado. Agora: nota interna + aviso ao dono.
+          // 02/10/2026: a nota diz o que aconteceu (criou, consulta NOVA
+          // mantendo outras, remarcou de/para, ou só repetiu) — antes era
+          // "agendou" para tudo.
+          const when = quandoDaNota(ev.startsAt, tz)
+          await postInternalNote({
+            conversationId,
+            text: notaDoAgendamentoDaIa(ev, tz, { profissional: dirs.schedule.profissional }),
+          }).catch(() => {})
+          // Marcador repetido (nada criado nem movido): sem aviso de novo.
+          if (configOwnerUserId && ev.acao !== 'manteve') {
+            const { notifyUsers } = await import('@/lib/orchestration/actions')
+            const remarcou = ev.acao === 'moveu'
+            await notifyUsers({
+              accountId,
+              userIds: [configOwnerUserId],
+              type: 'agent_action',
+              title: remarcou ? `IA remarcou: ${ev.title}` : `IA agendou: ${ev.title}`,
+              body: remarcou
+                ? `${ev.movidoDe ? `De ${quandoDaNota(ev.movidoDe, tz)} para ` : ''}${when} — remarcado pela IA na conversa. Confira na Agenda.`
+                : `${when} — marcado pela IA na conversa. Confira na Agenda.`,
               contactId,
               conversationId,
             }).catch(() => 0)
