@@ -150,6 +150,11 @@ export type GoogleEvent = {
   transparency?: string
   /** Link do Google Meet, quando o evento tem videochamada. */
   hangoutLink?: string
+  /**
+   * Agenda dona do evento. Na lápide do evento MOVIDO (getGoogleEvent na agenda
+   * antiga) é a agenda para onde ele foi — o sync só usa isso no log.
+   */
+  organizer?: { email?: string }
 }
 
 /** Teto de páginas por agenda — trava de segurança contra loop de pageToken. */
@@ -165,14 +170,23 @@ const EVENTS_MAX_PAGES = 10
  *  - paginação: `maxResults` é teto POR PÁGINA. Uma agenda cheia passava de 250
  *    na janela e o resto sumia em silêncio — e o que some aqui vira reunião
  *    marcada em cima de compromisso.
+ *
+ * `opts.resultado` (02/10/2026): diz a quem chama se a lista veio INTEIRA.
+ * Quando bate no teto de páginas, o que ficou de fora não "sumiu" do Google —
+ * só não foi lido. A varredura de fantasmas do sync (sync.ts → liberarSumidos)
+ * trata "não veio na listagem" como suspeita de evento movido/apagado; com a
+ * lista cortada, ela suspeitaria de compromisso de verdade. Por isso a lista
+ * truncada desliga a varredura daquela agenda. Parâmetro de saída para não
+ * mudar o retorno de quem já chama.
  */
 export async function listGoogleEvents(
   accessToken: string,
   calendarId: string,
   timeMin: string,
   timeMax: string,
-  opts: { showDeleted?: boolean } = {},
+  opts: { showDeleted?: boolean; resultado?: { truncated: boolean } } = {},
 ): Promise<GoogleEvent[]> {
+  if (opts.resultado) opts.resultado.truncated = false
   const items: GoogleEvent[] = []
   let pageToken: string | undefined
   for (let page = 0; page < EVENTS_MAX_PAGES; page++) {
@@ -196,7 +210,38 @@ export async function listGoogleEvents(
     pageToken = data.nextPageToken
   }
   console.warn(`[google sync] ${calendarId}: parei em ${EVENTS_MAX_PAGES} páginas de eventos`)
+  if (opts.resultado) opts.resultado.truncated = true
   return items
+}
+
+/**
+ * UM evento, lido direto na agenda pedida. 404/410 → `{ status: 'gone' }`.
+ *
+ * Existe para a varredura de fantasmas (sync.ts → liberarSumidos) CONFIRMAR
+ * antes de mexer: só "não veio na listagem" não basta para cancelar nada.
+ *
+ * 01/10/2026, verificado em produção: o evento que a recepção MOVEU no Google
+ * Agenda para a agenda de outro profissional mantém o mesmo id. Na agenda
+ * antiga, este GET devolve 200 com status 'cancelled', início em 31/12/1999
+ * (data fictícia) e organizador da agenda nova — por isso ele não aparece na
+ * listagem por janela nem com showDeleted. Quem chama trata 'gone' e
+ * 'cancelled' igual: o evento não está mais NESTA agenda.
+ *
+ * Qualquer outro erro (401, 403, 429, 5xx, rede) LANÇA: "não consegui
+ * perguntar" nunca pode virar "não existe".
+ */
+export async function getGoogleEvent(
+  accessToken: string,
+  calendarId: string,
+  eventId: string,
+): Promise<GoogleEvent | { status: 'gone' }> {
+  const res = await fetch(
+    `${CAL_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  )
+  if (res.status === 404 || res.status === 410) return { status: 'gone' }
+  if (!res.ok) throw new Error(`Google get event (${res.status}): ${await res.text()}`)
+  return (await res.json()) as GoogleEvent
 }
 
 // --- escrita (CRM → Google) ---
