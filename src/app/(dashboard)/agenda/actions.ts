@@ -6,7 +6,7 @@
 // v1: escopo por conta (time vê a agenda da conta); owner_user_id marca o dono.
 // ============================================================
 
-import { and, asc, eq, gt, gte, lte, ne, or, sql } from 'drizzle-orm'
+import { and, asc, eq, gt, gte, lt, lte, ne, or, sql } from 'drizzle-orm'
 import { db, calendars, calendarEvents, calendarConnections, contacts, deals, user } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
@@ -38,6 +38,12 @@ import {
   ERRO_REMARCACAO_INDISPONIVEL,
   podeRemarcar,
 } from '@/lib/agenda/remarcacao'
+import {
+  conflitosNoHorario,
+  intervaloDoPedido,
+  type HorarioOcupado,
+  type PedidoDeHorario,
+} from '@/lib/agenda/horario-ocupado'
 
 export type CalendarRow = {
   id: string
@@ -333,7 +339,14 @@ export async function listCalendars(): Promise<CalendarRow[]> {
   return rows as CalendarRow[]
 }
 
-/** Eventos num intervalo [from, to] (ISO). Junta cor/dono/contato/negócio. */
+/**
+ * Eventos num intervalo [from, to] (ISO). Junta cor/dono/contato/negócio.
+ *
+ * Traz também os desmarcados ('cancelled'): o modal de um desmarcado continua
+ * abrindo, e é a GRADE que os esconde por padrão (02/10 — "Mostrar
+ * desmarcados" em agenda-client.tsx). A linha cancelada pelo sync, ao lado da
+ * consulta de verdade, fazia a dona achar que a agenda estava duplicando.
+ */
 export async function listEvents(range: {
   from: string
   to: string
@@ -489,6 +502,71 @@ export async function listarConsultasFuturasDoContato(contactId: string): Promis
       confirmationKnown: isConfirmacaoConhecida(r.confirmationKnown) ? r.confirmationKnown : null,
     }))
     .filter((r) => aindaVaiAcontecer(r, agora))
+}
+
+/** Quantos compromissos no mesmo horário o aviso do modal recebe, no máximo. */
+const MAX_OCUPANDO_O_HORARIO = 10
+
+/**
+ * Quem já ocupa este horário NESTA agenda (02/10), para o modal avisar antes
+ * de salvar: "Já há 'X' das 14:00 às 15:00 nesta agenda." Numa clínica, a
+ * mesma consulta foi lançada duas vezes — uma digitada direto no Google, sem
+ * paciente ligado, e outra pelo CRM no mesmo horário da mesma agenda — e a
+ * pergunta "remarcação ou consulta nova?" só olha o paciente. Aqui o paciente
+ * não importa.
+ *
+ * Só 'confirmed' e busy (um "Disponível" do Google não ocupa), cruzando o
+ * intervalo (encostar não conta), sem o próprio compromisso (`ignorarId`, na
+ * edição). Escopo da conta: agenda de outra conta não devolve nada. A regra
+ * mora em lib/agenda/horario-ocupado.ts e vale de novo aqui sobre o que o
+ * banco trouxe. Erro LANÇA: o modal diz "não deu para conferir" em vez de
+ * tratar como livre — e não trava o salvar.
+ */
+export async function compromissosNoHorario(pedido: PedidoDeHorario): Promise<HorarioOcupado[]> {
+  const ctx = await getCurrentAccount()
+  if (!pedido?.calendarId || !UUID.test(pedido.calendarId)) return []
+  const intervalo = intervaloDoPedido(pedido)
+  if (!intervalo) return []
+  // Id que não é UUID não é de compromisso nenhum — e no SQL derrubaria a
+  // consulta inteira (o Postgres recusa o cast).
+  const ignorarId = pedido.ignorarId && UUID.test(pedido.ignorarId) ? pedido.ignorarId : null
+  const inicio = new Date(intervalo.inicio).toISOString()
+  const fim = new Date(intervalo.fim).toISOString()
+  const rows = await db
+    .select({
+      id: calendarEvents.id,
+      calendarId: calendarEvents.calendarId,
+      title: calendarEvents.title,
+      startsAt: calendarEvents.startsAt,
+      endsAt: calendarEvents.endsAt,
+      allDay: calendarEvents.allDay,
+      status: calendarEvents.status,
+      busy: calendarEvents.busy,
+    })
+    .from(calendarEvents)
+    .where(
+      and(
+        eq(calendarEvents.accountId, ctx.accountId),
+        eq(calendarEvents.calendarId, pedido.calendarId),
+        eq(calendarEvents.status, 'confirmed'),
+        eq(calendarEvents.busy, true),
+        // Cruza: começa antes do fim do pedido E termina depois do início dele.
+        lt(calendarEvents.startsAt, fim),
+        gt(calendarEvents.endsAt, inicio),
+        ignorarId ? ne(calendarEvents.id, ignorarId) : undefined,
+      ),
+    )
+    .orderBy(asc(calendarEvents.startsAt))
+    .limit(MAX_OCUPANDO_O_HORARIO)
+  // Datas em ISO, como no listEvents: o texto cru do Postgres nem todo
+  // navegador lê.
+  return conflitosNoHorario(pedido, rows).map((r) => ({
+    id: r.id,
+    title: r.title,
+    startsAt: new Date(r.startsAt).toISOString(),
+    endsAt: new Date(r.endsAt).toISOString(),
+    allDay: r.allDay,
+  }))
 }
 
 export async function createEvent(

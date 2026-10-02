@@ -15,16 +15,18 @@
 // ⚠️ Contato compartilhado (pediatria): o evento do Capim é ligado pelo
 // telefone da descrição, que é o do RESPONSÁVEL. Dois irmãos no mesmo horário
 // com profissionais diferentes viram um grupo só e sai UM lembrete — de
-// propósito: o texto (IA ou template {nome}/{hora}/{data}) seria o mesmo nos
-// dois, e o responsável fica avisado do horário. Consultas do mesmo contato em
+// propósito: o responsável fica avisado do horário. Desde 02/10 o lembrete diz
+// com quem é a consulta, e com dois profissionais diferentes no grupo ele não
+// cita nenhum (meeting-reminder-profissional.ts). Consultas do mesmo contato em
 // horários diferentes, mesmo no mesmo dia, NÃO são agrupadas.
 //
 // QUEM ENVIA (o canônico): o compromisso criado PRIMEIRO no CRM; empate, o de
-// menor id. Não é preferência pela agenda do profissional porque o lembrete não
-// cita agenda nem profissional — o prompt usa só o horário, o template só
-// {nome}/{hora}/{data} —, então a escolha não mudaria uma letra da mensagem. E o
-// mais antigo é estável: uma cópia lançada depois nunca toma o lugar de quem já
-// vinha enviando para repetir um degrau que já saiu. A fila do worker ordena
+// menor id. O mais antigo é estável: uma cópia lançada depois nunca toma o
+// lugar de quem já vinha enviando para repetir um degrau que já saiu. Não é
+// preferência pela agenda do profissional porque QUEM envia não muda o texto:
+// desde 02/10 o profissional citado sai do GRUPO inteiro (a subagenda do
+// profissional vence a agenda principal da dona — profissionalDoCompromisso em
+// followup.ts), seja qual for a cópia que manda. A fila do worker ordena
 // pelo MESMO critério (ver MEETING_QUEUE_ORDER em followup.ts), para o canônico
 // passar antes das cópias.
 //
