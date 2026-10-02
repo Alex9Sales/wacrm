@@ -10,8 +10,9 @@
 //
 // 02/10: até aqui as actions chamavam isto NA HORA de cada salvar, e um
 // compromisso corrigido duas vezes mandava três mensagens ao paciente. Agora
-// o worker chama uns minutos depois do último salvar, com o tipo já calculado
-// contra o que o paciente sabe. Tudo aqui é re-checado no estado FINAL.
+// o worker chama uns minutos depois do último salvar, com o que o paciente já
+// sabe; o tipo, o texto e o retrato gravado como base saem da MESMA leitura,
+// feita aqui (02/10, revisão). Tudo é re-checado no estado FINAL.
 //
 // Best-effort e nunca lança: o compromisso já foi gravado quando isto roda, e
 // falhar a confirmação não pode desfazer nem "falhar" o salvamento. Mas também
@@ -32,10 +33,12 @@ import { ensureConversationForContact } from '@/lib/whatsapp/resolve-conversatio
 import { SendMessageError, sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import {
   FUSO_PADRAO,
+  MOTIVO_INCERTO,
   decidirConfirmacao,
+  decidirNaFila,
   textoDaConfirmacao,
+  type ConfirmacaoConhecida,
   type ResultadoConfirmacao,
-  type TipoConfirmacao,
 } from './confirmacao-agendamento'
 
 /** Canais de WhatsApp. A caixa diz "pelo WhatsApp": Instagram e e-mail ficam de fora. */
@@ -57,7 +60,8 @@ const naoEnviada = (motivo: string): ResultadoConfirmacao => ({ naoEnviada: moti
  * a mensagem.
  */
 const INCERTO = /abort|timeout|timed out|deadline|no message id|demorou demais/i
-const MOTIVO_INCERTO = 'não deu para confirmar se a mensagem saiu; confira a conversa antes de reenviar'
+// MOTIVO_INCERTO mora em confirmacao-agendamento.ts desde 02/10: a fila também
+// fecha com ele a tentativa que morreu no meio do envio.
 
 /**
  * O erro do envio em português de recepção. O texto amigável que
@@ -291,26 +295,49 @@ async function depoisDeEnviar(args: { conversationId: string; agora: Date }): Pr
   }
 }
 
+
+/**
+ * O que o envio devolve à fila (02/10, revisão). Além do resultado do
+ * WhatsApp, os dois casos em que a releitura do envio já não pede mensagem:
+ * nada mudou para o paciente (moveu e voltou no meio) ou o compromisso foi
+ * cancelado / ficou sem paciente — a fila grava como 'semMudanca' /
+ * 'descartada', sem nota na conversa.
+ */
+export type ResultadoDoEnvio = ResultadoConfirmacao | { semMudanca: true } | { descartada: string }
+
 /**
  * Manda a confirmação do compromisso `eventId` (já gravado) ao paciente.
- * Devolve 'enviada', o motivo de não ter ido, ou `incerta`. Nunca lança.
+ * Nunca lança.
+ *
+ * 02/10, revisão: o worker decidia o tipo numa leitura e o envio montava o
+ * texto noutra — e a fila gravava como "o paciente já sabe" o estado da
+ * PRIMEIRA. Um salvar no meio deixava a base diferente do que a mensagem
+ * disse. Agora o envio recebe o que o paciente já sabe (`conhecido`), decide
+ * o tipo e monta o texto sobre a SUA leitura, e devolve esse retrato
+ * (`retrato`) — é ele que vira `confirmation_known`. null = não chegou a ler.
  */
 export async function enviarConfirmacaoDoAgendamento(args: {
   accountId: string
   eventId: string
-  tipo: TipoConfirmacao
+  /**
+   * O que o paciente já sabe, com o nome da agenda de então (para "agora é
+   * com"). null = nada: sai como marcação.
+   */
+  conhecido: (ConfirmacaoConhecida & { nomeAgenda?: string | null }) | null
   /** Conversa de onde a pessoa veio (botão "Agendar" da conversa). */
   conversationId?: string | null
   agora?: Date
-}): Promise<ResultadoConfirmacao> {
-  const { accountId, eventId, tipo } = args
+}): Promise<{ resultado: ResultadoDoEnvio; retrato: ConfirmacaoConhecida | null }> {
+  const { accountId, eventId } = args
   const agora = args.agora ?? new Date()
+  let retrato: ConfirmacaoConhecida | null = null
+  const fim = (resultado: ResultadoDoEnvio) => ({ resultado, retrato })
   try {
     const settings = await getAccountSettings(accountId)
     // A caixa só aparece com a opção ligada; chegar aqui com ela desligada é
     // tela aberta antes de alguém desligar. Avisa em vez de calar.
     if (settings.bookingConfirmation !== true) {
-      return naoEnviada('a confirmação ao agendar está desligada nesta conta')
+      return fim(naoEnviada('a confirmação ao agendar está desligada nesta conta'))
     }
 
     const ev = firstOrNull(
@@ -320,6 +347,7 @@ export async function enviarConfirmacaoDoAgendamento(args: {
           startsAt: calendarEvents.startsAt,
           endsAt: calendarEvents.endsAt,
           allDay: calendarEvents.allDay,
+          calendarId: calendarEvents.calendarId,
           contactId: calendarEvents.contactId,
           calendarName: calendars.name,
           contactName: contacts.name,
@@ -341,7 +369,20 @@ export async function enviarConfirmacaoDoAgendamento(args: {
         .where(and(eq(calendarEvents.id, eventId), eq(calendarEvents.accountId, accountId)))
         .limit(1),
     )
-    if (!ev) return naoEnviada('o compromisso não foi encontrado')
+    if (!ev) return fim(naoEnviada('o compromisso não foi encontrado'))
+    retrato = { startsAt: ev.startsAt, calendarId: ev.calendarId, contactId: ev.contactId }
+
+    // O tipo sai DESTA leitura, contra o que o paciente já sabe — a mesma
+    // regra do worker (decidirNaFila). O nome da agenda de então: a desta
+    // leitura, se for a mesma agenda.
+    const conhecido = args.conhecido && {
+      ...args.conhecido,
+      nomeAgenda: args.conhecido.calendarId === ev.calendarId ? ev.calendarName : args.conhecido.nomeAgenda,
+    }
+    const fila = decidirNaFila({ final: { ...ev, nomeAgenda: ev.calendarName }, conhecido })
+    if (fila.acao === 'descartar') return fim({ descartada: fila.motivo })
+    if (fila.acao === 'semMudanca') return fim({ semMudanca: true })
+    const tipo = fila.tipo
 
     const decisao = decidirConfirmacao({
       evento: ev,
@@ -351,7 +392,7 @@ export async function enviarConfirmacaoDoAgendamento(args: {
           : null,
       agora,
     })
-    if (!decisao.envia) return naoEnviada(decisao.motivo)
+    if (!decisao.envia) return fim(naoEnviada(decisao.motivo))
     const contactId = ev.contactId as string
 
     // A recepção às vezes lança a mesma consulta em duas agendas (a da dona e a
@@ -366,6 +407,13 @@ export async function enviarConfirmacaoDoAgendamento(args: {
     // a outra e desistia — o paciente ficava sem nenhuma. A que o worker pega
     // primeiro manda; quando a outra chegar, a primeira já saiu da fila e a
     // regra acima vale.
+    //
+    // Cópia que o import do Google ACABOU de criar também não conta (02/10,
+    // revisão): na troca de profissional, o import pode trazer o evento da
+    // agenda antiga como linha nova (corrida descrita em updateEvent, que a
+    // cancela logo depois) — e ela barrava o "agora é com" que a recepção
+    // pediu. Linha do import nunca manda confirmação, então ignorá-la não
+    // arrisca mensagem dobrada. Passados 10 min ela volta a contar.
     const copia = firstOrNull(
       await db
         .select({ id: calendarEvents.id })
@@ -378,19 +426,22 @@ export async function enviarConfirmacaoDoAgendamento(args: {
             eq(calendarEvents.status, 'confirmed'),
             ne(calendarEvents.id, eventId),
             isNull(calendarEvents.confirmationDueAt),
+            sql`NOT (${calendarEvents.source} = 'google' AND ${calendarEvents.createdAt} > now() - interval '10 minutes')`,
           ),
         )
         .limit(1),
     )
     if (copia) {
-      return naoEnviada(
-        'este paciente já tem outro compromisso neste mesmo horário; para não mandar duas mensagens, esta não foi enviada — confira a conversa',
+      return fim(
+        naoEnviada(
+          'este paciente já tem outro compromisso neste mesmo horário; para não mandar duas mensagens, esta não foi enviada — confira a conversa',
+        ),
       )
     }
 
     const existente = await conversaDoPaciente(accountId, contactId, args.conversationId ?? null)
     const alvo = existente ?? (await abrirConversa(accountId, contactId, ev.contactPhone))
-    if ('naoEnviada' in alvo) return alvo
+    if ('naoEnviada' in alvo) return fim(alvo)
     const conversa: { id: string; provider: string | null } = alvo
     if (existente && conversa.provider && CAPABILITIES[conversa.provider as ProviderId]?.templates === true) {
       // WhatsApp oficial (Meta): texto livre só até 24h depois da última
@@ -410,8 +461,10 @@ export async function enviarConfirmacaoDoAgendamento(args: {
       )
       const ms = ultima?.at ? new Date(ultima.at).getTime() : 0
       if (!ms || agora.getTime() - ms >= JANELA_MS) {
-        return naoEnviada(
-          'no WhatsApp oficial só dá para mandar mensagem livre até 24h depois da última mensagem do paciente',
+        return fim(
+          naoEnviada(
+            'no WhatsApp oficial só dá para mandar mensagem livre até 24h depois da última mensagem do paciente',
+          ),
         )
       }
     }
@@ -441,7 +494,7 @@ export async function enviarConfirmacaoDoAgendamento(args: {
         senderType: 'bot',
       })
       await depois()
-      return 'enviada'
+      return fim('enviada')
     } catch (err) {
       // "A chamada lançou" não é "não chegou" (delivery-error.ts): o WhatsApp
       // aceitou e só a gravação falhou. Dizer "não enviada" aqui levaria a
@@ -449,15 +502,15 @@ export async function enviarConfirmacaoDoAgendamento(args: {
       if (jaFoiEntregue(err) || (err instanceof SendMessageError && err.code === 'db_error')) {
         console.error('[agenda] confirmação entregue mas não registrada:', err)
         await depois()
-        return 'enviada'
+        return fim('enviada')
       }
       console.error('[agenda] confirmação ao paciente falhou:', err)
       // Não saiu, ou não se sabe se saiu: o lembrete volta a valer.
       await desfazerReserva(reserva)
-      return resultadoDoErro(err)
+      return fim(resultadoDoErro(err))
     }
   } catch (err) {
     console.error('[agenda] confirmação ao paciente falhou (antes do envio):', err)
-    return naoEnviada('não foi possível preparar a confirmação agora')
+    return fim(naoEnviada('não foi possível preparar a confirmação agora'))
   }
 }

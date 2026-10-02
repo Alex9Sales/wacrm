@@ -56,8 +56,24 @@ export type ResultadoConfirmacao = 'enviada' | { naoEnviada: string } | { incert
  * perturbe") ou `{ descartada }` (a caixa foi desmarcada e havia uma na fila).
  * 'enviada'/`incerta` continuam no tipo: é o mesmo aviso, vindo de quem ainda
  * manda na hora. `null` = nada a dizer.
+ *
+ * `semCaixa` (02/10, revisão): a caixa NÃO estava na tela, mas o servidor
+ * conferiu o que o paciente sabe de verdade e pôs na fila mesmo assim — a
+ * grade da tela estava velha (ver conferirEdicaoSemCaixa). O aviso explica e
+ * diz como desistir.
  */
-export type ConfirmacaoNaTela = ResultadoConfirmacao | { agendada: string } | { descartada: true } | null
+export type ConfirmacaoNaTela =
+  | ResultadoConfirmacao
+  | { agendada: string; semCaixa?: true }
+  | { descartada: true }
+  | null
+
+/**
+ * O WhatsApp demorou / respondeu sem o id: ninguém sabe se o paciente recebeu.
+ * Mora aqui (02/10, revisão) porque a fila também usa: a tentativa anterior
+ * que morreu no meio do envio fecha com este mesmo motivo.
+ */
+export const MOTIVO_INCERTO = 'não deu para confirmar se a mensagem saiu; confira a conversa antes de reenviar'
 
 export const FUSO_PADRAO = 'America/Sao_Paulo'
 
@@ -379,6 +395,25 @@ export type StatusDaConfirmacao = 'enviada' | 'naoEnviada' | 'incerta' | 'semMud
 export type DesfechoDaConfirmacao = { status: StatusDaConfirmacao; motivo?: string; at: string }
 
 const STATUS_DA_CONFIRMACAO: readonly string[] = ['enviada', 'naoEnviada', 'incerta', 'semMudanca', 'descartada']
+
+/**
+ * Marcador que o worker grava em `confirmation_result` logo ANTES de enviar
+ * (02/10, revisão). Se ele morrer entre o envio e o fechamento, o lease vence,
+ * a linha volta para a fila e a confirmação sairia DUAS vezes. Achar este
+ * marcador no começo do processamento = a tentativa anterior pode ter
+ * enviado: fecha como incerta, sem reenviar.
+ *
+ * Não é desfecho: `isDesfechoDaConfirmacao` o recusa, então a tela nunca o
+ * mostra como resultado (só como "saindo agora" — ver confirmacaoParaTela).
+ */
+export type ConfirmacaoEnviando = { status: 'enviando'; at: string }
+
+export function isConfirmacaoEnviando(v: unknown): v is ConfirmacaoEnviando {
+  if (!v || typeof v !== 'object') return false
+  const o = v as Record<string, unknown>
+  // A hora tem que ser legível: a tela a usa como "saindo desde".
+  return o.status === 'enviando' && typeof o.at === 'string' && Number.isFinite(Date.parse(o.at))
+}
 
 /** A coluna é jsonb livre: valida antes de entregar para a tela. */
 export function isDesfechoDaConfirmacao(v: unknown): v is DesfechoDaConfirmacao {

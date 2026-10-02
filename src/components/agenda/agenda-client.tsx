@@ -27,6 +27,7 @@ import {
   createEvent,
   updateEvent,
   deleteEvent,
+  estadoDaConfirmacao,
   getAgendaPrefs,
   getGoogleStatus,
   syncGoogleNow,
@@ -249,6 +250,46 @@ function confirmacaoDoRascunho(
 }
 
 /**
+ * A linha da confirmação que JÁ está na fila, quando a caixa não está na tela
+ * (02/10, revisão). Dizia sempre "sai às X" — também quando X já tinha
+ * passado (o worker estava enviando) e quando ela não ia sair: o worker decide
+ * sobre o estado FINAL do compromisso, e sem paciente, cancelado, grupo, "não
+ * perturbe", opção desligada ou sem nada que o paciente precise saber, nada
+ * sai. `motivo` = por que não sai (null = sai, ou está saindo).
+ */
+function linhaDaFila(args: {
+  naFila: string
+  draft: Draft
+  prefs: AgendaPrefs | null
+  /** confirmacaoDoRascunho — já null com a opção desligada ou data inválida. */
+  tipo: TipoConfirmacao | null
+  /** Data inválida ou agenda por escolher: o tipo null não quer dizer "nada mudou". */
+  incompleto: boolean
+  tz: string
+}): { texto: string; motivo: string | null } {
+  const { draft, prefs } = args
+  const vence = Date.parse(args.naFila)
+  if (Number.isFinite(vence) && vence <= Date.now()) {
+    return { texto: '⏳ Confirmação saindo agora — reabra em instantes para ver o resultado.', motivo: null }
+  }
+  const iso = draftIso(draft)
+  const passou = iso ? new Date(draft.allDay ? iso.endsAt : iso.startsAt).getTime() <= Date.now() : false
+  const motivo =
+    prefs?.confirmacaoAoAgendar === false
+      ? 'a confirmação ao agendar está desligada nesta conta'
+      : !draft.contactId
+        ? 'o compromisso está sem paciente'
+        : (impedimentoDaConfirmacao({ status: draft.status, contato: draft.contatoFlags }) ??
+          (passou
+            ? 'o horário do compromisso já passou'
+            : prefs && !args.incompleto && args.tipo === null
+              ? 'nada que o paciente precisa saber mudou'
+              : null))
+  if (motivo) return { texto: `A confirmação que estava na fila não vai sair: ${motivo}.`, motivo }
+  return { texto: `⏳ Confirmação na fila: sai às ${horaDaFila(args.naFila, args.tz)} com a versão final.`, motivo: null }
+}
+
+/**
  * A caixa está marcada? Quem mexeu manda; senão, marcada.
  *
  * 02/10: a troca de profissional (mesmo dia e hora) nascia DESMARCADA. Na
@@ -279,6 +320,19 @@ function avisarConfirmacao(c: ConfirmacaoNaTela | undefined, tz: string): void {
   }
   // 02/10: o salvar só põe na fila. A hora é a do fuso da conta.
   if ('agendada' in c) {
+    // A caixa não estava na tela, mas o servidor viu que o paciente sabe de
+    // outro horário/profissional (a grade estava velha — 02/10, revisão):
+    // diz por que vai e como desistir, em vez de um aviso que ninguém pediu.
+    if (c.semCaixa) {
+      toast.info(
+        `O paciente tinha sido avisado de outro horário ou profissional: a confirmação desta mudança entrou na fila e sai às ${horaDaFila(c.agendada, tz)}.`,
+        {
+          description: 'Para não mandar, abra o compromisso de novo e desmarque a caixa antes desse horário.',
+          duration: 12_000,
+        },
+      )
+      return
+    }
     toast.info(
       `Confirmação na fila: sai às ${horaDaFila(c.agendada, tz)}, já com a versão final — se mudar algo até lá, vai só a última.`,
       { duration: 8_000 },
@@ -410,6 +464,25 @@ export function AgendaClient() {
       window.clearInterval(id)
     }
   }, [google?.connected, autoSync])
+
+  // ⏳ Confirmação na fila (02/10, revisão): sem Google próprio a grade não
+  // recarrega sozinha, e o que o worker gravou depois — a "remarcada" que
+  // saiu, o "não enviada" — não chegava à tela; o modal comparava com a base
+  // velha. Com alguma confirmação para sair, recarrega ~45 s depois da ÚLTIMA
+  // vencer (o tick do worker é de 30 s, mais o envio).
+  useEffect(() => {
+    const agora = Date.now()
+    let ultima = 0
+    for (const ev of events) {
+      const t = ev.confirmationDueAt ? Date.parse(ev.confirmationDueAt) : Number.NaN
+      if (Number.isFinite(t) && t > agora && t > ultima) ultima = t
+    }
+    if (!ultima) return
+    const id = window.setTimeout(() => {
+      void loadRef.current().catch((err) => console.error('[agenda] recarregar depois da fila:', err))
+    }, ultima - agora + 45_000)
+    return () => window.clearTimeout(id)
+  }, [events])
 
   // Voltar do navegador no Dia ou na Semana retorna pro Mês (em vez de sair da página).
   useEffect(() => {
@@ -623,6 +696,37 @@ export function AgendaClient() {
     const e = new Date(ev.endsAt)
     const start = ev.allDay ? toDateInput(s) : toLocalInput(s)
     const end = ev.allDay ? toDateInput(e) : toLocalInput(e)
+    // O compromisso como abriu: é o "atual" da base quando o paciente ainda
+    // não sabe de nada (baseDaConfirmacao). O início passa pelo MESMO caminho
+    // do salvar (inicioComoNaTela).
+    const atual = { startsAt: inicioComoNaTela(ev), calendarId: ev.calendarId, contactId: ev.contactId }
+    // 02/10, revisão: a grade pode estar velha (sem Google próprio não
+    // recarrega). Salvou 10h→11h, o worker mandou "remarcada para 11h", e a
+    // grade ainda dizia que o paciente sabia das 10h: voltar para 10h não
+    // mostrava a caixa e o paciente ficava com 11h. Busca o estado fresco e
+    // refaz a base — enquanto ninguém mexeu na caixa (o servidor também
+    // confere: conferirEdicaoSemCaixa).
+    if (prefs?.confirmacaoAoAgendar !== false) {
+      estadoDaConfirmacao(ev.id)
+        .then((est) => {
+          if (!est) return
+          setDraft((d) =>
+            d && d.id === ev.id && d.notifyPatient === null
+              ? {
+                  ...d,
+                  original: baseDaConfirmacao({
+                    conhecido: est.confirmationKnown,
+                    pendente: Boolean(est.confirmationDueAt),
+                    atual,
+                  }),
+                  confirmacaoNaFila: est.confirmationDueAt,
+                  ultimaConfirmacao: est.confirmationResult,
+                }
+              : d,
+          )
+        })
+        .catch((err) => console.error('[agenda] estado da confirmação:', err))
+    }
     setDraft({
       id: ev.id,
       title: ev.title,
@@ -641,16 +745,12 @@ export function AgendaClient() {
       contatoFlags: null,
       // Contra o que comparar (02/10): a MESMA base que a fila usa — o que o
       // paciente já sabe; marcação ainda na fila = nada (consulta nova para
-      // ele); senão o compromisso como abriu. O início "de antes" passa pelo
-      // MESMO caminho do salvar (inicioComoNaTela).
+      // ele); senão o compromisso como abriu. Primeiro o da grade; o estado
+      // fresco (acima) refaz quando chegar.
       original: baseDaConfirmacao({
         conhecido: ev.confirmationKnown,
         pendente: Boolean(ev.confirmationDueAt),
-        atual: {
-          startsAt: inicioComoNaTela(ev),
-          calendarId: ev.calendarId,
-          contactId: ev.contactId,
-        },
+        atual,
       }),
       confirmacaoNaFila: ev.confirmationDueAt,
       ultimaConfirmacao: ev.confirmationResult,
@@ -690,7 +790,9 @@ export function AgendaClient() {
       const { startsAt, endsAt } = iso
       // Só pede a confirmação quando a caixa está NA TELA e marcada; e só tira
       // da fila quando ela estava NA TELA e foi desmarcada (02/10). Sem a
-      // caixa na tela (só mudou o título), a fila fica como está.
+      // caixa na tela (só mudou o título), a fila fica como está — e, numa
+      // edição, o servidor ainda confere no banco se o paciente precisa saber
+      // (a grade pode estar velha: conferirEdicaoSemCaixa, 02/10, revisão).
       const tipo = confirmacaoDoRascunho(draft, calendars, remarcacao)
       const caixaNaTela =
         prefs?.confirmacaoAoAgendar === true &&
@@ -1431,8 +1533,19 @@ function EventModal({
     : naFila
       ? 'Desmarcada: a confirmação que estava na fila é cancelada ao salvar'
       : 'Não vai nada ao salvar'
-  // A linha "na fila" só quando a caixa não está na tela (ela já diz isso).
-  const linhaDaFila = naFila && !previaConfirmacao ? horaDaFila(naFila, tz) : null
+  // A linha "na fila" só quando a caixa não está na tela (ela já diz isso) —
+  // e dizendo se sai mesmo, se já está saindo ou por que não vai (02/10, revisão).
+  const fila =
+    naFila && !previaConfirmacao
+      ? linhaDaFila({
+          naFila,
+          draft,
+          prefs,
+          tipo: tipoConfirmacao,
+          incompleto: Boolean(timeError) || faltaAgenda,
+          tz,
+        })
+      : null
   // O último desfecho, no compromisso (02/10): quem marcou já saiu do modal
   // quando o worker tenta, então "não enviada" fica aqui e na conversa.
   const ultima = draft.ultimaConfirmacao
@@ -1707,10 +1820,13 @@ function EventModal({
                     ? `Confirmação ao paciente (${diaEHoraNoFuso(ultimaNaoSaiu.at, tz)}): ${ultimaNaoSaiu.motivo ?? 'não deu para confirmar se saiu'}.`
                     : `A confirmação ao paciente não foi enviada (${diaEHoraNoFuso(ultimaNaoSaiu.at, tz)}) — ${ultimaNaoSaiu.motivo ?? 'o envio falhou'}.`}
                 </p>
+                {/* 02/10, revisão: dizia "há uma nota lá também", mas a nota nem
+                    sempre existe (paciente sem conversa de WhatsApp, falha ao
+                    gravar a nota, "não enviada" dita na hora do salvar). */}
                 <p className="mt-0.5 text-muted-foreground">
                   {ultimaNaoSaiu.status === 'incerta'
                     ? 'Confira a conversa antes de mandar de novo.'
-                    : 'Se precisar, avise o paciente pela conversa — há uma nota lá também.'}
+                    : 'Se precisar, avise o paciente pela conversa.'}
                 </p>
               </div>
             </div>
@@ -1720,9 +1836,9 @@ function EventModal({
               Confirmação enviada ao paciente em {diaEHoraNoFuso(ultima.at, tz)}.
             </p>
           )}
-          {linhaDaFila && (
+          {fila && (
             <p className="rounded-lg border border-border px-3 py-2.5 text-[11px] text-muted-foreground">
-              ⏳ Confirmação na fila: sai às {linhaDaFila} com a versão final.
+              {fila.texto}
             </p>
           )}
 
@@ -1753,7 +1869,8 @@ function EventModal({
           )}
           {/* Cancelado, grupo, "não perturbe": diz por que não vai, em vez de
               uma caixa que o servidor recusaria (01/10, revisão). */}
-          {semConfirmacao && (
+          {/* Com uma na fila, a linha dela já diz o porquê (não repete). */}
+          {semConfirmacao && !fila?.motivo && (
             <p className="rounded-lg border border-border px-3 py-2.5 text-[11px] text-muted-foreground">
               Nenhuma confirmação vai ao paciente ao salvar: {semConfirmacao}.
             </p>

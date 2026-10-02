@@ -70,6 +70,10 @@ const h = vi.hoisted(() => {
       state.calls.push({ op: 'descarte' })
       return { descartada: true }
     }),
+    // Edição salva sem a caixa (revisão de 02/10): a conferência no banco é
+    // testada em confirmacao-fila.test.ts; aqui, QUANDO a action chama. Não
+    // entra em `passos()` para não mudar a ordem conferida nos outros testes.
+    conferir: vi.fn<(args: Record<string, unknown>) => Promise<unknown>>(async () => null),
   }
 })
 
@@ -89,9 +93,10 @@ vi.mock('@/lib/google/calendar', () => ({ googleConfigured: () => true }))
 vi.mock('@/lib/agenda/confirmacao-fila', () => ({
   agendarConfirmacao: h.agendar,
   descartarConfirmacaoPendente: h.descartar,
+  conferirEdicaoSemCaixa: h.conferir,
 }))
 
-import { createEvent, listarConsultasFuturasDoContato, updateEvent } from './actions'
+import { createEvent, estadoDaConfirmacao, listarConsultasFuturasDoContato, updateEvent } from './actions'
 import { ERRO_REMARCACAO_INDISPONIVEL } from '@/lib/agenda/remarcacao'
 
 const INPUT = { title: 'RSC', startsAt: '2026-10-05T14:00:00.000Z', endsAt: '2026-10-05T15:00:00.000Z' }
@@ -117,6 +122,8 @@ beforeEach(() => {
   h.apagar.mockClear()
   h.agendar.mockClear()
   h.descartar.mockClear()
+  h.conferir.mockReset()
+  h.conferir.mockImplementation(async () => null)
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 
@@ -295,6 +302,8 @@ describe('confirmação ao paciente ao salvar — vai para a FILA (01/10; fila d
     expect(res.confirmacao).toBeNull()
     expect(h.agendar).not.toHaveBeenCalled()
     expect(h.descartar).not.toHaveBeenCalled()
+    // Compromisso novo: não há o que o paciente "já sabia" para conferir.
+    expect(h.conferir).not.toHaveBeenCalled()
   })
 
   it('criar sem paciente: nada vai para a fila, mesmo com a caixa', async () => {
@@ -368,7 +377,7 @@ describe('confirmação ao paciente ao salvar — vai para a FILA (01/10; fila d
     expect(h.agendar).toHaveBeenCalledWith(expect.objectContaining({ antes: expect.objectContaining({ contactId: null }) }))
   })
 
-  it('editar só o título (a caixa nem aparece): a fila fica como está — o worker manda o estado final', async () => {
+  it('editar só o título (a caixa nem aparece): não põe nem tira — só pede ao servidor que confira no banco', async () => {
     h.state.results.push([ANTES_COM_PACIENTE], AGENDA_LOCAL, [{ id: 'c-1' }])
 
     const res = await updateEvent('ev-1', {
@@ -383,6 +392,52 @@ describe('confirmação ao paciente ao salvar — vai para a FILA (01/10; fila d
     expect(res).toEqual({ error: null, confirmacao: null })
     expect(h.agendar).not.toHaveBeenCalled()
     expect(h.descartar).not.toHaveBeenCalled()
+    // A conferência recebe como o compromisso estava ANTES (revisão de 02/10).
+    expect(h.conferir).toHaveBeenCalledWith({
+      accountId: 'acc-1',
+      eventId: 'ev-1',
+      antes: { startsAt: '2026-10-05 14:00:00+00', calendarId: 'cal-a', contactId: 'c-1' },
+      conversationId: null,
+    })
+  })
+
+  it('edição sem a caixa com a grade velha: o que a conferência põe na fila volta para a tela, depois de gravar e antes do Google', async () => {
+    // Salvou 10h→11h, o worker mandou "remarcada para 11h"; a grade velha não
+    // mostrou a caixa quando a recepção voltou para 10h.
+    h.state.results.push([ANTES_COM_PACIENTE], AGENDA_LOCAL, [{ id: 'c-1' }])
+    h.conferir.mockImplementationOnce(async () => {
+      h.state.calls.push({ op: 'conferencia' })
+      return { agendada: '2026-10-02T13:08:00.000Z', semCaixa: true }
+    })
+
+    const res = await updateEvent('ev-1', {
+      ...INPUT,
+      startsAt: '2026-10-05T13:00:00.000Z',
+      endsAt: '2026-10-05T14:00:00.000Z',
+      calendarId: 'cal-a',
+      contactId: 'c-1',
+    })
+
+    expect(res).toEqual({ error: null, confirmacao: { agendada: '2026-10-02T13:08:00.000Z', semCaixa: true } })
+    // Como a caixa: depois de gravar; antes do Google (a varredura de
+    // lembretes pula o compromisso com confirmação pendente).
+    expect(passos()).toEqual(['update', 'conferencia', 'google:update'])
+  })
+
+  it('caixa NA TELA e desmarcada: descarta e NÃO confere (a recepção decidiu não avisar)', async () => {
+    h.state.results.push([ANTES_COM_PACIENTE], AGENDA_LOCAL, [{ id: 'c-1' }])
+
+    await updateEvent('ev-1', {
+      ...INPUT,
+      startsAt: '2026-10-06T17:00:00.000Z',
+      calendarId: 'cal-a',
+      contactId: 'c-1',
+      notifyPatient: false,
+      descartarConfirmacaoPendente: true,
+    })
+
+    expect(h.descartar).toHaveBeenCalledTimes(1)
+    expect(h.conferir).not.toHaveBeenCalled()
   })
 
   it('mudar o horário com a caixa DESMARCADA na tela: tira da fila, não põe', async () => {
@@ -559,6 +614,55 @@ describe('remarcação no modal de compromisso NOVO (02/10)', () => {
     expect(res.id).toBeNull()
     expect(res.error).toBeTruthy()
     expect(h.push).not.toHaveBeenCalled()
+  })
+})
+
+describe('estado fresco da confirmação (o modal pede ao abrir a edição — revisão de 02/10)', () => {
+  const EV = '33333333-3333-4333-8333-333333333333'
+
+  it('normaliza como a grade: vencimento em ISO, base e desfecho validados', async () => {
+    h.state.results.push([
+      {
+        confirmationDueAt: null,
+        confirmationKnown: { startsAt: '2026-10-05 15:00:00+00', calendarId: 'cal-a', contactId: 'c-1' },
+        confirmationResult: { status: 'enviada', at: '2026-10-02T13:08:30.000Z' },
+      },
+    ])
+
+    expect(await estadoDaConfirmacao(EV)).toEqual({
+      confirmationDueAt: null,
+      confirmationKnown: { startsAt: '2026-10-05 15:00:00+00', calendarId: 'cal-a', contactId: 'c-1' },
+      confirmationResult: { status: 'enviada', at: '2026-10-02T13:08:30.000Z' },
+    })
+  })
+
+  it('o worker está enviando: o vencimento é o do marcador (já passou → "saindo agora"), e o marcador não vira desfecho', async () => {
+    h.state.results.push([
+      {
+        confirmationDueAt: '2026-10-02 13:18:00.123+00', // o lease (+10 min)
+        confirmationKnown: { lixo: true },
+        confirmationResult: { status: 'enviando', at: '2026-10-02T13:08:01.000Z' },
+      },
+    ])
+
+    expect(await estadoDaConfirmacao(EV)).toEqual({
+      confirmationDueAt: '2026-10-02T13:08:01.000Z',
+      confirmationKnown: null,
+      confirmationResult: null,
+    })
+  })
+
+  it('pendente comum: o vencimento da fila, em ISO', async () => {
+    h.state.results.push([{ confirmationDueAt: '2026-10-02 13:08:00+00', confirmationKnown: null, confirmationResult: null }])
+
+    expect((await estadoDaConfirmacao(EV))?.confirmationDueAt).toBe('2026-10-02T13:08:00.000Z')
+  })
+
+  it('não achou (ou id torto, sem ir ao banco): null', async () => {
+    h.state.results.push([])
+    expect(await estadoDaConfirmacao(EV)).toBeNull()
+    expect(await estadoDaConfirmacao('nao-e-uuid')).toBeNull()
+    expect(h.state.calls.filter((c) => c.op === 'select')).toHaveLength(1)
   })
 })
 

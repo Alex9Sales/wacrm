@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
     endsAt: string
     allDay: boolean
     calendarId: string
+    contactId?: string | null
     title: string
     location: string | null
   }[],
@@ -74,6 +75,7 @@ vi.mock('@/lib/settings/account-settings', () => ({
 }))
 
 import {
+  confirmacaoDadaPelaIa,
   decidirAgendamento,
   notaDaRemarcacaoSemAlvo,
   notaDoAgendamentoDaIa,
@@ -99,6 +101,7 @@ function consulta(id: string, local: string, calendarId: string, min = 30): Comp
     endsAt: new Date(ini.getTime() + min * 60000).toISOString(),
     allDay: false,
     calendarId,
+    contactId: 'contato-1',
     title: `Consulta ${id}`,
     location: null,
   }
@@ -337,6 +340,53 @@ describe('scheduleEventFromAi com o 4º campo', () => {
     })) as ScheduleResult
     expect(h.updates[0].values).not.toHaveProperty('calendarId')
     expect(ev).toMatchObject({ eventId: 'leo', acao: 'moveu', agendaDiferente: true })
+  })
+})
+
+describe('a IA move a consulta: a confirmação da Agenda que estava na fila sai dela (revisão de 02/10)', () => {
+  it('horário mudou: tira da fila, o horário novo vira o que o paciente sabe e o desfecho diz por quê', async () => {
+    h.existentes = [consulta('leo', '2026-10-21T09:30', 'cal-marta', 30)]
+    await scheduleEventFromAi({ ...base, startsLocal: '2026-10-23T10:00' })
+
+    expect(h.updates).toHaveLength(1)
+    expect(h.updates[0].values).toMatchObject({
+      confirmationDueAt: null,
+      confirmationConversationId: null,
+      confirmationKnown: { startsAt: '2026-10-23T13:00:00.000Z', calendarId: 'cal-marta', contactId: 'contato-1' },
+      confirmationResult: { status: 'descartada', motivo: 'a IA remarcou e confirmou na conversa' },
+    })
+    // Carimba updated_at: o import do Google não desfaz a remarcação com a foto velha.
+    expect(h.updates[0].values).toHaveProperty('updatedAt')
+  })
+
+  it('marcador repetido no MESMO horário: a fila fica como está', async () => {
+    h.existentes = [consulta('leo', '2026-10-23T10:00', 'cal-marta', 30)]
+    const ev = (await scheduleEventFromAi({ ...base, startsLocal: '2026-10-23T10:00' })) as ScheduleResult
+
+    expect(ev.acao).toBe('manteve')
+    for (const campo of ['confirmationDueAt', 'confirmationConversationId', 'confirmationKnown', 'confirmationResult']) {
+      expect(h.updates[0].values).not.toHaveProperty(campo)
+    }
+  })
+
+  it('criar não mexe na fila (compromisso novo não tem confirmação pendente)', async () => {
+    await scheduleEventFromAi({ ...base, startsLocal: '2026-10-23T10:00' })
+
+    expect(h.inserts[0].values).not.toHaveProperty('confirmationResult')
+  })
+
+  it('confirmacaoDadaPelaIa (pura): consulta sem paciente fica com contactId null', () => {
+    const agora = new Date('2026-10-02T12:00:00.000Z')
+    expect(confirmacaoDadaPelaIa({ calendarId: 'cal-x' }, new Date('2026-10-23T13:00:00.000Z'), agora)).toEqual({
+      confirmationDueAt: null,
+      confirmationConversationId: null,
+      confirmationKnown: { startsAt: '2026-10-23T13:00:00.000Z', calendarId: 'cal-x', contactId: null },
+      confirmationResult: {
+        status: 'descartada',
+        motivo: 'a IA remarcou e confirmou na conversa',
+        at: '2026-10-02T12:00:00.000Z',
+      },
+    })
   })
 })
 

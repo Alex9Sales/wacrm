@@ -10,6 +10,7 @@ import { firstOrNull } from '@/db/helpers'
 import { pushEventToGoogle } from '@/lib/google/sync'
 import { escolherAgenda } from './agenda-do-profissional'
 import type { ModoAgendamento } from './defaults'
+import type { ConfirmacaoConhecida, DesfechoDaConfirmacao } from '@/lib/agenda/confirmacao-agendamento'
 import { enqueueScheduledMessage } from '@/lib/queue/queues'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 
@@ -266,6 +267,8 @@ export interface CompromissoExistente {
   endsAt: string
   allDay?: boolean | null
   calendarId: string
+  /** O paciente da linha (vai para a base da confirmação ao mover — 02/10). */
+  contactId?: string | null
   title?: string | null
   location?: string | null
 }
@@ -341,6 +344,39 @@ export function decidirAgendamento(input: {
 
 /** Quantas consultas futuras do contato entram na decisão. */
 const LIMITE_EXISTENTES = 20
+
+/**
+ * As colunas da fila da confirmação ao agendar (migração 0204) quando a IA
+ * MOVE uma consulta para outro horário (02/10, revisão). A IA já confirma o
+ * horário novo na conversa; a confirmação da Agenda que estivesse na fila
+ * sairia depois e o paciente receberia duas. Tira da fila, grava o horário
+ * novo como o que o paciente já sabe e deixa o porquê no desfecho. Pura.
+ */
+export function confirmacaoDadaPelaIa(
+  consulta: Pick<CompromissoExistente, 'calendarId' | 'contactId'>,
+  inicio: Date,
+  agora: Date = new Date(),
+): {
+  confirmationDueAt: null
+  confirmationConversationId: null
+  confirmationKnown: ConfirmacaoConhecida
+  confirmationResult: DesfechoDaConfirmacao
+} {
+  return {
+    confirmationDueAt: null,
+    confirmationConversationId: null,
+    confirmationKnown: {
+      startsAt: inicio.toISOString(),
+      calendarId: consulta.calendarId,
+      contactId: consulta.contactId ?? null,
+    },
+    confirmationResult: {
+      status: 'descartada',
+      motivo: 'a IA remarcou e confirmou na conversa',
+      at: agora.toISOString(),
+    },
+  }
+}
 
 /** "segunda-feira, 21/09, às 9h" (ou "às 9h30") no fuso da conta. */
 export function formatMeetingWhen(iso: string, tz: string): string {
@@ -522,6 +558,7 @@ export async function scheduleEventFromAi(input: {
             endsAt: calendarEvents.endsAt,
             allDay: calendarEvents.allDay,
             calendarId: calendarEvents.calendarId,
+            contactId: calendarEvents.contactId,
             title: calendarEvents.title,
             location: calendarEvents.location,
           })
@@ -591,6 +628,17 @@ export async function scheduleEventFromAi(input: {
           // nascer com os degraus queimados, e o lembrete da remarcação —
           // justamente o mais necessário — nunca sai.
           ...(sameTime ? {} : { remindersSent: 0, reminderBlock: null, reminderBlockAt: null }),
+          // ⏳ A confirmação da Agenda que estava na fila (02/10, revisão): a
+          // IA remarca E confirma o horário novo na própria conversa. Sem
+          // isto, a fila mandava DEPOIS a dela ("remarcada para…") — duas
+          // mensagens. Sai da fila, e o horário novo vira o que o paciente já
+          // sabe (a próxima edição na Agenda compara com ele). O desfecho
+          // diz por que não saiu (a tela não mostra 'descartada' como aviso).
+          ...(sameTime ? {} : confirmacaoDadaPelaIa(existing, start)),
+          // O import do Google só sobrescreve a linha que ninguém mexeu desde
+          // a listagem dele (02/10, revisão) — e "mexeu" é o updated_at. Sem
+          // isto, a remarcação da IA podia ser desfeita pela foto velha.
+          updatedAt: sql`now()`,
         })
         .where(eq(calendarEvents.id, existing.id))
       if (!sameTime) {

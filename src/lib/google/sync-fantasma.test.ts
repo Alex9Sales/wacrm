@@ -11,6 +11,8 @@ import type { SQL } from 'drizzle-orm'
 // Banco falso: cada SELECT consome a próxima resposta da fila `selects`; cada
 // UPDATE com .returning() consome a próxima de `retornos`. Guarda o `set` e o
 // `where` de cada chamada, para conferir O QUE foi gravado e com que trava.
+// db.execute é só o now() do banco que o import lê antes de listar cada
+// agenda (revisão de 02/10).
 //
 // Dados fictícios (LGPD): nenhum paciente de verdade aqui.
 
@@ -56,9 +58,14 @@ const h = vi.hoisted(() => {
     delete: () => chain('delete'),
   }
   db.transaction = async (fn: (tx: unknown) => Promise<unknown>) => fn(db)
+  const agoraNoBanco = vi.fn<(q: unknown) => Promise<{ rows: { agora: string }[] }>>(async () => ({
+    rows: [{ agora: '2026-10-02 13:00:00.123456+00' }],
+  }))
+  db.execute = agoraNoBanco
   return {
     state,
     db,
+    agoraNoBanco,
     listGoogleEvents: vi.fn(),
     getGoogleEvent: vi.fn(),
   }
@@ -136,6 +143,7 @@ beforeEach(() => {
   h.state.calls = []
   h.listGoogleEvents.mockReset()
   h.getGoogleEvent.mockReset()
+  h.agoraNoBanco.mockClear()
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -258,7 +266,10 @@ describe('importGoogleEvents → varredura de sumidos', () => {
       start: { dateTime: '1999-12-31T22:00:00-02:00' },
       organizer: { email: AGENDA_PROF.googleCalendarId },
     })
-    h.state.retornos.push([{ id: 'ev-fantasma' }])
+    // O RETURNING do cancelamento (aqui igual à leitura da varredura).
+    h.state.retornos.push([
+      { id: 'ev-fantasma', contactId: 'c-ana', dealId: 'd-1', remindersSent: 1, startsAt: fantasma.startsAt },
+    ])
 
     const r = await importGoogleEvents(ACC, CONN)
 
@@ -380,5 +391,72 @@ describe('importGoogleEvents → varredura de sumidos', () => {
     const primeiraPergunta = Math.min(...h.getGoogleEvent.mock.invocationCallOrder)
     expect(h.listGoogleEvents).toHaveBeenCalledTimes(2)
     expect(ultimaListagem).toBeLessThan(primeiraPergunta)
+  })
+
+  it('o que passa ao gêmeo é o RETURNING do cancelamento, não a leitura de antes das perguntas ao Google (revisão de 02/10)', async () => {
+    inicio()
+    listagem({})
+    // Lida pela varredura sem paciente e sem lembrete…
+    const lida = linha({ contactId: null, dealId: null, remindersSent: 0 })
+    h.state.selects.push([lida], [{ id: 'ev-gemeo' }])
+    h.getGoogleEvent.mockResolvedValue({ status: 'cancelled' })
+    // …mas, enquanto o Google respondia, o lembrete saiu e a recepção ligou o paciente.
+    const naHora = { id: 'ev-fantasma', contactId: 'c-bia', dealId: 'd-2', remindersSent: 2, startsAt: lida.startsAt }
+    h.state.retornos.push([naHora])
+
+    await importGoogleEvents(ACC, CONN)
+
+    const [cancel, lembrete, paciente, negocio] = updatesDeEvento()
+    expect(cancel.returning).toBe(true)
+    expect(render(lembrete.where).params).toEqual([ACC, 'g-movido', AGENDA_DONA.id, 'confirmed', lida.startsAt, 2, 'c-bia'])
+    expect(render(lembrete.set?.remindersSent as SQL).params).toEqual([2])
+    expect(paciente.set).toEqual({ contactId: 'c-bia' })
+    expect(negocio.set).toEqual({ dealId: 'd-2' })
+  })
+})
+
+describe('importGoogleEvents → não desfaz o salvar feito no CRM durante a importação (revisão de 02/10)', () => {
+  const EV_GOOGLE = {
+    id: 'g-1',
+    status: 'confirmed',
+    summary: 'Consulta Exemplo',
+    start: { dateTime: '2026-10-05T13:00:00Z' },
+    end: { dateTime: '2026-10-05T14:00:00Z' },
+  }
+
+  it('pega o now() do BANCO antes de listar e só atualiza a linha que ninguém mexeu desde então', async () => {
+    inicio()
+    listagem({ [AGENDA_DONA.googleCalendarId]: [EV_GOOGLE] })
+    // A linha que já existe (o horário dela no CRM é outro: o recomeço do lembrete continua valendo).
+    h.state.selects.push([{ id: 'ev-1', startsAt: '2026-10-05 12:00:00+00' }])
+
+    await importGoogleEvents(ACC, CONN)
+
+    expect(h.agoraNoBanco).toHaveBeenCalledTimes(1)
+    expect(render(h.agoraNoBanco.mock.calls[0]?.[0] as SQL).sql).toBe('SELECT now()::text AS agora')
+    expect(h.agoraNoBanco.mock.invocationCallOrder[0]).toBeLessThan(h.listGoogleEvents.mock.invocationCallOrder[0])
+    const doEvento = updatesDeEvento().find((c) => c.set && 'title' in c.set)
+    const q = render(doEvento?.where)
+    expect(q.params).toEqual(['ev-1', '2026-10-02 13:00:00.123456+00'])
+    expect(q.sql).toContain('"calendar_events"."updated_at" < $2')
+    expect(doEvento?.set).toMatchObject({
+      startsAt: '2026-10-05T13:00:00.000Z',
+      status: 'confirmed',
+      remindersSent: 0,
+    })
+  })
+
+  it('um now() por agenda: cada listagem é uma foto do seu instante', async () => {
+    inicio([AGENDA_DONA, AGENDA_PROF])
+    listagem({})
+
+    await importGoogleEvents(ACC, CONN)
+
+    expect(h.agoraNoBanco).toHaveBeenCalledTimes(2)
+    const [a1, a2] = h.agoraNoBanco.mock.invocationCallOrder
+    const [l1, l2] = h.listGoogleEvents.mock.invocationCallOrder
+    expect(a1).toBeLessThan(l1)
+    expect(l1).toBeLessThan(a2)
+    expect(a2).toBeLessThan(l2)
   })
 })
