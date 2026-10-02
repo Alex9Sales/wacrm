@@ -20,11 +20,13 @@ import { planoDaEdicao } from '@/lib/google/event-move'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import {
   FUSO_PADRAO,
-  tipoDaConfirmacaoNaEdicao,
-  type ResultadoConfirmacao,
-  type TipoConfirmacao,
+  isConfirmacaoConhecida,
+  isDesfechoDaConfirmacao,
+  type ConfirmacaoConhecida,
+  type ConfirmacaoNaTela as ConfirmacaoNaTelaDaFila,
+  type DesfechoDaConfirmacao,
 } from '@/lib/agenda/confirmacao-agendamento'
-import { enviarConfirmacaoDoAgendamento } from '@/lib/agenda/confirmacao-envio'
+import { agendarConfirmacao, descartarConfirmacaoPendente } from '@/lib/agenda/confirmacao-fila'
 
 export type CalendarRow = {
   id: string
@@ -61,6 +63,15 @@ export type EventRow = {
    * da consulta sumia sem deixar rastro e quem marcou não ficava sabendo.
    */
   reminderBlock: MeetingReminderBlock | null
+  /**
+   * Confirmação ao paciente na fila (migração 0204, 02/10): quando sai (ISO).
+   * null = nada pendente. O modal diz "na fila: sai às HH:MM".
+   */
+  confirmationDueAt: string | null
+  /** O que o paciente já sabe — base da próxima confirmação (baseDaConfirmacao). */
+  confirmationKnown: ConfirmacaoConhecida | null
+  /** Último desfecho da fila: "não enviada" fica NO compromisso, não num toast. */
+  confirmationResult: DesfechoDaConfirmacao | null
 }
 
 export type EventInput = {
@@ -75,34 +86,59 @@ export type EventInput = {
   dealId?: string | null
   /**
    * A caixa "Enviar confirmação ao paciente pelo WhatsApp" do modal (01/10).
-   * Só `true` manda; sem ela (qualquer outro caminho) nada sai. Na edição, só
-   * vale se mudou dia/hora, o profissional (agenda de outra pessoa) ou o
-   * paciente — a action confere.
+   * Só `true` pede; sem ela (qualquer outro caminho) nada sai. Desde 02/10 o
+   * salvar só põe na FILA: sai uns minutos depois do último salvar, só a
+   * versão final (lib/agenda/confirmacao-fila.ts). Na edição, só vale se mudou
+   * dia/hora, o profissional (agenda de outra pessoa) ou o paciente, comparado
+   * com o que o paciente já sabe — a fila confere.
    */
   notifyPatient?: boolean
+  /**
+   * A caixa estava NA TELA e foi desmarcada (02/10): tira da fila a confirmação
+   * pendente. Salvar SEM a caixa na tela (só mudou o título) não mexe na fila:
+   * o worker manda o estado final do mesmo jeito.
+   */
+  descartarConfirmacaoPendente?: boolean
   /** Conversa de onde a recepção clicou "Agendar": a confirmação sai por ela. */
   conversationId?: string | null
 }
 
 /** O que vai para o modal depois de salvar. Ver lib/agenda/confirmacao-agendamento.ts. */
-export type ConfirmacaoNaTela = ResultadoConfirmacao | null
+export type ConfirmacaoNaTela = ConfirmacaoNaTelaDaFila
 
 /**
- * Manda a confirmação sem NUNCA atrapalhar o salvamento: roda depois de o
- * compromisso estar gravado no CRM (antes do espelho no Google — ver
+ * A confirmação deste salvar, sem NUNCA atrapalhar o salvamento: roda depois
+ * de o compromisso estar gravado no CRM (antes do espelho no Google — ver
  * createEvent), e qualquer falha vira aviso, não erro do salvar.
+ *
+ * 02/10: não envia mais nada aqui. Caixa marcada → põe na fila (sai uns
+ * minutos depois, só a versão final); caixa desmarcada na tela → tira da fila.
  */
-async function confirmarAoPaciente(args: {
+async function confirmacaoDoSalvar(args: {
   accountId: string
   eventId: string
-  tipo: TipoConfirmacao
+  notifyPatient?: boolean
+  descartar?: boolean
+  /** Como estava antes deste salvar. null = compromisso novo. */
+  antes: ConfirmacaoConhecida | null
   conversationId?: string | null
 }): Promise<ConfirmacaoNaTela> {
   try {
-    return await enviarConfirmacaoDoAgendamento(args)
+    if (args.notifyPatient === true) {
+      return await agendarConfirmacao({
+        accountId: args.accountId,
+        eventId: args.eventId,
+        antes: args.antes,
+        conversationId: args.conversationId ?? null,
+      })
+    }
+    if (args.descartar === true) {
+      return await descartarConfirmacaoPendente({ accountId: args.accountId, eventId: args.eventId })
+    }
+    return null
   } catch (err) {
     console.error('[agenda] confirmação ao paciente:', err)
-    return { naoEnviada: 'não foi possível enviar a confirmação agora' }
+    return { naoEnviada: 'não foi possível agendar a confirmação agora' }
   }
 }
 
@@ -157,24 +193,26 @@ async function ensureDefaultCalendar(
 // contato de lá). Com o de um contato/negócio de outra conta, a Agenda mostrava
 // o nome dele aqui.
 
-/** A agenda é desta conta? Devolve se ela sincroniza com o Google; null = não é. */
+/**
+ * A agenda é desta conta? Devolve se ela sincroniza com o Google; null = não é.
+ * (O nome da agenda — "trocou o profissional?" — é lido pela fila da
+ * confirmação na hora de decidir, 02/10.)
+ */
 async function agendaDaConta(
   accountId: string,
   calendarId: string,
-): Promise<{ google: boolean; nome: string | null } | null> {
+): Promise<{ google: boolean } | null> {
   const c = firstOrNull(
     await db
       .select({
         googleCalendarId: calendars.googleCalendarId,
         connectionId: calendars.connectionId,
-        // O nome diz se a troca de agenda trocou o PROFISSIONAL (confirmação, 01/10).
-        name: calendars.name,
       })
       .from(calendars)
       .where(and(eq(calendars.id, calendarId), eq(calendars.accountId, accountId)))
       .limit(1),
   )
-  return c ? { google: Boolean(c.googleCalendarId && c.connectionId), nome: c.name ?? null } : null
+  return c ? { google: Boolean(c.googleCalendarId && c.connectionId) } : null
 }
 
 async function contatoDaConta(accountId: string, contactId: string): Promise<boolean> {
@@ -247,6 +285,9 @@ export async function listEvents(range: {
       dealId: calendarEvents.dealId,
       dealTitle: deals.title,
       reminderBlock: calendarEvents.reminderBlock,
+      confirmationDueAt: calendarEvents.confirmationDueAt,
+      confirmationKnown: calendarEvents.confirmationKnown,
+      confirmationResult: calendarEvents.confirmationResult,
     })
     .from(calendarEvents)
     .innerJoin(calendars, eq(calendarEvents.calendarId, calendars.id))
@@ -263,10 +304,15 @@ export async function listEvents(range: {
     )
     .orderBy(asc(calendarEvents.startsAt))
   // A coluna é texto livre: valida antes de entregar para a tela, senão um
-  // valor antigo/desconhecido viraria um aviso sem rótulo.
+  // valor antigo/desconhecido viraria um aviso sem rótulo. As da confirmação
+  // (jsonb, 02/10) também; o vencimento vai em ISO — o texto cru do Postgres
+  // ("2026-10-02 14:05:00+00") nem todo navegador lê.
   return rows.map((r) => ({
     ...r,
     reminderBlock: isMeetingReminderBlock(r.reminderBlock) ? r.reminderBlock : null,
+    confirmationDueAt: r.confirmationDueAt ? new Date(r.confirmationDueAt).toISOString() : null,
+    confirmationKnown: isConfirmacaoConhecida(r.confirmationKnown) ? r.confirmationKnown : null,
+    confirmationResult: isDesfechoDaConfirmacao(r.confirmationResult) ? r.confirmationResult : null,
   })) as EventRow[]
 }
 
@@ -322,19 +368,19 @@ export async function createEvent(
         .returning({ id: calendarEvents.id }),
     )
     // ✅ Confirmação ao paciente (01/10): só com a caixa do modal marcada e
-    // paciente ligado. ANTES do Google (2ª revisão): o espelho leva 1-2 s, e a
-    // varredura de lembretes que caísse nesse intervalo mandava o lembrete
-    // junto com a confirmação — a reserva dos degraus cobertos tem que chegar
-    // primeiro. O compromisso já está gravado no CRM, que é a agenda oficial.
-    const confirmacao =
-      input.notifyPatient === true && input.contactId
-        ? await confirmarAoPaciente({
-            accountId: ctx.accountId,
-            eventId: created.id,
-            tipo: 'marcacao',
-            conversationId: input.conversationId ?? null,
-          })
-        : null
+    // paciente ligado. Desde 02/10 vai para a FILA (sai uns minutos depois,
+    // só a versão final). ANTES do Google: o espelho leva 1-2 s, e a varredura
+    // de lembretes pula o compromisso com confirmação pendente — o pendente tem
+    // que estar gravado antes dela passar. O compromisso já está gravado no
+    // CRM, que é a agenda oficial.
+    const confirmacao = await confirmacaoDoSalvar({
+      accountId: ctx.accountId,
+      eventId: created.id,
+      notifyPatient: input.notifyPatient === true && Boolean(input.contactId),
+      descartar: input.descartarConfirmacaoPendente === true,
+      antes: null,
+      conversationId: input.conversationId ?? null,
+    })
     // Espelha no Google se a agenda for do Google (best-effort).
     try {
       await pushEventToGoogle(ctx.accountId, created.id, 'create')
@@ -375,13 +421,11 @@ export async function updateEvent(
         .select({
           startsAt: calendarEvents.startsAt,
           calendarId: calendarEvents.calendarId,
-          // Para a confirmação: paciente ligado agora é consulta nova para ele.
+          // Para a confirmação: o que o paciente sabia antes deste salvar.
           contactId: calendarEvents.contactId,
           googleEventId: calendarEvents.googleEventId,
           calGoogleId: calendars.googleCalendarId,
           connectionId: calendars.connectionId,
-          // Para a confirmação: trocar de agenda só avisa se trocou o profissional.
-          calName: calendars.name,
         })
         .from(calendarEvents)
         .leftJoin(calendars, and(eq(calendars.id, calendarEvents.calendarId), eq(calendars.accountId, ctx.accountId)))
@@ -391,11 +435,11 @@ export async function updateEvent(
     if (!antes) return { error: 'Compromisso não encontrado.' }
 
     // Agenda vazia/null não é troca (a coluna é NOT NULL): fica onde está.
-    let novaAgenda: { calendarId: string; google: boolean; nome: string | null } | null = null
+    let novaAgenda: { calendarId: string; google: boolean } | null = null
     if (patch.calendarId) {
       const agenda = await agendaDaConta(ctx.accountId, patch.calendarId)
       if (!agenda) return { error: 'Agenda não encontrada.' }
-      novaAgenda = { calendarId: patch.calendarId, google: agenda.google, nome: agenda.nome }
+      novaAgenda = { calendarId: patch.calendarId, google: agenda.google }
     }
     if (patch.contactId && !(await contatoDaConta(ctx.accountId, patch.contactId))) {
       return { error: 'Contato não encontrado.' }
@@ -449,39 +493,23 @@ export async function updateEvent(
       .where(and(eq(calendarEvents.id, id), eq(calendarEvents.accountId, ctx.accountId)))
 
     // ✅ Confirmação ao paciente (01/10) — logo depois de gravar e ANTES do
-    // Google: a reserva dos lembretes cobertos (confirmacao-envio.ts) tem que
-    // chegar antes da varredura de lembretes, que roda de minuto em minuto.
-    // Só com a caixa marcada E se a edição
-    // mudou o que o paciente precisa saber — dia/hora, o profissional (agenda
-    // de OUTRA pessoa, no mesmo horário: tipo 'profissional') ou o próprio
-    // paciente. Corrigir o título não manda nada. Cancelado e horário passado
-    // são barrados lá dentro (decidirConfirmacao).
-    let confirmacao: ConfirmacaoNaTela = null
-    if (patch.notifyPatient === true) {
-      const agendaNova = plano.trocou ? novaAgenda : null
-      const tipo = tipoDaConfirmacaoNaEdicao({
-        antes: {
-          startsAt: antes.startsAt,
-          calendarId: antes.calendarId,
-          contactId: antes.contactId ?? null,
-          nomeAgenda: antes.calName ?? null,
-        },
-        depois: {
-          startsAt: patch.startsAt ?? antes.startsAt,
-          calendarId: agendaNova ? agendaNova.calendarId : antes.calendarId,
-          contactId: patch.contactId !== undefined ? patch.contactId || null : (antes.contactId ?? null),
-          nomeAgenda: agendaNova ? agendaNova.nome : (antes.calName ?? null),
-        },
-      })
-      if (tipo) {
-        confirmacao = await confirmarAoPaciente({
-          accountId: ctx.accountId,
-          eventId: id,
-          tipo,
-          conversationId: patch.conversationId ?? null,
-        })
-      }
-    }
+    // Google: a varredura de lembretes (de minuto em minuto) pula o
+    // compromisso com confirmação pendente, então o pendente chega primeiro.
+    // Desde 02/10 vai para a FILA: sai uns minutos depois do último salvar,
+    // só a versão final. A fila confere se a edição mudou o que o paciente
+    // precisa saber — dia/hora, o profissional (agenda de OUTRA pessoa, no
+    // mesmo horário: tipo 'profissional') ou o próprio paciente — comparando
+    // com o que ele já sabe. Corrigir o título não manda nada. Cancelado e
+    // horário passado são barrados lá (decidirConfirmacao). Caixa desmarcada
+    // na tela: tira da fila o que estiver pendente.
+    const confirmacao = await confirmacaoDoSalvar({
+      accountId: ctx.accountId,
+      eventId: id,
+      notifyPatient: patch.notifyPatient,
+      descartar: patch.descartarConfirmacaoPendente,
+      antes: { startsAt: antes.startsAt, calendarId: antes.calendarId, contactId: antes.contactId ?? null },
+      conversationId: patch.conversationId ?? null,
+    })
 
     if (plano.apagarNaAntiga && antes.googleEventId) {
       try {
@@ -525,6 +553,9 @@ export async function updateEvent(
 
 export async function deleteEvent(id: string): Promise<{ error: string | null }> {
   try {
+    // Confirmação na fila (02/10) vai junto com a linha: o worker só pega o
+    // que existe, e o envio que já estava em voo diz "não encontrado" (sem
+    // nota na conversa — foi a recepção que apagou).
     const ctx = await getCurrentAccount()
     // Apaga no Google ANTES de remover do banco (precisa ler o google_event_id).
     try {

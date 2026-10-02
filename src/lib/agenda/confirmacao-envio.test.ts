@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { PgDialect } from 'drizzle-orm/pg-core'
 import type { SQL } from 'drizzle-orm'
 
-// 01/10 — envio da confirmação ao paciente. Banco falso: cada SELECT consome a
+// 01/10 — envio da confirmação ao paciente. Desde 02/10 quem chama é a fila
+// (confirmacao-fila.ts, worker booking-confirmation), com o tipo já decidido
+// contra o que o paciente sabe; o envio em si é o mesmo. Banco falso: cada SELECT consome a
 // próxima resposta da fila, na ordem em que o envio pergunta (compromisso →
 // cópia no mesmo horário → conversa pedida → conversa mais recente → [sem
 // conversa: canais de WhatsApp → números da IA] → [oficial: janela de 24h]).
@@ -17,6 +19,8 @@ const h = vi.hoisted(() => {
     selects: 0,
     falhaNoBanco: false,
     settings: { bookingConfirmation: true, businessTimezone: 'America/Sao_Paulo' } as Record<string, unknown>,
+    /** O WHERE de cada SELECT, na ordem (02/10: a regra da cópia mora nele). */
+    wheres: [] as unknown[],
   }
   const chain = () => {
     state.selects++
@@ -37,7 +41,10 @@ const h = vi.hoisted(() => {
             const p = settle()
             return (p as unknown as Record<string, (...a: unknown[]) => unknown>)[prop as string].bind(p)
           }
-          return () => self
+          return (...args: unknown[]) => {
+            if (prop === 'where') state.wheres.push(args[0])
+            return self
+          }
         },
       },
     )
@@ -123,6 +130,7 @@ const carimbos = () => h.db.execute.mock.calls.map((c) => dialect.sqlToQuery(c[0
 
 beforeEach(() => {
   h.state.results = []
+  h.state.wheres = []
   h.state.selects = 0
   h.state.falhaNoBanco = false
   h.state.settings = { bookingConfirmation: true, businessTimezone: 'America/Sao_Paulo' }
@@ -213,6 +221,23 @@ describe('confirmação ao paciente — envio', () => {
         'este paciente já tem outro compromisso neste mesmo horário; para não mandar duas mensagens, esta não foi enviada — confira a conversa',
     })
     expect(h.send).not.toHaveBeenCalled()
+  })
+
+  it('cópia com a confirmação AINDA NA FILA não conta (02/10): as duas pendentes não se anulam', async () => {
+    // Com a fila, a recepção que lança a consulta em duas agendas deixa as
+    // duas pendentes. Se cada uma visse a outra, o paciente ficava sem
+    // nenhuma: a primeira que o worker pega manda; a outra, quando chegar a
+    // vez dela, já vê a primeira fora da fila e não manda.
+    h.state.results.push([EVENTO], [], WAHA)
+
+    expect(await enviar()).toBe('enviada')
+
+    const daCopia = dialect.sqlToQuery(h.state.wheres[1] as SQL).sql
+    expect(daCopia).toContain('"calendar_events"."confirmation_due_at" is null')
+    // E continua sendo a mesma consulta: mesmo contato, mesmo instante, confirmada, outra linha.
+    expect(daCopia).toContain('"calendar_events"."contact_id" = $')
+    expect(daCopia).toContain('"calendar_events"."starts_at" = $')
+    expect(daCopia).toContain('"calendar_events"."id" <> $')
   })
 
   it('a conversa de onde veio não é deste paciente: usa a conversa de WhatsApp mais recente dele', async () => {

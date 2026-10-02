@@ -1,10 +1,19 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  ATRASO_DA_CONFIRMACAO_MS,
+  baseDaConfirmacao,
   decidirConfirmacao,
+  decidirNaFila,
+  desfechoDoEnvio,
+  diaEHoraNoFuso,
   fraseDaConsulta,
+  horaDaFila,
   impedimentoDaConfirmacao,
+  isConfirmacaoConhecida,
+  isDesfechoDaConfirmacao,
   nomeParaSaudacao,
+  notaDaConfirmacaoQueNaoSaiu,
   profissionalDaAgenda,
   quandoDaConsulta,
   textoDaConfirmacao,
@@ -29,6 +38,19 @@ describe('quando a edição pede confirmação', () => {
   it('mudou dia/hora: remarcação', () => {
     expect(
       tipoDaConfirmacaoNaEdicao({ antes, depois: { ...antes, startsAt: '2026-10-09T17:00:00.000Z' } }),
+    ).toBe('remarcacao')
+  })
+
+  it('só os segundos mudaram (evento do Google regravado pelo modal): nada — a mensagem só diz hora e minuto (02/10)', () => {
+    expect(
+      tipoDaConfirmacaoNaEdicao({
+        antes: { ...antes, startsAt: '2026-10-08 17:00:42+00' },
+        depois: { ...antes, startsAt: QUI_14H },
+      }),
+    ).toBeNull()
+    // Um minuto de diferença já é outro horário.
+    expect(
+      tipoDaConfirmacaoNaEdicao({ antes, depois: { ...antes, startsAt: '2026-10-08T17:01:00.000Z' } }),
     ).toBe('remarcacao')
   })
 
@@ -427,5 +449,178 @@ describe('o texto que o paciente recebe', () => {
   it('a prévia do modal é o miolo da mesma mensagem', () => {
     const frase = fraseDaConsulta({ ...base, tipo: 'marcacao' })
     expect(textoDaConfirmacao({ ...base, tipo: 'marcacao' })).toContain(frase)
+  })
+})
+
+// ---------- A fila (02/10): espera e manda só a versão final ----------
+
+describe('a fila espera alguns minutos depois do último salvar', () => {
+  it('3 minutos', () => {
+    expect(ATRASO_DA_CONFIRMACAO_MS).toBe(180_000)
+  })
+})
+
+describe('contra o que a próxima confirmação é comparada (modal e fila usam a mesma regra)', () => {
+  const atual = { startsAt: QUI_14H, calendarId: 'cal-a', contactId: 'c-1' }
+  const conhecido = { startsAt: '2026-10-07T17:00:00.000Z', calendarId: 'cal-b', contactId: 'c-1' }
+
+  it('o que o paciente já sabe manda, com ou sem pendente', () => {
+    expect(baseDaConfirmacao({ conhecido, pendente: false, atual })).toBe(conhecido)
+    expect(baseDaConfirmacao({ conhecido, pendente: true, atual })).toBe(conhecido)
+  })
+
+  it('marcação ainda na fila, sem base: nada (consulta nova para ele)', () => {
+    expect(baseDaConfirmacao({ conhecido: null, pendente: true, atual })).toBeNull()
+  })
+
+  it('compromisso antigo (de antes da fila) ou criado sem a caixa: como está gravado', () => {
+    expect(baseDaConfirmacao({ conhecido: null, pendente: false, atual })).toBe(atual)
+  })
+
+  it('compromisso novo: nada', () => {
+    expect(baseDaConfirmacao({ conhecido: null, pendente: false, atual: null })).toBeNull()
+  })
+})
+
+describe('na hora de sair: o que mandar (estado FINAL × o que o paciente sabe)', () => {
+  const final = {
+    status: 'confirmed',
+    startsAt: QUI_14H,
+    calendarId: 'cal-b',
+    contactId: 'c-1',
+    nomeAgenda: 'Dr. Beltrano Teste',
+  }
+
+  it('sem base: marcação — com o profissional da agenda FINAL, não o da primeira tentativa', () => {
+    expect(decidirNaFila({ final, conhecido: null })).toEqual({ acao: 'enviar', tipo: 'marcacao' })
+  })
+
+  it('criou às 18h e corrigiu para 18h30 antes de sair: UMA marcação (o salvar do meio não manda nada)', () => {
+    // Nada saiu ainda (conhecido null): só a versão final vai, como marcação.
+    expect(decidirNaFila({ final: { ...final, startsAt: '2026-10-08T21:30:00.000Z' }, conhecido: null })).toEqual({
+      acao: 'enviar',
+      tipo: 'marcacao',
+    })
+  })
+
+  it('o paciente já sabia de outro horário: remarcação', () => {
+    expect(
+      decidirNaFila({
+        final,
+        conhecido: { startsAt: '2026-10-07T17:00:00.000Z', calendarId: 'cal-b', contactId: 'c-1', nomeAgenda: 'Dr. Beltrano Teste' },
+      }),
+    ).toEqual({ acao: 'enviar', tipo: 'remarcacao' })
+  })
+
+  it('confirmação saiu "com a Dra." errada e a recepção trocou a agenda: "agora é com"', () => {
+    expect(
+      decidirNaFila({
+        final,
+        conhecido: { startsAt: QUI_14H, calendarId: 'cal-a', contactId: 'c-1', nomeAgenda: 'Dra. Fulana Exemplo' },
+      }),
+    ).toEqual({ acao: 'enviar', tipo: 'profissional' })
+  })
+
+  it('moveu e voltou (o paciente já sabe exatamente isto): não manda', () => {
+    expect(
+      decidirNaFila({ final, conhecido: { startsAt: '2026-10-08 17:00:00+00', calendarId: 'cal-b', contactId: 'c-1' } }),
+    ).toEqual({ acao: 'semMudanca' })
+  })
+
+  it('cancelado ou sem paciente antes de sair: descarta (foi a própria recepção que mudou)', () => {
+    expect(decidirNaFila({ final: { ...final, status: 'cancelled' }, conhecido: null })).toEqual({
+      acao: 'descartar',
+      motivo: 'o compromisso foi cancelado',
+    })
+    expect(decidirNaFila({ final: { ...final, contactId: null }, conhecido: null })).toEqual({
+      acao: 'descartar',
+      motivo: 'o compromisso ficou sem paciente',
+    })
+  })
+
+  it('trocou o paciente: marcação para o novo', () => {
+    expect(
+      decidirNaFila({ final, conhecido: { startsAt: QUI_14H, calendarId: 'cal-b', contactId: 'c-outro' } }),
+    ).toEqual({ acao: 'enviar', tipo: 'marcacao' })
+  })
+})
+
+describe('o desfecho, gravado no compromisso e anotado na conversa', () => {
+  const AT = new Date('2026-10-02T13:05:00.000Z')
+
+  it('o que o envio devolveu vira a coluna confirmation_result', () => {
+    expect(desfechoDoEnvio('enviada', AT)).toEqual({ status: 'enviada', at: AT.toISOString() })
+    expect(desfechoDoEnvio({ naoEnviada: 'nenhum WhatsApp conectado nesta conta' }, AT)).toEqual({
+      status: 'naoEnviada',
+      motivo: 'nenhum WhatsApp conectado nesta conta',
+      at: AT.toISOString(),
+    })
+    expect(desfechoDoEnvio({ incerta: 'não deu para confirmar' }, AT)).toEqual({
+      status: 'incerta',
+      motivo: 'não deu para confirmar',
+      at: AT.toISOString(),
+    })
+  })
+
+  it('não enviada: nota com o quando e o motivo', () => {
+    expect(
+      notaDaConfirmacaoQueNaoSaiu({
+        desfecho: { status: 'naoEnviada', motivo: 'nenhum WhatsApp conectado nesta conta', at: AT.toISOString() },
+        startsAt: QUI_14H,
+        allDay: false,
+        tz: SP,
+      }),
+    ).toBe('⚠️ Confirmação da consulta de quinta-feira, 08/10/2026, às 14h não enviada: nenhum WhatsApp conectado nesta conta.')
+  })
+
+  it('incerta: NÃO diz "não enviada" — pode ter chegado', () => {
+    const nota = notaDaConfirmacaoQueNaoSaiu({
+      desfecho: { status: 'incerta', motivo: 'qualquer', at: AT.toISOString() },
+      startsAt: QUI_14H,
+      allDay: false,
+      tz: SP,
+    })
+    expect(nota).toBe(
+      '⚠️ Confirmação da consulta de quinta-feira, 08/10/2026, às 14h: não deu para confirmar se a mensagem saiu; confira a conversa antes de reenviar.',
+    )
+    expect(nota).not.toMatch(/não enviada/)
+  })
+
+  it('enviada, sem mudança, descartada: nada a anotar', () => {
+    for (const status of ['enviada', 'semMudanca', 'descartada'] as const) {
+      expect(
+        notaDaConfirmacaoQueNaoSaiu({ desfecho: { status, at: AT.toISOString() }, startsAt: QUI_14H, allDay: false, tz: SP }),
+      ).toBeNull()
+    }
+  })
+
+  it('as colunas jsonb só chegam à tela validadas', () => {
+    expect(isConfirmacaoConhecida({ startsAt: '2026-10-08T17:00:00+00:00', calendarId: 'cal-a', contactId: null })).toBe(true)
+    expect(isConfirmacaoConhecida({ startsAt: 'ontem', calendarId: 'cal-a', contactId: 'c-1' })).toBe(false)
+    expect(isConfirmacaoConhecida({ startsAt: QUI_14H, contactId: 'c-1' })).toBe(false)
+    expect(isConfirmacaoConhecida(null)).toBe(false)
+    expect(isDesfechoDaConfirmacao({ status: 'naoEnviada', motivo: 'x', at: AT.toISOString() })).toBe(true)
+    expect(isDesfechoDaConfirmacao({ status: 'enviada', at: AT.toISOString() })).toBe(true)
+    expect(isDesfechoDaConfirmacao({ status: 'talvez', at: AT.toISOString() })).toBe(false)
+    expect(isDesfechoDaConfirmacao({ status: 'enviada' })).toBe(false)
+    expect(isDesfechoDaConfirmacao('enviada')).toBe(false)
+  })
+})
+
+describe('a hora que a tela mostra (fuso da conta)', () => {
+  it('"sai às" arredonda para cima no minuto: o worker passa a cada 30 s', () => {
+    // 13:05:40Z = 10:05:40 em São Paulo → 10:06.
+    expect(horaDaFila('2026-10-02T13:05:40.000Z', SP)).toBe('10:06')
+    // Minuto cheio fica.
+    expect(horaDaFila('2026-10-02T13:05:00.000Z', SP)).toBe('10:05')
+    // Fuso da conta manda.
+    expect(horaDaFila('2026-10-02T13:05:00.000Z', 'America/Manaus')).toBe('09:05')
+    expect(horaDaFila('lixo', SP)).toBe('')
+  })
+
+  it('"enviada em": dia/mês e hora', () => {
+    expect(diaEHoraNoFuso('2026-10-02T13:05:00.000Z', SP)).toBe('02/10 às 10:05')
+    // Meia-noite é 00, nunca 24.
+    expect(diaEHoraNoFuso('2026-10-02T03:00:00.000Z', SP)).toBe('02/10 às 00:00')
   })
 })

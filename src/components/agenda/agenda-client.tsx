@@ -36,9 +36,14 @@ import {
   type GoogleStatus,
 } from '@/app/(dashboard)/agenda/actions'
 import {
+  baseDaConfirmacao,
+  diaEHoraNoFuso,
   fraseDaConsulta,
+  horaDaFila,
   impedimentoDaConfirmacao,
   tipoDaConfirmacaoNaEdicao,
+  FUSO_PADRAO,
+  type DesfechoDaConfirmacao,
   type TipoConfirmacao,
 } from '@/lib/agenda/confirmacao-agendamento'
 import { getPickerContact } from '@/components/contacts/contact-picker-actions'
@@ -68,6 +73,11 @@ type View = 'month' | 'week' | 'day'
 type Draft = {
   id: string | null
   title: string
+  /**
+   * '' = ainda não escolhida (02/10). Compromisso NOVO não nasce mais numa
+   * agenda: abria na primeira do Google (a da dona da clínica), a recepção
+   * salvava sem olhar e a confirmação saía "com a Dra." errada.
+   */
   calendarId: string
   allDay: boolean
   start: string // datetime-local ou date
@@ -87,15 +97,23 @@ type Draft = {
   /**
    * Caixa "Enviar confirmação ao paciente pelo WhatsApp" (01/10, pedido da
    * Dra. Joyce). Só aparece quando a conta ligou a opção e o salvamento muda
-   * algo que o paciente precisa saber. null = ninguém mexeu: vale o padrão do
-   * tipo (marcada; DESMARCADA quando só trocou o profissional — ver
+   * algo que o paciente precisa saber. null = ninguém mexeu: vale o padrão,
+   * marcada — inclusive quando só trocou o profissional (02/10, ver
    * `caixaMarcada`).
    */
   notifyPatient: boolean | null
   /** Conversa de onde a recepção clicou "Agendar": a confirmação sai por ela. */
   conversationId: string | null
-  /** Como o compromisso estava ao abrir (edição). null = compromisso novo. */
+  /**
+   * Contra o que a confirmação deste salvar é comparada (baseDaConfirmacao):
+   * o que o paciente já sabe; ou, sem isso, o compromisso como abriu. null =
+   * consulta nova para o paciente (compromisso novo, ou marcação ainda na fila).
+   */
   original: { startsAt: string; calendarId: string; contactId: string | null } | null
+  /** Confirmação na fila (02/10): quando sai (ISO). null = nada pendente. */
+  confirmacaoNaFila: string | null
+  /** Último desfecho da fila, para dizer no compromisso o que não saiu (02/10). */
+  ultimaConfirmacao: DesfechoDaConfirmacao | null
   /** Status do compromisso: cancelado não recebe confirmação (a caixa não promete). */
   status: 'confirmed' | 'cancelled'
   /**
@@ -117,13 +135,23 @@ function draftIso(d: Pick<Draft, 'allDay' | 'start' | 'end'>): { startsAt: strin
 }
 
 /**
- * Salvar este rascunho pede confirmação ao paciente? Mesma regra da action
- * (tipoDaConfirmacaoNaEdicao): novo com paciente → marcação; edição só se
- * mudou dia/hora, o profissional (agenda de outra pessoa) ou o paciente.
- * Horário que já passou não oferece.
+ * Falta escolher a agenda (02/10)? Só com mais de uma: com uma só, o
+ * compromisso nasce nela; sem nenhuma carregada, o servidor usa a padrão.
+ */
+function faltaEscolherAgenda(d: Pick<Draft, 'calendarId'>, calendars: CalendarRow[]): boolean {
+  return !d.calendarId && calendars.length > 1
+}
+
+/**
+ * Salvar este rascunho pede confirmação ao paciente? Mesma regra da fila
+ * (tipoDaConfirmacaoNaEdicao contra baseDaConfirmacao): sem base → marcação;
+ * com base, só se mudou dia/hora, o profissional (agenda de outra pessoa) ou
+ * o paciente. Horário que já passou não oferece. Sem agenda escolhida também
+ * não (02/10): a prévia diria "com" quem ainda não se sabe.
  */
 function confirmacaoDoRascunho(d: Draft, calendars: CalendarRow[]): TipoConfirmacao | null {
   if (!d.contactId) return null
+  if (faltaEscolherAgenda(d, calendars)) return null
   const iso = draftIso(d)
   if (!iso) return null
   if (new Date(d.allDay ? iso.endsAt : iso.startsAt).getTime() <= Date.now()) return null
@@ -141,12 +169,15 @@ function confirmacaoDoRascunho(d: Draft, calendars: CalendarRow[]): TipoConfirma
 }
 
 /**
- * A caixa está marcada? Quem mexeu manda; senão o padrão do tipo: marcada,
- * menos quando só trocou o profissional (mesmo dia e hora) — aí o aviso é
- * opcional e nasce desmarcado (01/10, revisão).
+ * A caixa está marcada? Quem mexeu manda; senão, marcada.
+ *
+ * 02/10: a troca de profissional (mesmo dia e hora) nascia DESMARCADA. Na
+ * clínica, a confirmação tinha saído "com a Dra." errada; a recepção trocou a
+ * agenda, salvou sem reparar na caixa e o paciente ficou com a informação
+ * errada. Avisar quem atende agora é o padrão, como nos outros tipos.
  */
-function caixaMarcada(d: Draft, tipo: TipoConfirmacao | null): boolean {
-  return d.notifyPatient ?? tipo !== 'profissional'
+function caixaMarcada(d: Draft): boolean {
+  return d.notifyPatient ?? true
 }
 
 /**
@@ -160,10 +191,22 @@ function erroLegivel(msg: string, padrao: string): string {
 }
 
 /** Diz o que aconteceu com a confirmação. Não enviada nunca passa calada. */
-function avisarConfirmacao(c: ConfirmacaoNaTela | undefined): void {
+function avisarConfirmacao(c: ConfirmacaoNaTela | undefined, tz: string): void {
   if (!c) return
   if (c === 'enviada') {
     toast.success('Confirmação enviada ao paciente.')
+    return
+  }
+  // 02/10: o salvar só põe na fila. A hora é a do fuso da conta.
+  if ('agendada' in c) {
+    toast.info(
+      `Confirmação na fila: sai às ${horaDaFila(c.agendada, tz)}, já com a versão final — se mudar algo até lá, vai só a última.`,
+      { duration: 8_000 },
+    )
+    return
+  }
+  if ('descartada' in c) {
+    toast.info('A confirmação que estava na fila foi cancelada: nada vai ao paciente.')
     return
   }
   // Resultado incerto (o WhatsApp demorou): NÃO diz "não enviada" — pode ter
@@ -315,8 +358,9 @@ export function AgendaClient() {
   }, [])
 
   // Vindo da conversa ("Marcar compromisso"): /agenda?contato=<id> abre o modal
-  // já com a pessoa escolhida. Espera as agendas carregarem, senão o evento
-  // nasceria na agenda local e a Dra. não veria no Google.
+  // já com a pessoa escolhida. Espera as agendas carregarem: o seletor precisa
+  // das opções, e a conta com UMA agenda só já abre com ela escolhida. Com
+  // várias, a recepção escolhe o profissional (02/10 — ver agendaDoNovo).
   // &conversa=<id> (01/10): a confirmação ao paciente sai por essa conversa.
   const veioDaConversa = useRef(false)
   useEffect(() => {
@@ -327,7 +371,8 @@ export function AgendaClient() {
     veioDaConversa.current = true
     window.history.replaceState(null, '', '/agenda')
     openNew(undefined, undefined, contato, null, params.get('conversa'))
-    // openNew só depende de `calendars` (via defaultCalendarId).
+    // openNew depende de `calendars` e do filtro (via agendaDoNovo); aqui só
+    // importa a primeira carga das agendas.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [calendars])
 
@@ -403,10 +448,19 @@ export function AgendaClient() {
     [events, calendarFilter],
   )
 
-  // Novo evento cai numa agenda do Google por padrão (pra sincronizar); só usa a
-  // local se não houver nenhuma do Google conectada.
-  const defaultCalendarId = () =>
-    (calendars.find((c) => c.source === 'google') ?? calendars[0])?.id ?? ''
+  /**
+   * Em que agenda o compromisso NOVO abre (02/10). Só o que a pessoa escolheu:
+   * a agenda pedida (horário clicado com uma agenda no filtro), o filtro
+   * ativo, ou a única agenda da conta. Senão, nenhuma ('') — o modal pede.
+   *
+   * Antes abria na primeira agenda do Google, que numa clínica é a da dona. A
+   * recepção salvou sem reparar, a confirmação saiu "com a Dra." dona e a
+   * consulta era com outra profissional.
+   */
+  const agendaDoNovo = (pedida: string | null): string => {
+    const valida = (id: string | null) => (id && calendars.some((c) => c.id === id) ? id : null)
+    return valida(pedida) ?? valida(calendarFilter) ?? (calendars.length === 1 ? calendars[0].id : '')
+  }
 
   const openNew = (
     day?: Date,
@@ -425,8 +479,7 @@ export function AgendaClient() {
     setDraft({
       id: null,
       title: '',
-      calendarId:
-        calendarId && calendars.some((c) => c.id === calendarId) ? calendarId : defaultCalendarId(),
+      calendarId: agendaDoNovo(calendarId),
       allDay: false,
       start: toLocalInput(start),
       end: toLocalInput(end),
@@ -437,6 +490,8 @@ export function AgendaClient() {
       notifyPatient: null,
       conversationId,
       original: null,
+      confirmacaoNaFila: null,
+      ultimaConfirmacao: null,
       status: 'confirmed',
       // Vindo da conversa, só o id: as flags chegam pelo efeito abaixo.
       contatoFlags: null,
@@ -459,20 +514,29 @@ export function AgendaClient() {
       description: ev.description ?? '',
       contactId: ev.contactId ?? '',
       reminderBlock: ev.reminderBlock,
-      // Padrão do tipo: se a edição mudar dia/hora, a caixa já aparece ligada.
+      // Padrão: se a edição mudar dia/hora, a caixa já aparece ligada.
       notifyPatient: null,
       conversationId: null,
       status: ev.status,
       contatoFlags: null,
-      // O início "de antes" passa pelo MESMO caminho do salvar (campo da tela →
-      // ISO): abrir e salvar sem mexer dá o mesmo valor, mesmo com segundos
-      // vindos do Google ou dia inteiro gravado no fuso da conta. Comparar com
-      // o valor cru do banco ofereceria "remarcação" sem ninguém ter remarcado.
-      original: {
-        startsAt: draftIso({ allDay: ev.allDay, start, end })?.startsAt ?? ev.startsAt,
-        calendarId: ev.calendarId,
-        contactId: ev.contactId,
-      },
+      // Contra o que comparar (02/10): a MESMA base que a fila usa — o que o
+      // paciente já sabe; marcação ainda na fila = nada (consulta nova para
+      // ele); senão o compromisso como abriu. O início "de antes" passa pelo
+      // MESMO caminho do salvar (campo da tela → ISO): abrir e salvar sem
+      // mexer dá o mesmo valor, mesmo com segundos vindos do Google ou dia
+      // inteiro gravado no fuso da conta. Comparar com o valor cru do banco
+      // ofereceria "remarcação" sem ninguém ter remarcado.
+      original: baseDaConfirmacao({
+        conhecido: ev.confirmationKnown,
+        pendente: Boolean(ev.confirmationDueAt),
+        atual: {
+          startsAt: draftIso({ allDay: ev.allDay, start, end })?.startsAt ?? ev.startsAt,
+          calendarId: ev.calendarId,
+          contactId: ev.contactId,
+        },
+      }),
+      confirmacaoNaFila: ev.confirmationDueAt,
+      ultimaConfirmacao: ev.confirmationResult,
     })
   }
 
@@ -492,18 +556,21 @@ export function AgendaClient() {
     if (!draft || !draft.title.trim()) return
     // O botão já fica desligado e o erro aparece no formulário; isto é a trava.
     if (scheduleError(draft.start, draft.end, draft.allDay)) return
+    if (faltaEscolherAgenda(draft, calendars)) return
     const iso = draftIso(draft)
     if (!iso) return
     setSaving(true)
     try {
       const { startsAt, endsAt } = iso
-      // Só manda pedir a confirmação quando a caixa está NA TELA e marcada.
+      // Só pede a confirmação quando a caixa está NA TELA e marcada; e só tira
+      // da fila quando ela estava NA TELA e foi desmarcada (02/10). Sem a
+      // caixa na tela (só mudou o título), a fila fica como está.
       const tipo = confirmacaoDoRascunho(draft, calendars)
-      const confirmar =
+      const caixaNaTela =
         prefs?.confirmacaoAoAgendar === true &&
         tipo !== null &&
-        impedimentoDaConfirmacao({ status: draft.status, contato: draft.contatoFlags }) === null &&
-        caixaMarcada(draft, tipo)
+        impedimentoDaConfirmacao({ status: draft.status, contato: draft.contatoFlags }) === null
+      const confirmar = caixaNaTela && caixaMarcada(draft)
       const payload = {
         title: draft.title,
         calendarId: draft.calendarId || null,
@@ -514,6 +581,7 @@ export function AgendaClient() {
         description: draft.description,
         contactId: draft.contactId || null,
         notifyPatient: confirmar,
+        descartarConfirmacaoPendente: caixaNaTela && !confirmar,
         conversationId: draft.conversationId,
       }
       // Dia do evento (pra pular a visão pra lá e evitar confusão de mês/data).
@@ -529,11 +597,11 @@ export function AgendaClient() {
       }
       setDraft(null)
       // Ditos ANTES de recarregar a grade (01/10): o compromisso já está salvo
-      // e a confirmação já saiu (ou não). Uma recarga que falhasse caía no
-      // catch abaixo e dizia "Não foi possível salvar" — a recepção salvaria
-      // de novo, e o paciente receberia duas vezes.
+      // e a confirmação já foi para a fila (ou não). Uma recarga que falhasse
+      // caía no catch abaixo e dizia "Não foi possível salvar" — a recepção
+      // salvaria de novo sem precisar.
       toast.success(draft.id ? 'Evento atualizado.' : 'Evento criado.')
-      avisarConfirmacao(r.confirmacao)
+      avisarConfirmacao(r.confirmacao, prefs?.timezone || FUSO_PADRAO)
       if (viewRef.current !== 'month') setDayDate(eventDate)
       const sameMonth =
         eventDate.getMonth() === anchor.getMonth() &&
@@ -1181,9 +1249,13 @@ function EventModal({
     setDraft({ ...draft, start: next.start, end: next.end })
   }
   const timeError = scheduleError(draft.start, draft.end, draft.allDay)
-  // A caixa da confirmação: só com a opção da conta ligada e um salvamento que
-  // muda algo para o paciente. A prévia mostra o miolo da mensagem, no fuso
-  // da conta, com o profissional da agenda escolhida.
+  // Compromisso novo sem agenda escolhida, com mais de uma na conta (02/10):
+  // o Salvar fica desligado e a linha abaixo do seletor diz por quê.
+  const faltaAgenda = faltaEscolherAgenda(draft, calendars)
+  const tz = prefs?.timezone || FUSO_PADRAO
+  // A caixa da confirmação: só com a opção da conta ligada, a agenda escolhida
+  // e um salvamento que muda algo para o paciente. A prévia mostra o miolo da
+  // mensagem, no fuso da conta, com o profissional da agenda escolhida.
   const tipoConfirmacao =
     prefs?.confirmacaoAoAgendar && !timeError ? confirmacaoDoRascunho(draft, calendars) : null
   // Cancelado, grupo, "não perturbe": no lugar da caixa, o porquê (01/10,
@@ -1191,7 +1263,7 @@ function EventModal({
   const semConfirmacao = tipoConfirmacao
     ? impedimentoDaConfirmacao({ status: draft.status, contato: draft.contatoFlags })
     : null
-  const marcada = caixaMarcada(draft, tipoConfirmacao)
+  const marcada = caixaMarcada(draft)
   const isoRascunho = tipoConfirmacao ? draftIso(draft) : null
   const previaConfirmacao =
     tipoConfirmacao && !semConfirmacao && isoRascunho && prefs
@@ -1207,6 +1279,22 @@ function EventModal({
     tipoConfirmacao === 'profissional'
       ? 'Avisar o paciente da troca de profissional pelo WhatsApp'
       : 'Enviar confirmação ao paciente pelo WhatsApp'
+  // O que a caixa promete (02/10): a confirmação não sai mais NO salvar — vai
+  // para a fila e sai uns minutos depois do último salvar, só a versão final.
+  const naFila = draft.confirmacaoNaFila
+  const legendaCaixa = marcada
+    ? naFila
+      ? 'Já está na fila; salvando, sai 3 min depois, só a versão final'
+      : 'Sai 3 min depois de salvar (se mudar algo até lá, vai só a versão final)'
+    : naFila
+      ? 'Desmarcada: a confirmação que estava na fila é cancelada ao salvar'
+      : 'Não vai nada ao salvar'
+  // A linha "na fila" só quando a caixa não está na tela (ela já diz isso).
+  const linhaDaFila = naFila && !previaConfirmacao ? horaDaFila(naFila, tz) : null
+  // O último desfecho, no compromisso (02/10): quem marcou já saiu do modal
+  // quando o worker tenta, então "não enviada" fica aqui e na conversa.
+  const ultima = draft.ultimaConfirmacao
+  const ultimaNaoSaiu = ultima && (ultima.status === 'naoEnviada' || ultima.status === 'incerta') ? ultima : null
 
   return (
     <div
@@ -1238,7 +1326,8 @@ function EventModal({
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
               <div className="min-w-0 text-xs">
                 {/* 01/10: "o lembrete", não "a confirmação" — confirmação é a
-                    mensagem da caixa no fim do formulário, que sai ao salvar. */}
+                    mensagem da caixa no fim do formulário, que o salvar põe na
+                    fila (02/10). */}
                 <p className="font-medium text-foreground">
                   Este contato não recebeu o lembrete —{' '}
                   {rotuloDoBloqueio(draft.reminderBlock).curto}.
@@ -1290,7 +1379,8 @@ function EventModal({
             {/* Campo que, em branco, desliga o lembrete em silêncio: diz isso aqui,
                 no lugar, e não num toast que some. 01/10: dizia "recebe a
                 confirmação", mas salvar não mandava nada — só os lembretes do
-                agente, perto da consulta. A confirmação NA HORA é a caixa abaixo. */}
+                agente, perto da consulta. A confirmação ao marcar é a caixa
+                abaixo (sai uns minutos depois do salvar — 02/10). */}
             <p className="mt-1 text-[11px] text-muted-foreground">
               {draft.contactId ? (
                 <>
@@ -1312,8 +1402,19 @@ function EventModal({
             <select
               value={draft.calendarId}
               onChange={(e) => setDraft({ ...draft, calendarId: e.target.value })}
-              className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
+              aria-invalid={faltaAgenda ? true : undefined}
+              className={cn(
+                'h-9 w-full rounded-md border border-border bg-background px-2 text-sm',
+                faltaAgenda && 'border-amber-500/60',
+              )}
             >
+              {/* Compromisso novo nasce sem agenda (02/10): a escolha é da
+                  recepção, não da ordem das agendas. */}
+              {!draft.calendarId && (
+                <option value="" disabled>
+                  Escolha a agenda…
+                </option>
+              )}
               {calendars.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
@@ -1321,9 +1422,17 @@ function EventModal({
                 </option>
               ))}
             </select>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Agendas do Google sincronizam nos dois sentidos. A agenda local fica só no CRM.
-            </p>
+            {/* No lugar, e não num toast: sem isso o Salvar só fica cinza. */}
+            {faltaAgenda ? (
+              <p role="alert" className="mt-1 flex items-start gap-1 text-xs text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                Escolha a agenda do profissional que vai atender — é ela que diz ao paciente com quem é a consulta.
+              </p>
+            ) : (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Agendas do Google sincronizam nos dois sentidos. A agenda local fica só no CRM.
+              </p>
+            )}
           </div>
 
           <label className="flex items-center gap-2 text-sm">
@@ -1390,8 +1499,39 @@ function EventModal({
             />
           </div>
 
+          {/* O último desfecho da confirmação (02/10), no estilo do aviso do
+              lembrete: o que não saiu fica NO compromisso, não num toast. */}
+          {ultimaNaoSaiu && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <div className="min-w-0 text-xs">
+                <p className="font-medium text-foreground">
+                  {ultimaNaoSaiu.status === 'incerta'
+                    ? `Confirmação ao paciente (${diaEHoraNoFuso(ultimaNaoSaiu.at, tz)}): ${ultimaNaoSaiu.motivo ?? 'não deu para confirmar se saiu'}.`
+                    : `A confirmação ao paciente não foi enviada (${diaEHoraNoFuso(ultimaNaoSaiu.at, tz)}) — ${ultimaNaoSaiu.motivo ?? 'o envio falhou'}.`}
+                </p>
+                <p className="mt-0.5 text-muted-foreground">
+                  {ultimaNaoSaiu.status === 'incerta'
+                    ? 'Confira a conversa antes de mandar de novo.'
+                    : 'Se precisar, avise o paciente pela conversa — há uma nota lá também.'}
+                </p>
+              </div>
+            </div>
+          )}
+          {ultima?.status === 'enviada' && !naFila && (
+            <p className="text-[11px] text-muted-foreground">
+              Confirmação enviada ao paciente em {diaEHoraNoFuso(ultima.at, tz)}.
+            </p>
+          )}
+          {linhaDaFila && (
+            <p className="rounded-lg border border-border px-3 py-2.5 text-[11px] text-muted-foreground">
+              ⏳ Confirmação na fila: sai às {linhaDaFila} com a versão final.
+            </p>
+          )}
+
           {/* ✅ 01/10, Dra. Joyce: "no momento que eu fiz o agendamento, ele
-              recebe". Junto do Salvar porque é o que acontece AO salvar.
+              recebe". Junto do Salvar porque é o salvar que a põe na fila
+              (02/10: sai 3 min depois do último salvar, só a versão final).
               Marcada por padrão; a prévia diz exatamente o que vai. */}
           {previaConfirmacao && (
             <label className="flex items-start gap-3 rounded-lg border border-border px-3 py-2.5">
@@ -1404,7 +1544,7 @@ function EventModal({
               <span className="min-w-0">
                 <span className="block text-sm text-foreground">{rotuloCaixa}</span>
                 <span className="block text-[11px] text-muted-foreground">
-                  {marcada ? 'Sai ao salvar' : 'Não vai nada ao salvar'}
+                  {legendaCaixa}
                   {marcada && (
                     <>
                       , na conversa do paciente: “{previaConfirmacao}”
@@ -1435,7 +1575,7 @@ function EventModal({
             <Button variant="outline" onClick={onClose} disabled={saving}>
               Cancelar
             </Button>
-            <Button onClick={onSave} disabled={saving || !draft.title.trim() || !!timeError}>
+            <Button onClick={onSave} disabled={saving || !draft.title.trim() || !!timeError || faltaAgenda}>
               {saving ? 'Salvando…' : 'Salvar'}
             </Button>
           </div>

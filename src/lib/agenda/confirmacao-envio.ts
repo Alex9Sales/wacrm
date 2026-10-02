@@ -1,15 +1,22 @@
 // ============================================================
 // ✅ Confirmação na hora de agendar — o envio.
 //
-// Chamado SÓ pelas ações da Agenda (createEvent/updateEvent), quando uma
-// pessoa salvou o compromisso no CRM com a caixa "Enviar confirmação ao
-// paciente" marcada. Nunca pelo import do Google (o sync grava direto no
-// banco) nem pelo [[AGENDAR]] da IA (ela já confirma na própria conversa).
-// A decisão e o texto moram em `confirmacao-agendamento.ts`.
+// Chamado SÓ pela fila da confirmação (`confirmacao-fila.ts`, worker
+// booking-confirmation), que só existe quando uma pessoa salvou o compromisso
+// no CRM com a caixa "Enviar confirmação ao paciente" marcada. Nunca pelo
+// import do Google (o sync grava direto no banco) nem pelo [[AGENDAR]] da IA
+// (ela já confirma na própria conversa). A decisão e o texto moram em
+// `confirmacao-agendamento.ts`.
+//
+// 02/10: até aqui as actions chamavam isto NA HORA de cada salvar, e um
+// compromisso corrigido duas vezes mandava três mensagens ao paciente. Agora
+// o worker chama uns minutos depois do último salvar, com o tipo já calculado
+// contra o que o paciente sabe. Tudo aqui é re-checado no estado FINAL.
 //
 // Best-effort e nunca lança: o compromisso já foi gravado quando isto roda, e
 // falhar a confirmação não pode desfazer nem "falhar" o salvamento. Mas também
-// não engole: devolve o motivo para o modal mostrar (01/10/2026).
+// não engole: devolve o motivo (01/10/2026), que a fila grava no compromisso e
+// anota na conversa.
 // ============================================================
 
 import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm'
@@ -75,8 +82,11 @@ function resultadoDoErro(err: unknown): ResultadoConfirmacao {
   return naoEnviada('o envio falhou')
 }
 
-/** A conversa de WhatsApp por onde a confirmação sai. null = não há. */
-async function conversaDoPaciente(
+/**
+ * A conversa de WhatsApp por onde a confirmação sai. null = não há.
+ * Exportada para a fila anotar ali o aviso de "não enviada" (02/10).
+ */
+export async function conversaDoPaciente(
   accountId: string,
   contactId: string,
   pedida: string | null,
@@ -350,6 +360,12 @@ export async function enviarConfirmacaoDoAgendamento(args: {
     // deixariam o paciente sem saber com quem é. A segunda não sai, e o modal
     // diz por quê — sem afirmar que a outra mandou, porque não sabemos (ela
     // pode ter sido salva com a caixa desmarcada, ou vindo do Google).
+    //
+    // Cópia com a confirmação AINDA NA FILA não conta (02/10): com a fila, as
+    // duas cópias lançadas pela recepção ficam pendentes juntas, e cada uma via
+    // a outra e desistia — o paciente ficava sem nenhuma. A que o worker pega
+    // primeiro manda; quando a outra chegar, a primeira já saiu da fila e a
+    // regra acima vale.
     const copia = firstOrNull(
       await db
         .select({ id: calendarEvents.id })
@@ -361,6 +377,7 @@ export async function enviarConfirmacaoDoAgendamento(args: {
             eq(calendarEvents.startsAt, ev.startsAt),
             eq(calendarEvents.status, 'confirmed'),
             ne(calendarEvents.id, eventId),
+            isNull(calendarEvents.confirmationDueAt),
           ),
         )
         .limit(1),

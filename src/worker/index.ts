@@ -137,6 +137,15 @@ import('./google-sync-worker')
     console.error('[worker] google-sync failed to start:', err);
   });
 
+// ⏳ Confirmação ao agendar — tick de 30 s: manda ao paciente a confirmação
+// que a Agenda pôs na fila, uns minutos depois do último salvar e só a versão
+// final (02/10: salvar e corrigir mandava três mensagens seguidas).
+import('./booking-confirmation-worker')
+  .then((m) => m.startBookingConfirmationWorker())
+  .catch((err) => {
+    console.error('[worker] booking-confirmation failed to start:', err);
+  });
+
 // 🔁 Espelho com o RD Station CRM — tick de 20 s: leva pro RD as mudanças de
 // card das contas com integração ligada (fila crm_sync_outbox, por gatilho).
 import('./crm-sync-worker')
