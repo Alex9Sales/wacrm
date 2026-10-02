@@ -26,14 +26,25 @@ import type {
   AgentConversationRow,
 } from './types';
 
-/** Walk 7 days of an account's messages once, returning per-conversation
- *  waiting state (the time of the oldest unanswered customer message, or
- *  null) and response-time samples grouped by the replying agent. */
-export async function walkAccountMessages(accountId: string): Promise<{
+export interface WaitState {
   pendingByConv: Map<string, number>; // convId → waiting-since (ms epoch)
   responseSumByAgent: Map<string, { sum: number; count: number }>;
   agentRepliedConvs: Set<string>; // convs with ≥1 human-agent message (fromMe or CRM)
-}> {
+}
+
+/** Uma linha do passeio: mensagens de UMA conta, em ordem de conversa e hora. */
+export interface WalkRow {
+  conversationId: string;
+  senderType: string;
+  senderId: string | null;
+  createdAt: string | null;
+  isInternal?: boolean | null;
+}
+
+/** Walk 7 days of an account's messages once, returning per-conversation
+ *  waiting state (the time of the oldest unanswered customer message, or
+ *  null) and response-time samples grouped by the replying agent. */
+export async function walkAccountMessages(accountId: string): Promise<WaitState> {
   const sevenDaysAgo = new Date(Date.now() - 7 * 86_400_000).toISOString();
   const rows = await db
     .select({
@@ -41,6 +52,7 @@ export async function walkAccountMessages(accountId: string): Promise<{
       senderType: messages.senderType,
       senderId: messages.senderId,
       createdAt: messages.createdAt,
+      isInternal: messages.isInternal,
     })
     .from(messages)
     .innerJoin(conversations, eq(messages.conversationId, conversations.id))
@@ -52,6 +64,27 @@ export async function walkAccountMessages(accountId: string): Promise<{
     )
     .orderBy(messages.conversationId, messages.createdAt);
 
+  return computeWaitState(rows);
+}
+
+/**
+ * O "episódio de espera" de cada conversa, a partir das mensagens já em ordem
+ * (conversa, hora). Puro — o SLA e o painel leem daqui.
+ *
+ * Regras (02/10/2026, junto com o conserto do SLA que repetia aviso e
+ * redistribuição a cada janela):
+ *  • a 1ª mensagem do cliente sem resposta abre a espera (pendingByConv);
+ *  • qualquer mensagem que CHEGA ao cliente encerra — do atendente (CRM ou
+ *    celular) e também a da IA/'bot': é o que o código sempre contou como
+ *    resposta, e mudar isso faria toda conversa que a IA atende virar
+ *    "demorando" de uma vez;
+ *  • nota interna (is_internal) é IGNORADA: nunca chega ao cliente, então nem
+ *    encerra a espera nem conta como "o atendente já falou com ele". As notas
+ *    de sistema (agenda, cobrança, IA) já são gravadas "para não contar como
+ *    resposta de atendente" — só este passeio ainda contava (uma nota do
+ *    atendente para um colega fechava a espera do cliente).
+ */
+export function computeWaitState(rows: WalkRow[]): WaitState {
   const pendingByConv = new Map<string, number>();
   const responseSumByAgent = new Map<string, { sum: number; count: number }>();
   const agentRepliedConvs = new Set<string>();
@@ -69,6 +102,7 @@ export async function walkAccountMessages(accountId: string): Promise<{
       pendingCustomer = null;
     }
     if (!row.createdAt) continue;
+    if (row.isInternal) continue; // nota interna: o cliente não vê (ver acima)
     const ts = new Date(row.createdAt).getTime();
     // A human agent reply (CRM-sent or a fromMe echo) marks the conversation
     // as already-engaged — the SLA alerts on these instead of reassigning.
