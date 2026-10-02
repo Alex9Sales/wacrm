@@ -36,6 +36,10 @@ export const STALLED_NOTE_PREFIX = '⏰ Transferência sem resposta'
 /** Janela padrão (horas) da lista. */
 export const JANELA_PARADAS_HORAS = 48
 
+/** Teto padrão de itens. Lista que volta com exatamente isso pode ter mais —
+ *  o resumo do dono mostra "200+" em vez de afirmar um número exato. */
+export const LIMITE_PARADAS = 200
+
 export interface TransferenciaParada {
   conversationId: string
   /** Nome apresentável ('' quando o contato não tem nome de verdade). */
@@ -72,15 +76,33 @@ function data(v: unknown): Date | null {
 /**
  * Transferências da IA sem resposta humana na conta, da mais antiga para a mais
  * nova. Só a última transferência de cada conversa.
+ *
+ * Com mais transferências paradas que o `limite`, ficam as MAIS NOVAS (02/10/
+ * 2026, revisão): o corte era nas mais antigas da ordem crescente, então numa
+ * conta com muitas paradas antigas as recentes — justamente as que o aviso de
+ * 24h precisa — nem chegavam à lista. O SQL ordena da mais nova e corta; a
+ * ordem devolvida continua da mais antiga para a mais nova.
+ *
+ * `soNaoAvisadas`: só as que ainda não têm a nota ⏰ (o aviso não precisa das
+ * outras, e assim elas não ocupam o limite).
  */
 export async function listarTransferenciasParadas(
   accountId: string,
   cfg: ExpedienteCfg,
-  opts: { now?: Date; horas?: number; limite?: number } = {},
+  opts: { now?: Date; horas?: number; limite?: number; soNaoAvisadas?: boolean } = {},
 ): Promise<TransferenciaParada[]> {
   const now = opts.now ?? new Date()
   const horas = Math.max(1, Math.min(24 * 7, Math.trunc(opts.horas ?? JANELA_PARADAS_HORAS)))
-  const limite = Math.max(1, Math.min(500, Math.trunc(opts.limite ?? 200)))
+  const limite = Math.max(1, Math.min(500, Math.trunc(opts.limite ?? LIMITE_PARADAS)))
+  const naoAvisadas = opts.soNaoAvisadas
+    ? sql`AND NOT EXISTS (
+        SELECT 1 FROM messages a
+        WHERE a.conversation_id = h.conversation_id
+          AND a.is_internal = true AND a.sender_type = 'bot'
+          AND a.content_text LIKE ${STALLED_NOTE_PREFIX + '%'}
+          AND a.created_at >= h.handoff_at
+      )`
+    : sql``
   // Margem no last_message_at: a nota nasce logo depois da mensagem do cliente
   // que fez a IA transferir (e essa mensagem já empurrou o last_message_at).
   // O filtro usa o índice (account_id, last_message_at) e evita varrer as
@@ -119,10 +141,13 @@ export async function listarTransferenciasParadas(
         AND r.is_internal = false
         AND r.created_at > h.handoff_at
     )
-    ORDER BY h.handoff_at ASC
+    ${naoAvisadas}
+    ORDER BY h.handoff_at DESC
     LIMIT ${limite}
   `)
-  const rows = (res.rows ?? []) as Array<Record<string, unknown>>
+  // Veio da mais nova para a mais antiga (para o corte ficar com as novas);
+  // quem chama recebe da mais antiga para a mais nova.
+  const rows = [...((res.rows ?? []) as Array<Record<string, unknown>>)].reverse()
   const out: TransferenciaParada[] = []
   for (const r of rows) {
     const em = data(r.handoff_at)

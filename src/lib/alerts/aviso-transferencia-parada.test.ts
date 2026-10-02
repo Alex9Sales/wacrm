@@ -6,13 +6,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 //   • avisa UMA vez (nota ⏰ depois da transferência = já avisou);
 //   • só passou do limite em minutos de EXPEDIENTE, e só com a empresa aberta;
 //   • janela de 24h, estendida para quem esperou com a empresa fechada;
-//   • nota antes do envio, apagada se o envio falhar (tenta no próximo tick);
+//   • nota antes do envio; se o envio falha: falha AMBÍGUA (chegou a chamar
+//     o canal) mantém a nota e não repete; falha de configuração mantém a nota
+//     com o motivo; erro antes do canal apaga e tenta de novo, até 3 vezes;
 //   • teto por conta; uma conta que falha não derruba as outras.
 
 const h = vi.hoisted(() => {
   const state = {
     inserted: [] as Record<string, unknown>[],
     deleted: 0,
+    updated: [] as Record<string, unknown>[],
     failInsert: false,
   }
   const db = {
@@ -29,11 +32,21 @@ const h = vi.hoisted(() => {
         state.deleted++
       },
     })),
+    update: vi.fn(() => ({
+      set: (v: Record<string, unknown>) => ({
+        where: async () => {
+          state.updated.push(v)
+        },
+      }),
+    })),
   }
   return { state, db, listar: vi.fn(), enviar: vi.fn() }
 })
 
-vi.mock('@/db', () => ({ db: h.db, messages: { id: 'messages.id' } }))
+vi.mock('@/db', () => ({
+  db: h.db,
+  messages: { id: 'messages.id', conversationId: 'messages.conversation_id' },
+}))
 vi.mock('./owner-alerts', () => ({ sendOwnerAlert: h.enviar }))
 vi.mock('./transferencias-paradas', () => ({
   STALLED_NOTE_PREFIX: '⏰ Transferência sem resposta',
@@ -46,6 +59,8 @@ import {
   limiarDaTransferenciaParada,
   textoDaEspera,
   textoDaNota,
+  textoDaNotaSemAviso,
+  TENTATIVAS_SEM_ENVIO,
   transferenciasParaAvisar,
   varrerTransferenciasParadas,
 } from './aviso-transferencia-parada'
@@ -91,10 +106,11 @@ function parada(over: Partial<TransferenciaParada> = {}): TransferenciaParada {
 beforeEach(() => {
   h.state.inserted = []
   h.state.deleted = 0
+  h.state.updated = []
   h.state.failInsert = false
   h.listar.mockReset()
   h.enviar.mockReset()
-  h.enviar.mockResolvedValue(true)
+  h.enviar.mockResolvedValue({ ok: true, tentou: true })
   h.db.execute.mockReset()
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -194,7 +210,11 @@ describe('aviso por conta', () => {
     const n = await avisarTransferenciasParadasDaConta('conta-1', CONTA, SEGUNDA_10H, AVISOS_POR_CONTA)
 
     expect(n).toBe(1)
-    expect(h.listar).toHaveBeenCalledWith('conta-1', CONTA, { now: SEGUNDA_10H, horas: 72 })
+    expect(h.listar).toHaveBeenCalledWith('conta-1', CONTA, {
+      now: SEGUNDA_10H,
+      horas: 72,
+      soNaoAvisadas: true,
+    })
     expect(h.state.inserted).toEqual([
       {
         conversationId: 'conv-1',
@@ -214,15 +234,64 @@ describe('aviso por conta', () => {
       link: 'https://crm.exemplo.test/inbox?c=conv-1',
     })
     expect(h.state.deleted).toBe(0)
+    expect(h.state.updated).toEqual([])
   })
 
-  it('envio que falha apaga a nota (tenta de novo no próximo tick)', async () => {
+  it('falha AMBÍGUA (chegou a chamar o canal): a nota fica, avisa que pode não ter saído e não repete', async () => {
+    // Antes: a nota era apagada e o aviso saía de novo a cada 2 min — e o
+    // WAHA às vezes entrega mesmo depois de estourar o tempo.
     h.listar.mockResolvedValueOnce([parada()])
-    h.enviar.mockResolvedValueOnce(false)
-    const n = await avisarTransferenciasParadasDaConta('conta-1', CONTA, SEGUNDA_10H, AVISOS_POR_CONTA)
+    h.enviar.mockResolvedValueOnce({ ok: false, tentou: true, falha: 'erro' })
+    const n = await avisarTransferenciasParadasDaConta('conta-1', CONTA, SEGUNDA_10H, 5, new Map())
     expect(n).toBe(0)
-    expect(h.state.inserted).toHaveLength(1)
-    expect(h.state.deleted).toBe(1)
+    expect(h.state.deleted).toBe(0)
+    expect(h.state.updated).toEqual([
+      { contentText: '⏰ Transferência sem resposta há 20 min — o aviso ao responsável pode não ter saído.' },
+    ])
+  })
+
+  it('falha de configuração (sem canal): a nota fica com o motivo — sem gravar e apagar para sempre', async () => {
+    h.listar.mockResolvedValueOnce([parada()])
+    h.enviar.mockResolvedValueOnce({ ok: false, tentou: false, falha: 'sem_canal' })
+    await avisarTransferenciasParadasDaConta('conta-1', CONTA, SEGUNDA_10H, 5, new Map())
+    expect(h.state.deleted).toBe(0)
+    expect(h.state.updated).toEqual([
+      {
+        contentText:
+          '⏰ Transferência sem resposta há 20 min — o aviso ao responsável não saiu (nenhum canal WhatsApp conectado).',
+      },
+    ])
+  })
+
+  it('erro antes de chamar o canal: apaga a nota e tenta de novo — até a 3ª falha', async () => {
+    const falhas = new Map<string, number>()
+    h.enviar.mockResolvedValue({ ok: false, tentou: false, falha: 'erro' })
+    for (let i = 1; i < TENTATIVAS_SEM_ENVIO; i++) {
+      h.listar.mockResolvedValueOnce([parada()])
+      await avisarTransferenciasParadasDaConta('conta-1', CONTA, SEGUNDA_10H, 5, falhas)
+      expect(h.state.deleted).toBe(i) // nada saiu: libera para o próximo tick
+      expect(h.state.updated).toEqual([])
+    }
+    h.listar.mockResolvedValueOnce([parada()])
+    await avisarTransferenciasParadasDaConta('conta-1', CONTA, SEGUNDA_10H, 5, falhas)
+    expect(h.state.deleted).toBe(TENTATIVAS_SEM_ENVIO - 1) // a 3ª nota fica
+    expect(h.state.updated).toEqual([
+      { contentText: textoDaNotaSemAviso('20 min', `falhou ${TENTATIVAS_SEM_ENVIO} vezes`) },
+    ])
+    expect(h.enviar).toHaveBeenCalledTimes(TENTATIVAS_SEM_ENVIO)
+    expect(falhas.size).toBe(0)
+  })
+
+  it('a contagem de falhas é por transferência: outra conversa não herda', async () => {
+    const falhas = new Map<string, number>()
+    h.enviar.mockResolvedValue({ ok: false, tentou: false, falha: 'erro' })
+    h.listar.mockResolvedValueOnce([parada()]).mockResolvedValueOnce([parada()])
+    await avisarTransferenciasParadasDaConta('conta-1', CONTA, SEGUNDA_10H, 5, falhas)
+    await avisarTransferenciasParadasDaConta('conta-1', CONTA, SEGUNDA_10H, 5, falhas)
+    h.listar.mockResolvedValueOnce([parada({ conversationId: 'conv-9' })])
+    await avisarTransferenciasParadasDaConta('conta-1', CONTA, SEGUNDA_10H, 5, falhas)
+    expect(h.state.deleted).toBe(3)
+    expect(h.state.updated).toEqual([])
   })
 
   it('sem nota-trava não avisa (avisar sem trava repetiria a cada 2 min)', async () => {
