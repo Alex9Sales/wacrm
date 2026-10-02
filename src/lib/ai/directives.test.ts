@@ -319,16 +319,22 @@ describe('parseCloseDirectives', () => {
     expect(d.text).toBe('Até!  Abraço')
   })
 
+  // 02/10/2026, revisão 2: o fechamento tolerante. Antes destes dois a perda
+  // não acontecia (lose null) e a rede do envio tirava o marcador; agora ela
+  // acontece com o motivo certo — e o marcador seguinte continua não virando
+  // motivo, nem a linha de baixo.
   it('marcador fechado errado não engole o marcador seguinte como motivo', () => {
     const d = parseCloseDirectives('Até! [[PERDER:Achou caro] [[RESOLVER]]')
-    expect(d.lose).toBeNull()
+    expect(d.lose).toEqual({ reason: 'Achou caro' })
     expect(d.resolve).toBe(true)
+    expect(d.text).toBe('Até!')
   })
 
   it('marcador sem fechamento não engole as linhas seguintes', () => {
     const d = parseCloseDirectives('[[PERDER:Achou caro\nSegunda linha [[RESOLVER]]')
-    expect(d.lose).toBeNull()
+    expect(d.lose).toEqual({ reason: 'Achou caro' })
     expect(d.resolve).toBe(true)
+    expect(d.text).toBe('Segunda linha')
   })
 
   it('comentário na linha de baixo ainda perde (o regex antigo aceitava)', () => {

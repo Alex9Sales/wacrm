@@ -1053,6 +1053,10 @@ export async function dispatchInboundToAiReply(
     const unknownMarker = /\[\[(?!\s*(?:audio\s*\]\]|foto\s*:))[\s\S]*?\]\]/gi
     // O que a rede tirou fica guardado (02/10, revisão): marcador de AÇÃO mal
     // fechado sai do texto e a ação NÃO roda — sem isto, sumia sem rastro.
+    // Revisão 2 (02/10): o parseCloseDirectives lá em cima já lê o fechamento
+    // errado ("] ]", "]" no fim da linha, sem fechar) — a ação RODA e o
+    // marcador sai do texto antes daqui. O que chega à rede é só o que ninguém
+    // leu (argumento fora do formato, ENVIAR sem material…), e só isso avisa.
     const removidosPelaRede: string[] = []
     const semMarcador = dirs.text
       .replace(controlMarkerRegex(), (m) => {
@@ -1065,10 +1069,10 @@ export async function dispatchInboundToAiReply(
       dirs.text = semMarcador.replace(/\n{3,}/g, '\n\n').trim()
     }
     const text = dirs.text
-    // ⚠️ Ação mal fechada ("[[ETIQUETA:x] ]", "[[AGENDAR:…]"): vira UMA nota
-    // interna por resposta ('bot' + is_internal — não acorda a IA). Gravada no
-    // applyTags, que roda em todo caminho em que a resposta é aproveitada; a
-    // resposta descartada (corrida, sem vaga) não deixa nota de nada.
+    // ⚠️ Ação mal fechada que NÃO rodou ("[[AGENDAR:amanhã 14h] ]"): vira UMA
+    // nota interna por resposta ('bot' + is_internal — não acorda a IA).
+    // Gravada no applyTags, que roda em todo caminho em que a resposta é
+    // aproveitada; a resposta descartada (corrida, sem vaga) não deixa nota.
     const avisoAcaoMalFechada = avisoDeAcaoMalFechada(removidosPelaRede)
     let avisoAcaoMalFechadaGravado = false
 

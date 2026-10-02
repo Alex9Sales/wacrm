@@ -1751,17 +1751,21 @@ export async function resumeTimedOutRuns(
  * com os dados dele; o nó de IA tinha o mesmo buraco.
  *
  * Passa pela MESMA limpeza do auto-reply: parseCloseDirectives (que já tira o
- * RESUMO tolerante) e a rede de segurança do envio, que também pega marcador
- * conhecido mal fechado e em várias linhas. E tira o [[AUDIO]] e o [[foto:…]]:
- * o auto-reply os transforma em áudio/imagem, o nó de IA não — sairiam como
- * texto cru.
+ * RESUMO e as ações com fechamento tolerante) e a rede de segurança do envio,
+ * que também pega marcador conhecido mal fechado e em várias linhas. E tira o
+ * [[AUDIO]] e o [[foto:…]]: o auto-reply os transforma em áudio/imagem, o nó
+ * de IA não — sairiam como texto cru.
  *
  * `calar`: a IA escreveu [[IGNORAR]] ("ok", emoji — nada a responder). Quem
  * chama decide; o texto que sobrou, se sobrou, é o que vai.
  *
  * `avisoAcaoMalFechada` (02/10, revisão): a nota interna para marcador de
- * AÇÃO mal fechado ("[[ETIQUETA:x] ]") que a limpeza tirou — o mesmo aviso
- * do auto-reply (avisoDeAcaoMalFechada). null quando não há. Quem chama grava.
+ * AÇÃO mal fechado que a limpeza tirou — o mesmo aviso do auto-reply
+ * (avisoDeAcaoMalFechada). null quando não há. Quem chama grava.
+ * Revisão 2 (02/10): o parseCloseDirectives passou a ler o fechamento errado
+ * ("[[ETIQUETA:x] ]", "[[NOTA:y]" no fim da linha, sem fechar) e tira o que
+ * leu, como o bem fechado — que aqui nunca foi executado nem avisado. O aviso
+ * fica para o que nem o parser lê ("[[AGENDAR:amanhã 14h] ]", "[[ENVIAR:x] ]").
  */
 export function textoDaIaParaOCliente(raw: string | null | undefined): {
   text: string;

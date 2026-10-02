@@ -75,6 +75,25 @@ describe('parseGeneration', () => {
   it('[[HANDOFF_…]] (outro nome) não é transferência', () => {
     expect(parseGeneration('Oi [[HANDOFF_X]]')).toEqual({ text: 'Oi [[HANDOFF_X]]', handoff: false })
   })
+
+  // 02/10/2026, revisão 2: SEM fechar também. A rede do envio já tirava
+  // "[[HANDOFF" do texto e, como o HANDOFF não gera aviso, a transferência
+  // sumia sem rastro.
+  it('handoff sem fechar: no fim do texto, no fim da linha ou antes do próximo "[["', () => {
+    expect(parseGeneration('Já te passo pro responsável.\n[[HANDOFF')).toEqual({
+      text: 'Já te passo pro responsável.',
+      handoff: true,
+    })
+    expect(parseGeneration('[[HANDOFF\nJá te passo pro responsável.')).toEqual({
+      text: 'Já te passo pro responsável.',
+      handoff: true,
+    })
+    expect(parseGeneration('[[HANDOFF [[RESUMO:Ana]]')).toEqual({ text: '[[RESUMO:Ana]]', handoff: true })
+  })
+
+  it('"[[HANDOFF" com texto na mesma linha não é transferência', () => {
+    expect(parseGeneration('[[HANDOFF agora')).toEqual({ text: '[[HANDOFF agora', handoff: false })
+  })
 })
 
 describe('generateReply — OpenAI', () => {
