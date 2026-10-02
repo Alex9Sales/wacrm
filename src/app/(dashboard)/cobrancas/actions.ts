@@ -38,7 +38,8 @@ import { getAccountSettings, updateAccountSettings } from '@/lib/settings/accoun
 import { runCollectionsForAccount } from '@/lib/collections/engine'
 import { refreshUpcomingForAccount, UPCOMING_HORIZON_DAYS } from '@/lib/collections/reminders'
 import { listChargesAtSilencing, markAsaasNotificationsSwept, recordSilenced } from '@/lib/collections/asaas-silenced'
-import { countsAsOverdue, daysBetweenDayKeys, debtorHold, duplicateSuspects, greetingName, normalizeSettings, phoneSearchDigits, type CollectionsSettings } from '@/lib/collections/rules'
+import { countsAsOverdue, daysBetweenDayKeys, debtorHold, duplicateSuspects, normalizeSettings, phoneSearchDigits, type CollectionsSettings } from '@/lib/collections/rules'
+import { greetingNameForContact } from '@/lib/collections/greeting'
 import { evaluatePromotion, promotionHeadline, type PromotionVerdict } from '@/lib/collections/promotion'
 import { criteriaFor, readPromotionOverride, statsFromFeedback } from '@/lib/orchestration/validation'
 import { levelFor, readPolicy } from '@/lib/orchestration/policy'
@@ -2559,18 +2560,9 @@ export async function createChargeManual(input: ManualChargeInput): Promise<Manu
   // Assinatura cuja 1ª cobrança ainda não existe: sem link pra mandar agora.
   if (targets?.ok && created.invoiceUrl) {
     // 11/09 (João): a primeira palavra crua virava "Oi, Tio!" para
-    // "Tio Burguer Lanches". Mesma regra da régua (greetingName), e o nome do
-    // ASAAS na frente do apelido do CRM — que às vezes é só o número.
-    const asaasName = firstOrNull(
-      await db
-        .select({ name: asaasCharges.customerName })
-        .from(asaasCharges)
-        .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.contactId, input.contactId)))
-        .orderBy(desc(asaasCharges.updatedAt))
-        .limit(1),
-    )?.name
-    const nomeBase = asaasName?.trim() || (looksLikeBarePhone(contact.name) ? null : contact.name)
-    const firstName = greetingName(nomeBase)
+    // "Tio Burguer Lanches". 01/10: a MESMA regra da régua inteira
+    // (collectionGreetingName) — agenda "Pessoa - Empresa", CPF/CNPJ, ofício.
+    const firstName = await greetingNameForContact(accountId, input.contactId)
     const text = manualChargeMessage(
       firstName,
       value,

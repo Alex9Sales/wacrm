@@ -462,6 +462,19 @@ const NAME_ARTICLES = new Set(['a', 'o', 'as', 'os'])
 /** Sufixo de razão social: ninguém quer ser chamado de "Ltda". */
 const NAME_LEGAL_SUFFIX = new Set(['ltda', 'ltda.', 'lt', 'me', 'mei', 'epp', 'eireli', 'sa', 's.a', 's.a.', 'sas'])
 
+/** Ofícios que aparecem colados ao nome no cadastro do autônomo ("Marcos
+ *  Montador de Móveis", "Felipe Chaveiro"). Sem acento (nameSlug). */
+const NAME_OCCUPATIONS = new Set([
+  'montador', 'montadora', 'eletricista', 'chaveiro', 'encanador', 'pintor', 'pintora', 'pedreiro',
+  'marceneiro', 'mecanico', 'motorista', 'jardineiro', 'jardineira', 'vidraceiro', 'serralheiro',
+  'gesseiro', 'carreteiro', 'freteiro', 'cabeleireiro', 'cabeleireira',
+  'manicure', 'diarista', 'faxineira', 'costureira', 'confeiteira', 'fotografo', 'fotografa',
+  'personal', 'instalador', 'tecnico', 'tecnica', 'borracheiro', 'funileiro', 'tapeceiro',
+  'dedetizador', 'piscineiro',
+])
+// (Fora de propósito: "Mudanças", "Fretes", "Refrigeração" — aí é a EMPRESA:
+// "Rocha Mudanças" segue "Rocha Mudanças", não "Rocha".)
+
 /**
  * Como chamar o cliente na mensagem, a partir do nome COMO ESTÁ NO ASAAS
  * (decisão João/Alex 10/09: prevalece o Asaas, não o apelido do WhatsApp).
@@ -487,6 +500,13 @@ export function greetingName(name: string | null | undefined): string | null {
     .filter(Boolean)
     .filter((w, i) => i === 0 || !NAME_LEGAL_SUFFIX.has(w.toLowerCase().replace(/[.,]$/, '')))
   if (!words.length) return null
+
+  // "Marcelo Montador de Móveis", "Márcio Chaveiro": a 2ª palavra é o OFÍCIO
+  // da pessoa — "Bom dia, Marcelo Montador!" soava estranho para o cliente do
+  // João (01/10). Vale só com gente na frente (não "Casa Chaveiro").
+  if (words.length >= 2 && NAME_OCCUPATIONS.has(nameSlug(words[1])) && !looksLikeBusinessName(words[0])) {
+    return words[0]
+  }
 
   const comArtigo = NAME_ARTICLES.has(words[0].toLowerCase())
   if (words.length <= (comArtigo ? 4 : 3)) return words.join(' ')
@@ -1431,6 +1451,9 @@ export function personInContactName(
       // Só é "pessoa + empresa" quando a empresa INTEIRA está ali dentro.
       if (emComum.length < empresa.size) return ''
       const sobra = tokens.filter((t) => !empresa.has(nameSlug(t)) && !NAME_STOPWORDS.has(nameSlug(t) || t))
+      // A sobra também pode ser RAMO ("Pet Belle - Estética Animal" saía
+      // "Estética"): aí não há pessoa (01/10).
+      if (looksLikeBusinessName(sobra.join(' '))) return ''
       return firstNameForGreeting(sobra.join(' '))
     }
   }
@@ -1441,6 +1464,39 @@ export function personInContactName(
   // houve pessoa a extrair de dentro dele — "Empresa - Fulana" já saiu acima.
   if (looksLikeBusinessName(crmName)) return ''
   return firstNameForGreeting(crmName)
+}
+
+/** O texto contém TODAS as palavras significativas do nome do Asaas? */
+function containsAsaasName(text: string | null | undefined, asaasName: string | null | undefined): boolean {
+  const empresa = (asaasName ?? '')
+    .split(/\s+/)
+    .map(nameSlug)
+    .filter((w) => w.length > 2 && !NAME_LEGAL_SUFFIX.has(w) && !NAME_STOPWORDS.has(w))
+  if (!empresa.length) return false
+  const tokens = new Set((text ?? '').split(/\s+/).map(nameSlug))
+  return empresa.every((w) => tokens.has(w))
+}
+
+/**
+ * "Eduardo - EduPlay", "Fábio - Bassi": o jeito que o dono salva o cliente na
+ * agenda — PESSOA, separador, empresa (mesmo abreviada). O lado esquerdo é
+ * quem atende, qualquer que seja o documento no Asaas.
+ *
+ * 🐛 01/10 (João/GoLink): a correção de 23/09 só olhava isso com CNPJ; com CPF
+ * o nome do Asaas ("EduPlay") ganhava e a agenda era ignorada — 19 dos 33
+ * devedores vencidos da GoLink recebiam nome de empresa. Freios: lado
+ * esquerdo que é ramo ("Pet Belle - …") ou que já É o nome do Asaas ("Rack 95
+ * - Eduardo", "Maria Silva - Salão") não é o padrão pessoa-empresa.
+ */
+export function personBeforeSeparator(
+  crmName: string | null | undefined,
+  asaasName: string | null | undefined,
+): string {
+  const m = (crmName ?? '').trim().match(/^(.+?)\s+[-–—|]\s+(.+)$/)
+  if (!m) return ''
+  const left = m[1].trim()
+  if (!left || looksLikeBusinessName(left) || containsAsaasName(left, asaasName)) return ''
+  return firstNameForGreeting(left)
 }
 
 /**
@@ -1474,6 +1530,9 @@ export function collectionGreetingName(
   const digits = onlyDigits(asaasDoc)
   const empresa = digits.length === 14
   const crmTrusted = crmNameSource === undefined || crmNameSource === 'crm' || crmNameSource === 'phonebook'
+  // "Pessoa - Empresa" na agenda/ficha: a pessoa, com CPF ou CNPJ (01/10).
+  const marcada = crmTrusted ? personBeforeSeparator(crmName, asaas) : ''
+  if (marcada) return marcada
   const crm = crmTrusted ? personInContactName(crmName, asaas, empresa) : ''
   // A empresa, na ordem: como o Asaas escreve; senão o nome do CRM quando ele
   // começa pelo RAMO ("Drogaria Essência", "Marcenaria São José"). Sem isso a
@@ -1486,8 +1545,28 @@ export function collectionGreetingName(
       : null
   // CNPJ: a pessoa que atende (agenda/ficha) vem primeiro; sem ela, a empresa.
   if (empresa) return crm || empresaLabel
+  // CPF com a pessoa ANTES do nome do Asaas no contato ("Claudia Euro
+  // Imóveis" para "Euro Imóveis"): é quem atende (01/10).
+  if (crm && containsAsaasName(crmName, asaas)) return crm
+  // CPF: a agenda confirma o PRIMEIRO nome do Asaas mas discorda do resto
+  // ("Marcelo Santos" × "Marcelo Montador de Móveis") — o resto do Asaas é
+  // ofício/negócio, não sobrenome: só o primeiro nome (01/10).
+  const primeiroAsaas = asaas ? firstNameForGreeting(asaas) : ''
+  if (primeiroAsaas && crmTrusted) {
+    const primeiroCrm = firstNameForGreeting(crmName)
+    const segundaAsaas = asaas.split(/\s+/).map(nameSlug).filter((w) => w.length > 1)[1]
+    const crmTokens = new Set((crmName ?? '').split(/\s+/).map(nameSlug))
+    if (
+      primeiroCrm &&
+      nameSlug(primeiroCrm) === nameSlug(primeiroAsaas) &&
+      segundaAsaas &&
+      !crmTokens.has(segundaAsaas)
+    ) {
+      return primeiroAsaas
+    }
+  }
   // CPF ou sem documento: nome de pessoa no Asaas manda (decisão 10/09).
-  if (asaas && firstNameForGreeting(asaas)) return greetingName(asaas)
+  if (asaas && primeiroAsaas) return greetingName(asaas)
   if (crm) return crm
   // Sem pessoa em lugar nenhum: a empresa; sem empresa, nada ("Oi!") — o nome
   // do CRM já foi julgado "não é pessoa nem negócio" (telefone, frase, apelido).

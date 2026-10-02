@@ -161,6 +161,37 @@ describe('collectionGreetingName — pessoa no Asaas manda; empresa no Asaas + p
     // Apelido do WhatsApp não vira saudação nem sendo nome de ramo.
     expect(collectionGreetingName('', 'Drogaria Essência', 'whatsapp')).toBeNull()
   })
+  // 🐛 01/10 (João/GoLink): com CPF no Asaas a agenda "Pessoa - Empresa" era
+  // ignorada ("EduPlay, bom dia!") e o ofício virava sobrenome ("Marcelo Montador").
+  it('"Pessoa - Empresa" da agenda vale com CPF também; ofício não vira sobrenome (01/10)', () => {
+    const CNPJ = '11222333000181'
+    const CPF = '39053344705'
+    expect(collectionGreetingName('EduPlay', 'Eduardo - EduPlay', 'phonebook', CPF)).toBe('Eduardo')
+    expect(collectionGreetingName('Marcelo Montador de Móveis', 'Marcelo Santos', 'phonebook', CPF)).toBe('Marcelo')
+    expect(collectionGreetingName('Marcelo Montador de Móveis', null, 'crm', CPF)).toBe('Marcelo')
+    expect(collectionGreetingName('Márcio Chaveiro', null, 'crm', CPF)).toBe('Márcio')
+    // Não pode quebrar o que já dava certo (CNPJ, 23/09).
+    expect(collectionGreetingName('Master Chip', 'Saulo - Master Chip', 'phonebook', CNPJ)).toBe('Saulo')
+    // Empresa abreviada na agenda.
+    expect(collectionGreetingName('Bassi Ambiental', 'Fábio - Bassi', 'phonebook', CNPJ)).toBe('Fábio')
+    expect(collectionGreetingName('Grupo Guincho Ribeiro', 'Fernanda - Guincho Ribeiro', 'phonebook', CNPJ)).toBe('Fernanda')
+    expect(collectionGreetingName('Montador de Móveis José Luiz', 'José Luiz - Montador de Móveis', 'phonebook', CPF)).toBe('José')
+    expect(collectionGreetingName('Pai & Filho Mudanças', 'Eduardo - Pai & Filho Mudanças', 'phonebook', CPF)).toBe('Eduardo')
+    // Lado esquerdo que É o nome do Asaas, ou que é ramo: não é o padrão.
+    expect(collectionGreetingName('Rack 95', 'Rack 95 - Eduardo', 'phonebook', CNPJ)).toBe('Eduardo')
+    expect(collectionGreetingName('Maria Silva', 'Maria Silva - Salão', 'phonebook', CPF)).toBe('Maria Silva')
+    expect(collectionGreetingName('Pet Belle', 'Pet Belle - Estética Animal', 'phonebook', CNPJ)).toBe('Pet Belle')
+    // Empresa sem pessoa em lugar nenhum: igual a antes.
+    expect(collectionGreetingName('Multi Eventos', 'Multi Eventos', 'crm', CPF)).toBe('Multi Eventos')
+    expect(collectionGreetingName('Rocha Mudanças', 'Rocha Mudanças', 'crm', CPF)).toBe('Rocha Mudanças')
+    // Apelido do perfil do WhatsApp continua sem mandar.
+    expect(collectionGreetingName('EduPlay', 'Eduardo - EduPlay', 'whatsapp', CPF)).toBe('EduPlay')
+    // Pessoa antes do nome do Asaas, sem separador (CPF).
+    expect(collectionGreetingName('Euro Imóveis', 'Claudia Euro Imóveis', 'phonebook', CPF)).toBe('Claudia')
+    // Mesmo nome dos dois lados: nada muda.
+    expect(collectionGreetingName('João Pedro Alves', 'João Pedro', 'phonebook', CPF)).toBe('João Pedro Alves')
+  })
+
   it('sem Asaas → o CRM quando é pessoa; telefone/frase no CRM → nada ("Oi!")', () => {
     expect(collectionGreetingName(null, 'Carlos')).toBe('Carlos')
     expect(collectionGreetingName(null, '+55 12 99123-4567')).toBeNull()

@@ -44,7 +44,7 @@ import {
   type RawParsedCommand,
 } from './owner-command-rules'
 import { resolveCollectionTargets } from './outreach'
-import { greetingName } from './rules'
+import { greetingNameForContact } from './greeting'
 
 const TTL_SECONDS = 15 * 60
 const key = (conversationId: string) => `owner:charge:${conversationId}`
@@ -278,8 +278,9 @@ async function execute(accountId: string, ownerUserId: string, p: Proposal, cpfC
     const targets = await resolveCollectionTargets(accountId, p.contactId, null)
     if (targets.ok) {
       // 11/09 (João): a primeira palavra crua virava "Oi, Tio!" para
-      // "Tio Burguer Lanches". Mesma regra da régua — greetingName.
-      const firstName = greetingName(p.name)
+      // "Tio Burguer Lanches". 01/10: a MESMA regra da régua inteira
+      // (agenda "Pessoa - Empresa", CPF/CNPJ, ofício) — greeting.ts.
+      const firstName = await greetingNameForContact(accountId, p.contactId)
       const text = manualChargeMessage(firstName, p.value, p.dueDate, p.description, created.invoiceUrl)
       const convIds = [targets.whatsapp?.conversationId, targets.email?.conversationId].filter((c): c is string => !!c)
       for (const cid of convIds) {
