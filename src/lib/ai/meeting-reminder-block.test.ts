@@ -207,16 +207,31 @@ describe('moveu e VOLTOU: o lembrete que já saiu não sai de novo (02/10)', () 
     expect(recomecoDoLembrete(comGuardado, MEIO_DIA)).not.toHaveProperty('remindersPrevStartsAt')
   })
 
-  it('volta com o maior dos dois: o que saiu no horário de passagem também conta', () => {
-    // 10h (1 degrau) → 11h, onde saíram 2 → volta às 10h: fica 2, não 1.
+  it('volta com SÓ o guardado: o que saiu no horário de passagem é de outro horário', () => {
+    // 02/10/2026, revisão: era o maior dos dois. 10h (1 degrau) → 11h, onde
+    // saíram 2 → volta às 10h: fica 1 — os 2 eram degraus das 11h.
     const passagem = saiuLembrete(mover({ startsAt: DEZ, remindersSent: 1 }, ONZE), 2)
     const r = recomecoDoLembrete(passagem, DEZ)
-    expect(r).toMatchObject({ remindersSent: 2 })
+    expect(r).toMatchObject({ remindersSent: 1 })
     // E o das 11h (2) passa a ser o guardado: voltar às 11h de novo não repete.
     expect(r).toMatchObject({ remindersPrevStartsAt: ONZE, remindersPrevSent: 2 })
-    expect(recomecoDoLembrete({ startsAt: DEZ, remindersSent: 2, remindersPrevStartsAt: ONZE, remindersPrevSent: 2 }, ONZE)).toMatchObject({
-      remindersSent: 2,
-    })
+    const deVoltaAsDez = mover(passagem, DEZ)
+    expect(deVoltaAsDez).toMatchObject({ startsAt: DEZ, remindersSent: 1, remindersPrevStartsAt: ONZE, remindersPrevSent: 2 })
+    expect(mover(deVoltaAsDez, ONZE)).toMatchObject({ startsAt: ONZE, remindersSent: 2, remindersPrevStartsAt: DEZ, remindersPrevSent: 1 })
+  })
+
+  it('degraus [24h, 2h]: o "2h antes" do horário original ainda sai depois do vai-e-volta', () => {
+    // O caso da revisão. Sexta 10h (-03) com o de 24h enviado (1) → movida
+    // para quinta 15h, onde saem o de 24h e o de 2h (2) → volta para sexta
+    // 10h. Com o maior dos dois ficava 2 e o "2h antes" das 10h — que o
+    // paciente nunca recebeu — não saía. Datas fictícias.
+    const SEXTA_10H = '2026-10-09T13:00:00.000Z'
+    const QUINTA_15H = '2026-10-08T18:00:00.000Z'
+    const vinteQuatroHorasAntes = { startsAt: SEXTA_10H, remindersSent: 1 }
+    const naQuinta = saiuLembrete(mover(vinteQuatroHorasAntes, QUINTA_15H), 2)
+    const deVolta = mover(naQuinta, SEXTA_10H)
+    // 1 = só o de 24h das 10h saiu: o próximo degrau (2h antes) ainda sai.
+    expect(deVolta).toMatchObject({ startsAt: SEXTA_10H, remindersSent: 1, reminderBlock: null })
   })
 
   it('volta "no minuto": segundos do Google e o texto do Postgres contam como o mesmo horário', () => {

@@ -43,6 +43,7 @@ vi.mock('@/lib/google/sync', () => ({
 }))
 
 import { calendarEvents, conversations } from '@/db'
+import { recomecoDoLembrete } from '@/lib/ai/meeting-reminder-block'
 import { planoDeDesfazerAgendamento, revertOrchestrationAction } from './revert-actions'
 
 const BASE = {
@@ -102,6 +103,53 @@ describe('desfazer schedule_event', () => {
     expect(naConsulta[0].set).not.toHaveProperty('status')
     expect(h.pushes).toEqual([['conta-1', 'ev-davi', 'update']])
     expect(h.updates.some((u) => u.table === conversations && u.set.aiAutoreplyDisabled === true)).toBe(true)
+  })
+
+  it('moveu pela IA → desfazer: o contador do horário de antes volta (o lembrete que já saiu não sai de novo)', async () => {
+    // 02/10/2026, revisão: o desfazer gravava remindersSent: 0 e o lembrete
+    // de 24h do horário original, que o paciente já tinha recebido, saía DE
+    // NOVO. Horário original com 1 degrau enviado; a IA move (pela mesma
+    // regra do [[AGENDAR]]); o banco fica como o UPDATE dela deixou.
+    const original = { startsAt: '2026-10-21 12:30:00+00', remindersSent: 1, remindersPrevStartsAt: null, remindersPrevSent: 0 }
+    const daIa = recomecoDoLembrete(original, MOVEU.startsAt)
+    expect(daIa).toMatchObject({ remindersSent: 0, remindersPrevStartsAt: '2026-10-21T12:30:00.000Z', remindersPrevSent: 1 })
+    h.atual = [{ ...original, ...daIa, startsAt: '2026-10-23 13:00:00+00', status: 'confirmed' }]
+
+    const r = await revertOrchestrationAction({ ...BASE, revertState: MOVEU })
+
+    expect(r.ok).toBe(true)
+    const naConsulta = h.updates.filter((u) => u.table === calendarEvents)
+    expect(naConsulta).toHaveLength(1)
+    expect(naConsulta[0].set).toMatchObject({
+      startsAt: '2026-10-21T12:30:00.000Z',
+      remindersSent: 1,
+      reminderBlock: null,
+      reminderBlockAt: null,
+    })
+    // No horário da IA nada tinha saído: nada a guardar, o guardado fica.
+    expect(naConsulta[0].set).not.toHaveProperty('remindersPrevStartsAt')
+    expect(naConsulta[0].set).not.toHaveProperty('remindersPrevSent')
+  })
+
+  it('moveu pela IA, saiu lembrete no horário novo → desfazer volta o do original e guarda o da IA', async () => {
+    h.atual = [
+      {
+        startsAt: '2026-10-23 13:00:00+00',
+        status: 'confirmed',
+        remindersSent: 2,
+        remindersPrevStartsAt: '2026-10-21 12:30:00+00',
+        remindersPrevSent: 1,
+      },
+    ]
+    await revertOrchestrationAction({ ...BASE, revertState: MOVEU })
+
+    const naConsulta = h.updates.filter((u) => u.table === calendarEvents)
+    // Só o guardado: os 2 degraus eram do horário da IA, não do original.
+    expect(naConsulta[0].set).toMatchObject({
+      remindersSent: 1,
+      remindersPrevStartsAt: '2026-10-23T13:00:00.000Z',
+      remindersPrevSent: 2,
+    })
   })
 
   it('moveu, mas mexeram na consulta depois: não desfaz (nem cancela)', async () => {

@@ -22,6 +22,8 @@ import {
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { calendarEvents as calEvents } from '@/db'
+// Puro, sem 'server-only': este executor roda também no worker.
+import { recomecoDoLembrete } from '@/lib/ai/meeting-reminder-block'
 import { cancelEnrollment } from '@/lib/cadences/cadence'
 
 import { noteDealEvent } from './actions'
@@ -181,7 +183,15 @@ async function undoAction(input: RevertInput, st: Record<string, unknown>): Prom
       if (plano.tipo === 'restaurar') {
         const atual = firstOrNull(
           await db
-            .select({ startsAt: calEvents.startsAt, status: calEvents.status })
+            .select({
+              startsAt: calEvents.startsAt,
+              status: calEvents.status,
+              // O recomeço do lembrete precisa do contador de agora e do
+              // guardado (migração 0206) para saber se está VOLTANDO.
+              remindersSent: calEvents.remindersSent,
+              remindersPrevStartsAt: calEvents.remindersPrevStartsAt,
+              remindersPrevSent: calEvents.remindersPrevSent,
+            })
             .from(calEvents)
             .where(and(eq(calEvents.id, eventId), eq(calEvents.accountId, input.accountId)))
             .limit(1),
@@ -203,10 +213,12 @@ async function undoAction(input: RevertInput, st: Record<string, unknown>): Prom
           .set({
             startsAt: plano.startsAt,
             endsAt: plano.endsAt,
-            // Horário mudou de novo: os lembretes recomeçam (como em toda remarcação).
-            remindersSent: 0,
-            reminderBlock: null,
-            reminderBlockAt: null,
+            // 02/10/2026, revisão: gravava remindersSent: 0 — e desfazer é
+            // justamente VOLTAR ao horário de antes. O lembrete de 24h que o
+            // paciente já tinha recebido para ele saía DE NOVO. Agora é a
+            // regra de toda remarcação (recomecoDoLembrete): volta o contador
+            // guardado daquele horário, zera o motivo e guarda o de agora.
+            ...recomecoDoLembrete(atual, plano.startsAt),
             updatedAt: new Date().toISOString(),
           })
           .where(and(eq(calEvents.id, eventId), eq(calEvents.accountId, input.accountId)))

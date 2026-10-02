@@ -250,16 +250,25 @@ export type RecomecoDoLembrete = {
  * 0206) — só se havia degrau gasto: contador 0 não tem o que proteger e não
  * apaga o que estava guardado (moveu, moveu de novo e voltou ao primeiro
  * ainda acha o do primeiro). Ao chegar a um início IGUAL, no minuto, ao
- * guardado, o contador volta para o maior dos dois (o de agora e o guardado)
- * em vez de zerar: nenhum degrau que o paciente já recebeu sai de novo. Vale
- * igual com ou sem a confirmação ao agendar — a fila dela compara com o que o
- * paciente sabe e já dá 'semMudanca' no vai-e-volta; isto aqui é só o
+ * guardado, o contador volta a ser o GUARDADO em vez de zerar: nenhum degrau
+ * que o paciente já recebeu para aquele horário sai de novo.
+ *
+ * Só o guardado, nunca o maior dos dois (02/10/2026, revisão): o contador de
+ * agora conta degraus de OUTRO início — o de passagem — e não diz nada sobre
+ * o horário para o qual se volta. Com o maior, degraus [24h, 2h]: sexta 10h
+ * com o de 24h enviado (1) → movida para quinta 15h, onde saem o de 24h e o
+ * de 2h (2) → de volta para sexta 10h ficava 2, e o "2h antes" das 10h, que o
+ * paciente nunca recebeu, não saía.
+ *
+ * Vale igual com ou sem a confirmação ao agendar — a fila dela compara com o
+ * que o paciente sabe e já dá 'semMudanca' no vai-e-volta; isto aqui é só o
  * lembrete. Uma vaga só: o guardado é sempre o do ÚLTIMO início que tinha
  * degrau gasto.
  *
- * Uma regra para os três caminhos que mudam o início — o salvar da Agenda, o
- * import do Google (inclusive o evento remarcado para fora da janela) e o
- * mover do [[AGENDAR]] da IA. Não duplicar em SQL à mão.
+ * Uma regra para todo caminho que muda o início — o salvar da Agenda, o import
+ * do Google (inclusive o evento remarcado para fora da janela), o mover do
+ * [[AGENDAR]] da IA e o "Desfazer" dessa remarcação aprovada
+ * (orchestration/revert-actions.ts). Não duplicar em SQL à mão.
  */
 export function recomecoDoLembrete(
   antes: LembreteDoCompromisso,
@@ -270,7 +279,8 @@ export function recomecoDoLembrete(
   const guardado = contador(antes.remindersPrevSent)
   const voltou = guardado > 0 && mesmoMinuto(antes.remindersPrevStartsAt, depois)
   return {
-    remindersSent: voltou ? Math.max(atual, guardado) : 0,
+    // Voltou: SÓ o guardado — `atual` é do horário de passagem (ver acima).
+    remindersSent: voltou ? guardado : 0,
     reminderBlock: null,
     reminderBlockAt: null,
     ...(atual > 0
