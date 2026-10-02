@@ -438,10 +438,27 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
       case 'schedule_event': {
         // 📅 Aprovado em Precisa de você: marca na Agenda e confirma o horário
         // pro cliente na conversa (a IA tinha dito que ia confirmar).
-        const p = input.payload as { startsLocal?: string; title?: string; timezone?: string; durationMin?: number }
+        const p = input.payload as {
+          startsLocal?: string
+          title?: string
+          timezone?: string
+          durationMin?: number
+          profissional?: string
+          modo?: { tipo?: string; deLocal?: string | null }
+        }
         if (!p.startsLocal) return { ok: false, error: 'Sem data/hora no pedido.' }
         if (!input.conversationId) return { ok: false, error: 'Sem conversa pra confirmar ao cliente.' }
         const tz = p.timezone || 'America/Sao_Paulo'
+        // 02/10/2026: o pedido agora traz o profissional e o modo (nova /
+        // remarca X) do [[AGENDAR]]. Sem o modo, aprovar uma consulta NOVA
+        // moveria a que o paciente já tinha. Pedido antigo, sem esses campos,
+        // segue como sempre.
+        const modo =
+          p.modo?.tipo === 'nova'
+            ? ({ tipo: 'nova' } as const)
+            : p.modo?.tipo === 'remarca'
+              ? ({ tipo: 'remarca', deLocal: typeof p.modo.deLocal === 'string' ? p.modo.deLocal : null } as const)
+              : null
         const { scheduleEventFromAi } = await import('@/lib/ai/schedule-actions')
         const ev = await scheduleEventFromAi({
           accountId: input.accountId,
@@ -452,8 +469,21 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
           title: p.title || 'Reunião',
           timezone: tz,
           durationMin: p.durationMin,
+          profissional: typeof p.profissional === 'string' ? p.profissional : null,
+          modo,
         })
         if (!ev) return { ok: false, error: 'Não consegui marcar (data/hora inválida ou agenda indisponível).' }
+        if ('naoAchou' in ev) {
+          const de = ev.deLocal ? `${ev.deLocal.slice(8, 10)}/${ev.deLocal.slice(5, 7)} às ${ev.deLocal.slice(11, 16)}` : null
+          return {
+            ok: false,
+            error: !de
+              ? 'O pedido é de remarcação, mas não diz qual consulta — nada foi mexido na Agenda.'
+              : ev.motivo === 'ambiguo'
+                ? `Este contato tem mais de uma consulta em ${de} e não deu para saber qual remarcar — nada foi mexido na Agenda.`
+                : `Não achei a consulta de ${de} deste contato para remarcar — nada foi mexido na Agenda.`,
+          }
+        }
         const when = new Date(ev.startsAt)
           .toLocaleString('pt-BR', { timeZone: tz, weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
           .replace('.,', '')
@@ -465,7 +495,7 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
             userId,
             conversationId: input.conversationId,
             contactId: input.contactId,
-            text: `Confirmado! ✅ ${ev.title}: ${when}. Até lá!`,
+            text: `${ev.acao === 'moveu' ? 'Remarcado' : 'Confirmado'}! ✅ ${ev.title}: ${when}. Até lá!`,
           })
           confirmed = true
         } catch (err) {

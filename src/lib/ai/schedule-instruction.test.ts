@@ -1,6 +1,82 @@
 import { describe, expect, it } from 'vitest'
 
+import { formatBookedForPrompt, type CompromissoDoContato } from './busy-slots'
 import { scheduleInstruction } from './defaults'
+
+// 02/10/2026: telefone da família inteira numa clínica. A IA via só a 1ª
+// consulta do contato, sem dizer com quem, e o [[AGENDAR]] sempre movia essa.
+// Agora ela vê todas e, na dúvida entre mudar uma e marcar outra, PERGUNTA.
+describe('cliente que JÁ TEM consulta(s): a IA pergunta antes de marcar', () => {
+  const consultas: CompromissoDoContato[] = [
+    {
+      startsAt: '2026-10-21T12:30:00.000Z',
+      endsAt: '2026-10-21T13:00:00.000Z',
+      allDay: false,
+      titulo: 'Avaliação · Léo',
+      agenda: 'Dra. Marta Teixeira',
+      quando: 'qua 21/10 09:30–10:00',
+      inicioLocal: '2026-10-21T09:30',
+    },
+    {
+      startsAt: '2026-10-28T17:00:00.000Z',
+      endsAt: '2026-10-28T18:00:00.000Z',
+      allDay: false,
+      titulo: 'Cirurgia · Nina',
+      agenda: 'Dr. Otávio Prates',
+      quando: 'qua 28/10 14:00–15:00',
+      inicioLocal: '2026-10-28T14:00',
+    },
+  ]
+  const lista = formatBookedForPrompt(consultas, { comAgenda: true })!
+  const txt = scheduleInstruction({ booked: lista })
+
+  it('a lista traz TODAS, com profissional e a referência que a IA copia no "remarca"', () => {
+    expect(lista.split('\n')).toEqual([
+      '- qua 21/10 09:30–10:00 · "Avaliação · Léo" · agenda: Dra. Marta Teixeira · ref: 2026-10-21T09:30',
+      '- qua 28/10 14:00–15:00 · "Cirurgia · Nina" · agenda: Dr. Otávio Prates · ref: 2026-10-28T14:00',
+    ])
+    expect(txt).toContain(lista)
+  })
+
+  it('na dúvida entre MUDAR uma e marcar OUTRA mantendo, pergunta — e só marca depois da resposta', () => {
+    expect(txt).toContain('ASK before booking')
+    expect(txt).toContain('Você quer remarcar a consulta de <dia> com <profissional>, ou marcar uma nova e manter essa?')
+    expect(txt).toMatch(/with more than one appointment, say which one/)
+    expect(txt).toMatch(/Emit \[\[AGENDAR\]\] only AFTER they answer/)
+    // Pedido já claro não ganha pergunta de novo.
+    expect(txt).toMatch(/If the request is already clear .* do not ask again/)
+  })
+
+  it('ensina o 4º campo: nova / remarca <ref>, e o 3º vazio quando não há profissional', () => {
+    expect(txt).toContain('|nova]]')
+    expect(txt).toContain('|remarca YYYY-MM-DDTHH:MM]]')
+    expect(txt).toContain('||nova')
+    expect(txt).not.toContain('it never creates a second one')
+  })
+
+  it('não reemite à toa e respeita o prompt da conta que manda esses casos para humano', () => {
+    expect(txt).toMatch(/Do NOT emit \[\[AGENDAR\]\] again for an appointment that is already booked/)
+    expect(txt).toMatch(/If your business instructions below say .* must go to a human .* follow your instructions instead/)
+  })
+
+  it('duas pessoas: um [[AGENDAR]] por resposta (o 2º sumiria sem aviso)', () => {
+    expect(txt).toContain('Only ONE [[AGENDAR]] per reply is carried out')
+    expect(scheduleInstruction()).toContain('Only ONE [[AGENDAR]] per reply is carried out')
+  })
+
+  it('conta com uma agenda só: a lista sai sem o nome da agenda', () => {
+    const umaAgenda = formatBookedForPrompt(consultas)!
+    expect(umaAgenda).not.toContain('agenda:')
+    expect(umaAgenda).toContain('ref: 2026-10-21T09:30')
+  })
+
+  it('sem consulta marcada: nada disso entra (o prompt fica como sempre)', () => {
+    expect(formatBookedForPrompt([])).toBeNull()
+    const semNada = scheduleInstruction({ booked: null })
+    expect(semNada).not.toContain('ALREADY HAS')
+    expect(semNada).not.toContain('ASK before booking')
+  })
+})
 import { ACTION_CATALOG, ORCH_ACTIONS, levelFor, readPolicy } from '@/lib/orchestration/policy'
 import { REVERT_MATRIX } from '@/lib/orchestration/revert'
 

@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { parseCloseDirectives, buildSystemPrompt, moveCardInstruction } from './defaults'
+import { describe, it, expect, vi } from 'vitest'
+import { parseCloseDirectives, parseModoAgendamento, buildSystemPrompt, moveCardInstruction } from './defaults'
 
 describe('parseCloseDirectives', () => {
   it('extrai skip/etiqueta/resolver/funil e limpa o texto', () => {
@@ -51,6 +51,73 @@ describe('parseCloseDirectives', () => {
     const d = parseCloseDirectives('ok\n[[AGENDAR:2026-10-01T10:00|Avaliação|]]')
     expect(d.schedule?.profissional).toBeNull()
     expect(d.schedule?.title).toBe('Avaliação')
+  })
+
+  // 02/10/2026: o 4º campo diz o que fazer com quem JÁ TEM consulta — "nova"
+  // (adicional, nunca move) ou "remarca X" (move exatamente a de X). Sem ele,
+  // o marcador continua igual ao de sempre (nem a chave `modo` existe).
+  it('3 campos: sem `modo` — o marcador de sempre', () => {
+    const d = parseCloseDirectives('Marquei!\n[[AGENDAR:2026-10-21T10:00|Avaliação · Léo|Dra. Marta Teixeira]]')
+    expect(d.schedule).toEqual({
+      startsLocal: '2026-10-21T10:00',
+      title: 'Avaliação · Léo',
+      profissional: 'Dra. Marta Teixeira',
+    })
+    expect(d.schedule && 'modo' in d.schedule).toBe(false)
+  })
+
+  it('4º campo "nova": consulta ADICIONAL, com profissional', () => {
+    const d = parseCloseDirectives('Marquei a da sua filha também!\n[[AGENDAR:2026-10-21T10:00|Limpeza · Nina|Dra. Marta Teixeira|nova]]')
+    expect(d.schedule).toEqual({
+      startsLocal: '2026-10-21T10:00',
+      title: 'Limpeza · Nina',
+      profissional: 'Dra. Marta Teixeira',
+      modo: { tipo: 'nova' },
+    })
+    expect(d.text).toBe('Marquei a da sua filha também!')
+  })
+
+  it('3º campo vazio com 4º campo: "|título||nova"', () => {
+    const d = parseCloseDirectives('ok\n[[AGENDAR:2026-10-21T10:00|Limpeza||nova]]')
+    expect(d.schedule).toEqual({
+      startsLocal: '2026-10-21T10:00',
+      title: 'Limpeza',
+      profissional: null,
+      modo: { tipo: 'nova' },
+    })
+    expect(d.text).toBe('ok')
+  })
+
+  it('4º campo "remarca YYYY-MM-DDTHH:MM": diz QUAL consulta mover', () => {
+    const d = parseCloseDirectives(
+      'Remarquei para sexta!\n[[AGENDAR:2026-10-23T14:00|Avaliação · Léo|Dra. Marta Teixeira|remarca 2026-10-21T09:30]]',
+    )
+    expect(d.schedule).toEqual({
+      startsLocal: '2026-10-23T14:00',
+      title: 'Avaliação · Léo',
+      profissional: 'Dra. Marta Teixeira',
+      modo: { tipo: 'remarca', deLocal: '2026-10-21T09:30' },
+    })
+    expect(d.text).toBe('Remarquei para sexta!')
+  })
+
+  it('"remarca" com espaço no lugar do T e sem profissional', () => {
+    const d = parseCloseDirectives('ok [[AGENDAR:2026-10-23 14:00|Avaliação||remarca 2026-10-21 09:30]]')
+    expect(d.schedule?.modo).toEqual({ tipo: 'remarca', deLocal: '2026-10-21T09:30' })
+    expect(d.schedule?.profissional).toBeNull()
+  })
+
+  it('"remarca" SEM data não vira o comportamento de sempre (que moveria a mais próxima)', () => {
+    const d = parseCloseDirectives('ok [[AGENDAR:2026-10-23T14:00|Avaliação||remarca]]')
+    expect(d.schedule?.modo).toEqual({ tipo: 'remarca', deLocal: null })
+  })
+
+  it('4º campo que não dá para entender: segue o de sempre (sem `modo`)', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const d = parseCloseDirectives('ok [[AGENDAR:2026-10-23T14:00|Avaliação|Dra. Marta|qualquer coisa]]')
+    expect(d.schedule?.profissional).toBe('Dra. Marta')
+    expect(d.schedule && 'modo' in d.schedule).toBe(false)
+    expect(d.text).toBe('ok')
   })
 
   it('extrai [[TRANSFERIR:etiqueta|resumo]]', () => {
@@ -359,5 +426,30 @@ describe('moveCardInstruction / buildSystemPrompt — etapa atual do card', () =
       currentStage: 'Qualificado',
     })
     expect(p).not.toContain('currently at stage')
+  })
+})
+
+describe('parseModoAgendamento (4º campo do [[AGENDAR]])', () => {
+  it('vazio = sem modo (o de sempre)', () => {
+    expect(parseModoAgendamento(undefined)).toBeNull()
+    expect(parseModoAgendamento('   ')).toBeNull()
+  })
+
+  it('o modelo escreve "nova" de vários jeitos', () => {
+    for (const t of ['nova', 'Novo', 'NOVA consulta', 'adicional', 'outra', 'mantém a outra']) {
+      expect(parseModoAgendamento(t)).toEqual({ tipo: 'nova' })
+    }
+  })
+
+  it('remarcação: pega a data de qualquer jeito que venha', () => {
+    expect(parseModoAgendamento('remarca 2026-10-21T09:30')).toEqual({ tipo: 'remarca', deLocal: '2026-10-21T09:30' })
+    expect(parseModoAgendamento('Remarcar 2026-10-21 09:30')).toEqual({ tipo: 'remarca', deLocal: '2026-10-21T09:30' })
+    expect(parseModoAgendamento('mudar 2026-10-21T09:30')).toEqual({ tipo: 'remarca', deLocal: '2026-10-21T09:30' })
+    // Data solta, sem palavra: é a consulta a mover.
+    expect(parseModoAgendamento('2026-10-21T09:30')).toEqual({ tipo: 'remarca', deLocal: '2026-10-21T09:30' })
+  })
+
+  it('texto qualquer = null (não inventa um modo)', () => {
+    expect(parseModoAgendamento('confirmado')).toBeNull()
   })
 })
