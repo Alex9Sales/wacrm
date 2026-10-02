@@ -45,22 +45,68 @@ export const HANDOFF_SENTINEL = '[[HANDOFF]]'
 // O argumento nunca atravessa um "[[" (um marcador sem fechamento não come o
 // seguinte) e o lazy para no PRIMEIRO fechamento válido (o texto depois de um
 // "]]" certo nunca entra no argumento).
+// Revisão 3 (02/10): o argumento de uma linha atravessa a quebra quando o
+// marcador está BEM fechado logo adiante (QUEBRA_COM_FECHO_ADIANTE) e a quebra
+// logo depois do ":" só vale nesse caso (BRANCO_DE_LINHA).
 //
 // Sem backtracking catastrófico (8 s com 2.000 brancos no RESUMO antigo):
 // nenhum "\s*" entre um argumento lazy e o fechamento — o branco das pontas sai
-// no trim de quem extrai —, o "\s*" logo depois do ":" é seguido de "(?=\S)"
+// no trim de quem extrai —, o branco logo depois do ":" é seguido de "(?=\S)"
 // ou de um dígito/palavra fixa (devolver um branco não reabre a busca) e campo
 // com separador ("|", "=") é guloso e sem o separador, então só tem um jeito
 // de terminar. O teste de tempo (close-directives-fechamento-tolerante.test)
-// passa 5.000 brancos por cada marcador em cada forma de fechamento.
+// passa 5.000 brancos por cada marcador em cada forma de fechamento, e 3.000
+// linhas dentro de um argumento de uma linha bem fechado.
 
+/**
+ * Quebra de linha DENTRO de um argumento de uma linha (02/10/2026, revisão 3).
+ * A revisão 2 tirou o "\n" do argumento de uma linha para que "[[ETIQUETA:Lead
+ * quente" sem fechar não levasse a saudação de baixo — e, de carona, o marcador
+ * BEM fechado que o modelo quebrou no meio ("[[ETIQUETA:Lead\nquente]]",
+ * "[[PERDER:Achou\ncaro]]") parou de casar: a rede do envio o tirava do texto,
+ * a ação não rodava e, como termina em "]]", nem o aviso ⚠️ saía. O regex de
+ * antes aceitava. A quebra volta a valer, mas só quando o PRIMEIRO "]" adiante
+ * (antes do próximo "[[") abre um fechamento válido ("]]", "] ]", "]\n]") — aí
+ * a linha de baixo é continuação do marcador, não a resposta. Sem isso, o fim
+ * da linha continua fechando (FECHO_DE_LINHA). Custo: um lookahead linear por
+ * quebra; pior caso medido ~32 ms com 3.000 linhas (há teste de tempo).
+ */
+const QUEBRA_COM_FECHO_ADIANTE = String.raw`\n(?=(?:(?!\[\[)[^\]])*\]\s*\])`
 /** Um caractere de argumento — nunca o começo do próximo marcador. */
-const ARG_DE_UMA_LINHA = String.raw`(?:(?!\[\[)[^\]\n])`
+const ARG_DE_UMA_LINHA = String.raw`(?:(?!\[\[)[^\]\n]|${QUEBRA_COM_FECHO_ADIANTE})`
 const ARG_DE_VARIAS_LINHAS = String.raw`(?:(?!\[\[)[^\]])`
 /** Para argumento que pode ter "]" dentro (resumo, perda, transferência). */
 const ARG_LIVRE = String.raw`(?:(?!\[\[)[\s\S])`
 /** Campo de uma linha que termina num "|" (ou no fechamento). */
-const CAMPO = String.raw`(?:(?!\[\[)[^|\]\n])`
+const CAMPO = String.raw`(?:(?!\[\[)[^|\]\n]|${QUEBRA_COM_FECHO_ADIANTE})`
+/**
+ * A quebra, quando há ALGUM fechamento válido adiante antes do próximo "[["
+ * (o espelho de SEM_FECHO_ADIANTE), não só no 1º "]". Para o campo de uma
+ * linha que vem antes de texto livre com "]" dentro — a etiqueta do
+ * TRANSFERIR antes do resumo, o motivo do PERDER antes do comentário: em
+ * "[[TRANSFERIR:Time de\nVendas|Cliente [Gás do Povo], …]]" o 1º "]" é o do
+ * cliente, a QUEBRA_COM_FECHO_ADIANTE recusava e a transferência sumia sem
+ * aviso nenhum (termina em "]]"). Nos outros campos as duas dão o mesmo
+ * resultado (o argumento não tem "]", então acaba no 1º de qualquer jeito) e
+ * a de cima é mais barata.
+ */
+const QUEBRA_COM_ALGUM_FECHO_ADIANTE = String.raw`\n(?=(?:(?!\[\[)[\s\S])*?\]\s*\](?!\]))`
+/** O CAMPO, antes de texto livre que pode ter "]" (a etiqueta do TRANSFERIR). */
+const CAMPO_ANTES_DE_TEXTO_LIVRE = String.raw`(?:(?!\[\[)[^|\]\n]|${QUEBRA_COM_ALGUM_FECHO_ADIANTE})`
+/**
+ * Brancos depois do ":" (e do "|"/"=" de um campo de uma linha, e entre um
+ * valor fixo e o próximo "|"). 02/10/2026, revisão 3: com "\s*" uma quebra de
+ * linha logo depois do ":" fazia a linha de BAIXO virar o argumento —
+ * "[[PERDER:" + a despedida embaixo perdia o negócio com a despedida como
+ * motivo e a despedida sumia do texto. A quebra ali só vale se há um
+ * fechamento válido adiante antes do próximo "[[" ("[[ETIQUETA:\nLead
+ * quente]]" continua etiquetando); sem ele o marcador não casa e volta para a
+ * rede do envio e para o aviso ⚠️. ALGUM fechamento, pelo mesmo motivo de
+ * cima: "[[TRANSFERIR:\nVendas|Cliente [Gás do Povo], …]]" transfere. O
+ * "(?=\S)" no fim deixa o "\s*" sem volta (devolver branco não reabre a busca
+ * — mesmo cuidado do topo).
+ */
+const BRANCO_DE_LINHA = String.raw`[ \t]*(?:${QUEBRA_COM_ALGUM_FECHO_ADIANTE}\s*(?=\S))?`
 
 /** Fechamento com colchete: "]]", "] ]", "]\n]"; "]" no fim da linha (sem
  *  fechamento válido adiante) ou no fim do texto. */
@@ -172,7 +218,7 @@ export function aiReplyBufferMs(): number {
 /** Encerramento (opt-in): resolver a conversa. */
 export const RESOLVE_DIRECTIVE = diretiva(String.raw`resolver${FECHO_SEM_ARGUMENTO}`)
 /** Encerramento (opt-in): mover o card do funil pra etapa <nome>. Uma linha. */
-export const FUNNEL_DIRECTIVE = diretiva(String.raw`funil\s*:\s*(?=\S)(${ARG_DE_UMA_LINHA}+?)${FECHO_DE_LINHA}`)
+export const FUNNEL_DIRECTIVE = diretiva(String.raw`funil\s*:${BRANCO_DE_LINHA}(?=\S)(${ARG_DE_UMA_LINHA}+?)${FECHO_DE_LINHA}`)
 /** Perder EM PÉ: marca o negócio como perdido MANTENDO a etapa (perde-em-pé).
  *  Motivo opcional: [[PERDER:Achou caro]] ou só [[PERDER]]. Comentário
  *  opcional depois do 1º "|": [[PERDER:Área sem clientes | cidade X · capital Y]]
@@ -193,9 +239,14 @@ export const FUNNEL_DIRECTIVE = diretiva(String.raw`funil\s*:\s*(?=\S)(${ARG_DE_
  *  2 = comentário (ausente sem "|"), 3/4 = o "]]" que fechou (com/sem
  *  comentário — ver semColcheteSolto). "[[PERDER:Achou caro] [[RESOLVER]]"
  *  agora PERDE com "Achou caro" (antes a perda sumia) e o RESOLVER continua;
- *  "[[PERDER:Achou caro" + a linha de baixo perde só com "Achou caro". */
+ *  "[[PERDER:Achou caro" + a linha de baixo perde só com "Achou caro".
+ *
+ *  Revisão 3 (02/10): "[[PERDER:Achou\ncaro]]" (bem fechado, quebrado no
+ *  meio) volta a perder, com "Achou caro"; "[[PERDER:" + a despedida na linha
+ *  de baixo NÃO perde com a despedida de motivo — volta para a rede e o aviso
+ *  ⚠️; sem "]]", o motivo para no 1º "]" solto (motivoAteOColcheteSolto). */
 export const LOSE_DIRECTIVE = diretiva(
-  String.raw`perder(?:\s*:\s*(?!\s)((?:(?!\[\[)[^|\n])*?)` +
+  String.raw`perder(?:\s*:${BRANCO_DE_LINHA}(?!\s)((?:(?!\[\[)[^|\n]|${QUEBRA_COM_ALGUM_FECHO_ADIANTE})*?)` +
     String.raw`(?:\|(${ARG_LIVRE}*?)${FECHO_LIVRE}|${FECHO_LIVRE_DE_LINHA})` +
     String.raw`|${FECHO_SEM_ARGUMENTO})`,
 )
@@ -240,7 +291,7 @@ export const SKIP_DIRECTIVE = diretiva(String.raw`ignorar${FECHO_SEM_ARGUMENTO}`
 /** Etiquetar o contato com uma etiqueta EXISTENTE (captura o nome). Global.
  *  Uma linha: "[[ETIQUETA:Lead quente" + a saudação embaixo etiqueta e a
  *  saudação sai (revisão 2, 02/10). */
-export const TAG_DIRECTIVE = diretiva(String.raw`etiqueta\s*:\s*(?=\S)(${ARG_DE_UMA_LINHA}+?)${FECHO_DE_LINHA}`, 'gi')
+export const TAG_DIRECTIVE = diretiva(String.raw`etiqueta\s*:${BRANCO_DE_LINHA}(?=\S)(${ARG_DE_UMA_LINHA}+?)${FECHO_DE_LINHA}`, 'gi')
 /**
  * Agendar: `[[AGENDAR:YYYY-MM-DDTHH:MM|título|profissional|modo]]`
  *
@@ -269,7 +320,7 @@ export const TAG_DIRECTIVE = diretiva(String.raw`etiqueta\s*:\s*(?=\S)(${ARG_DE_
  * de um campo lazy o regex voltava a ter backtracking quadrático.
  */
 export const SCHEDULE_DIRECTIVE = diretiva(
-  String.raw`agendar\s*:\s*(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2})[ \t]*` +
+  String.raw`agendar\s*:${BRANCO_DE_LINHA}(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2})${BRANCO_DE_LINHA}` +
     String.raw`(?:\|(${CAMPO}*))?(?:\|(${CAMPO}*))?(?:\|(${ARG_DE_UMA_LINHA}*?))?${FECHO_DE_LINHA}`,
 )
 
@@ -337,8 +388,8 @@ export function modoNoTerceiroCampo(raw: string | null | undefined): ModoAgendam
  * não acontecia, sem aviso nenhum (o aviso é só para fechamento errado).
  */
 export const COLLECTION_DIRECTIVE = diretiva(
-  String.raw`cobran[cç]a\s*:\s*(promessa|comprovante|contesta|acordo)[ \t]*` +
-    String.raw`(?:\|[ \t]*(\d{4}-\d{2}-\d{2})[ \t]*)?${FECHO_DE_LINHA}`,
+  String.raw`cobran[cç]a\s*:${BRANCO_DE_LINHA}(promessa|comprovante|contesta|acordo)${BRANCO_DE_LINHA}` +
+    String.raw`(?:\|${BRANCO_DE_LINHA}(\d{4}-\d{2}-\d{2})[ \t]*)?${FECHO_DE_LINHA}`,
 )
 /**
  * 🧾 Emitir cobrança no Asaas (ferramenta create_charge, 05/09):
@@ -347,7 +398,7 @@ export const COLLECTION_DIRECTIVE = diretiva(
  * Uma linha; valor e vencimento gulosos até o "|" (o parse dá trim).
  */
 export const CHARGE_DIRECTIVE = diretiva(
-  String.raw`cobrar\s*:\s*(?=\S)(${CAMPO}+)\|\s*(?=\S)(${CAMPO}+)(?:\|(${ARG_DE_UMA_LINHA}*?))?${FECHO_DE_LINHA}`,
+  String.raw`cobrar\s*:${BRANCO_DE_LINHA}(?=\S)(${CAMPO}+)\|${BRANCO_DE_LINHA}(?=\S)(${CAMPO}+)(?:\|(${ARG_DE_UMA_LINHA}*?))?${FECHO_DE_LINHA}`,
 )
 /** Transferir pra humano por etiqueta: [[TRANSFERIR:etiqueta|resumo]]. O
  *  resumo vai até o "]]" — 16/09: um "]" dentro do resumo ("Cliente [Gás do
@@ -356,7 +407,7 @@ export const CHARGE_DIRECTIVE = diretiva(
  *  resumo, de várias e com "]" dentro, fecha como o RESUMO (grupo 3 = o "]]").
  *  Sem resumo, "[[TRANSFERIR:Vendas" + a despedida embaixo transfere. */
 export const TRANSFER_DIRECTIVE = diretiva(
-  String.raw`transferir\s*:\s*(?=\S)(${CAMPO}+)(?:\|(${ARG_LIVRE}*?)${FECHO_LIVRE}|${FECHO_DE_LINHA})`,
+  String.raw`transferir\s*:${BRANCO_DE_LINHA}(?=\S)(${CAMPO_ANTES_DE_TEXTO_LIVRE}+)(?:\|(${ARG_LIVRE}*?)${FECHO_LIVRE}|${FECHO_DE_LINHA})`,
 )
 /** Criar card no funil: [[CRIARCARD:título | valor | observação]] (valor e
  *  observação opcionais — review da 1ª venda da Maria 26/08: card nascia sem
@@ -367,21 +418,22 @@ export const NOTE_DIRECTIVE = diretiva(String.raw`nota\s*:\s*(?=\S)(${ARG_DE_VAR
 /** Definir atributo: [[ATRIBUTO:campo=valor]]. Uma linha; o campo vai guloso
  *  até o "=" (o parse dá trim). */
 export const ATTR_DIRECTIVE = diretiva(
-  String.raw`atributo\s*:\s*(?=\S)((?:(?!\[\[)[^\]=|\n])+)=\s*(?=\S)(${ARG_DE_UMA_LINHA}+?)${FECHO_DE_LINHA}`,
+  String.raw`atributo\s*:${BRANCO_DE_LINHA}(?=\S)((?:(?!\[\[)[^\]=|\n]|${QUEBRA_COM_FECHO_ADIANTE})+)=` +
+    String.raw`${BRANCO_DE_LINHA}(?=\S)(${ARG_DE_UMA_LINHA}+?)${FECHO_DE_LINHA}`,
 )
 /** Preferência de voz: [[VOZ:audio]] ou [[VOZ:texto]]. */
-export const VOICE_DIRECTIVE = diretiva(String.raw`voz\s*:\s*(a[uú]dio|texto)[ \t]*${FECHO_DE_LINHA}`)
+export const VOICE_DIRECTIVE = diretiva(String.raw`voz\s*:${BRANCO_DE_LINHA}(a[uú]dio|texto)[ \t]*${FECHO_DE_LINHA}`)
 /** Roteamento multiagente: [[AGENTE:nome do agente|resumo da transferência]].
  *  O nome é de uma linha; o resumo pode ter várias. */
 export const AGENT_ROUTE_DIRECTIVE = diretiva(
-  String.raw`agente\s*:\s*(?=\S)(${CAMPO}+)(?:\|(${ARG_DE_VARIAS_LINHAS}*?)${FECHO}|${FECHO_DE_LINHA})`,
+  String.raw`agente\s*:${BRANCO_DE_LINHA}(?=\S)(${CAMPO}+)(?:\|(${ARG_DE_VARIAS_LINHAS}*?)${FECHO}|${FECHO_DE_LINHA})`,
 )
 /** Avisar o responsável no WhatsApp: [[AVISARDONO:<resumo do teste/demo>]].
  *  Best-effort — só envia se a conta tiver telefone + o toggle 'demo' ligado. */
 export const OWNER_ALERT_DIRECTIVE = diretiva(String.raw`avisardono\s*:\s*(?=\S)(${ARG_DE_VARIAS_LINHAS}+?)${FECHO}`)
 /** Registrar o telefone/WhatsApp do contato (ex.: lead do Instagram deu o zap):
  *  [[TELEFONE:<numero>]]. Grava no contato pra dar pra chamar no WhatsApp. */
-export const SET_PHONE_DIRECTIVE = diretiva(String.raw`telefone\s*:\s*([+\d][\d \t()\-.]{7,20})[ \t]*${FECHO_DE_LINHA}`)
+export const SET_PHONE_DIRECTIVE = diretiva(String.raw`telefone\s*:${BRANCO_DE_LINHA}([+\d](?:[\d \t()\-.]|${QUEBRA_COM_FECHO_ADIANTE}){7,20})[ \t]*${FECHO_DE_LINHA}`)
 
 /**
  * Todas as diretivas que saem do texto, para tirá-las de UMA vez (revisão 2,
@@ -485,10 +537,49 @@ export interface AgentDirectives {
  */
 function splitLoseArg(arg: string): { reason: string; note?: string } {
   const bar = arg.indexOf('|')
-  if (bar < 0) return { reason: arg.trim() }
-  const reason = arg.slice(0, bar).trim()
+  if (bar < 0) return { reason: umaLinha(arg) }
+  const reason = umaLinha(arg.slice(0, bar))
   const note = arg.slice(bar + 1).trim()
   return note ? { reason, note } : { reason }
+}
+
+/**
+ * Campo de UMA linha que o modelo quebrou no meio ("[[ETIQUETA:Lead\nquente]]",
+ * "[[PERDER:Achou\ncaro]]") volta a ser uma linha só (02/10/2026, revisão 3).
+ * Quem usa casa por NOME — a etiqueta, a etapa, o motivo da lista da conta — e
+ * o norm de quem casa não junta brancos de dentro: "Lead\nquente" não acharia
+ * "Lead quente" e a ação morria do mesmo jeito, só que mais adiante. Sem
+ * quebra, é o trim de sempre. Por split (não regex com "\s*" dos dois lados de
+ * "\n"): linear até com milhares de brancos.
+ */
+function umaLinha(campo: string | undefined): string {
+  return (campo ?? '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .join(' ')
+}
+
+/**
+ * Motivo do [[PERDER:]] fechado SEM "]]" e sem comentário (02/10/2026, revisão
+ * 3): vai até o 1º "]" que não fecha um "[" do próprio motivo. O motivo aceita
+ * "]" (o "[VIP]" do cliente), então "[[PERDER:Achou caro] Obrigada pelo
+ * contato!" — "]" único no meio da linha — perdia o negócio com "Achou caro]
+ * Obrigada pelo contato!" de motivo: a frase do cliente no relatório de perdas
+ * e no espelho do RD. Esse "]" é o fechamento errado; o que vem depois não é
+ * motivo. "Cliente [VIP] desistiu" fica inteiro, e o "]" solto do fim
+ * ("Achou caro] [[RESOLVER]]") sai como antes.
+ */
+function motivoAteOColcheteSolto(motivo: string): string {
+  let abertos = 0
+  for (let i = 0; i < motivo.length; i++) {
+    if (motivo[i] === '[') abertos++
+    else if (motivo[i] === ']') {
+      if (abertos === 0) return motivo.slice(0, i)
+      abertos--
+    }
+  }
+  return motivo
 }
 
 /** Extrai os marcadores de ação do texto gerado e devolve o texto limpo. */
@@ -496,13 +587,23 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
   const skipReply = SKIP_DIRECTIVE.test(raw)
   const resolve = RESOLVE_DIRECTIVE.test(raw)
   const fm = raw.match(FUNNEL_DIRECTIVE)
-  const funnelStage = fm ? fm[1].trim() : null
+  // Campos de uma linha passam por umaLinha (revisão 3): o marcador bem
+  // fechado e quebrado no meio voltou a casar, e "Lead\nquente" não casaria
+  // com a etiqueta/etapa/motivo da conta.
+  const funnelStage = fm ? umaLinha(fm[1]) : null
   const pm = raw.match(LOSE_DIRECTIVE)
-  // Com comentário (grupo 2) o "]" solto sai do fim do comentário; sem ele, do
-  // fim do motivo. "[[PERDER]]" sem argumento: motivo vazio, como sempre.
+  // Com comentário (grupo 2) o "]" solto sai do fim do comentário. Sem ele e
+  // fechado com "]]" (grupo 4), o motivo é o que está ali. Sem "]]" nenhum, o
+  // motivo vai até o 1º "]" solto (revisão 3 — antes só o do FIM saía, e
+  // "[[PERDER:Achou caro] Obrigada!" perdia com a frase dentro do motivo).
+  // "[[PERDER]]" sem argumento: motivo vazio, como sempre.
   const lose = pm
     ? splitLoseArg(
-        pm[2] !== undefined ? `${pm[1]}|${semColcheteSolto(pm[2], pm[3])}` : semColcheteSolto(pm[1] ?? '', pm[4]),
+        pm[2] !== undefined
+          ? `${pm[1]}|${semColcheteSolto(pm[2], pm[3])}`
+          : pm[4]
+            ? (pm[1] ?? '')
+            : motivoAteOColcheteSolto(pm[1] ?? ''),
       )
     : null
   const win = WIN_DIRECTIVE.test(raw)
@@ -516,23 +617,25 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     // A IA pulou o campo do profissional e pôs o modo no 3º (revisão de
     // 02/10): `|Limpeza|nova]]`. Só sem 4º campo e só se o 3º INTEIRO for um
     // modo — senão é o nome do profissional, como sempre.
-    const modoNo3 = (sm[4] || '').trim() ? null : modoNoTerceiroCampo(sm[3])
+    const campo3 = umaLinha(sm[3])
+    const campo4 = umaLinha(sm[4])
+    const modoNo3 = campo4 ? null : modoNoTerceiroCampo(campo3)
     schedule = {
       startsLocal: sm[1].trim(),
-      title: (sm[2] || '').trim(),
+      title: umaLinha(sm[2]),
       // De quem é a agenda (3º campo). Vazio = agenda padrão da conta.
-      profissional: modoNo3 ? null : (sm[3] || '').trim() || null,
+      profissional: modoNo3 ? null : campo3 || null,
     }
     // Nova / remarca (4º campo, 02/10). Sem ele, a chave nem existe.
-    const modo = modoNo3 ?? parseModoAgendamento(sm[4])
+    const modo = modoNo3 ?? parseModoAgendamento(campo4)
     if (modo) schedule.modo = modo
-    else if ((sm[4] || '').trim()) {
-      console.warn(`[ai directives] 4º campo do [[AGENDAR]] não reconhecido ("${(sm[4] || '').trim().slice(0, 60)}") — segue o comportamento de sempre`)
+    else if (campo4) {
+      console.warn(`[ai directives] 4º campo do [[AGENDAR]] não reconhecido ("${campo4.slice(0, 60)}") — segue o comportamento de sempre`)
     }
   }
   const chm = raw.match(CHARGE_DIRECTIVE)
   const charge = chm
-    ? { valueRaw: chm[1].trim(), dueRaw: chm[2].trim(), description: (chm[3] || '').trim() }
+    ? { valueRaw: umaLinha(chm[1]), dueRaw: umaLinha(chm[2]), description: umaLinha(chm[3]) }
     : null
   const colm = raw.match(COLLECTION_DIRECTIVE)
   const collection = colm
@@ -540,7 +643,7 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     : null
   const tm = raw.match(TRANSFER_DIRECTIVE)
   const transfer = tm
-    ? { tag: tm[1].trim(), summary: tm[2] === undefined ? '' : semColcheteSolto(tm[2], tm[3]).trim() }
+    ? { tag: umaLinha(tm[1]), summary: tm[2] === undefined ? '' : semColcheteSolto(tm[2], tm[3]).trim() }
     : null
   const cm = raw.match(CREATE_CARD_DIRECTIVE)
   // "título | valor | observação" — valor/observação opcionais. O valor aceita
@@ -558,10 +661,10 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
   const nm = raw.match(NOTE_DIRECTIVE)
   const note = nm ? nm[1].trim() : null
   const am = raw.match(ATTR_DIRECTIVE)
-  const attribute = am ? { field: am[1].trim(), value: am[2].trim() } : null
+  const attribute = am ? { field: umaLinha(am[1]), value: umaLinha(am[2]) } : null
   const rm = raw.match(AGENT_ROUTE_DIRECTIVE)
   const routeAgent = rm
-    ? { name: rm[1].trim(), summary: (rm[2] || '').trim() }
+    ? { name: umaLinha(rm[1]), summary: (rm[2] || '').trim() }
     : null
   const oam = raw.match(OWNER_ALERT_DIRECTIVE)
   const ownerAlert = oam ? { message: oam[1].trim() } : null
@@ -575,7 +678,7 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     : null
   const tags: string[] = []
   for (const m of raw.matchAll(TAG_DIRECTIVE)) {
-    const name = (m[1] || '').trim()
+    const name = umaLinha(m[1])
     if (name && !tags.includes(name)) tags.push(name)
   }
   // Tudo de uma vez, no texto cru (semDiretivas): o mesmo trecho que a
