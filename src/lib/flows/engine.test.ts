@@ -488,12 +488,30 @@ describe("textoDaIaParaOCliente (nó de IA dos Fluxos)", () => {
     );
   });
 
-  it("ação mal fechada → aviso para a nota interna; bem fechada ou resumo → sem aviso", () => {
-    const r = textoDaIaParaOCliente("Oi!\n[[ETIQUETA:quente]]\n[[NOTA:linha 1\nlinha 2] ]");
+  // 02/10/2026, revisão 2: o parser das diretivas aceita o fechamento errado
+  // — o que ele lê sai do texto como o bem fechado (aqui, como sempre, ninguém
+  // executa) e não avisa. O aviso fica para o que ele não consegue ler.
+  it("ação mal fechada que o parser NÃO lê → aviso para a nota interna", () => {
+    const r = textoDaIaParaOCliente("Oi!\n[[ETIQUETA:quente]]\n[[AGENDAR:amanhã às 14h|Visita] ]");
+    expect(r.text).toBe("Oi!");
     expect(r.avisoAcaoMalFechada).toContain(
-      "⚠️ A IA escreveu [[NOTA…] ] com o fechamento errado — a ação NÃO foi executada; confira.",
+      "⚠️ A IA escreveu [[AGENDAR…] ] com o fechamento errado — a ação NÃO foi executada; confira.",
     );
+  });
+
+  it("bem fechada, resumo e ação mal fechada que o parser lê → sem aviso", () => {
     expect(textoDaIaParaOCliente("Oi! [[ETIQUETA:quente]]").avisoAcaoMalFechada).toBeNull();
     expect(textoDaIaParaOCliente("Oi! [[RESUMO:Ana] ]").avisoAcaoMalFechada).toBeNull();
+    expect(textoDaIaParaOCliente("Oi!\n[[ETIQUETA:quente]]\n[[NOTA:linha 1\nlinha 2] ]")).toEqual({
+      text: "Oi!",
+      calar: false,
+      avisoAcaoMalFechada: null,
+    });
+    expect(textoDaIaParaOCliente("[[ETIQUETA:Lead quente\nOlá! Qual sua cidade?")).toEqual({
+      text: "Olá! Qual sua cidade?",
+      calar: false,
+      avisoAcaoMalFechada: null,
+    });
+    expect(textoDaIaParaOCliente("[[IGNORAR]")).toEqual({ text: "", calar: true, avisoAcaoMalFechada: null });
   });
 });

@@ -33,6 +33,9 @@ const h = vi.hoisted(() => ({
   evaluateCollectionMarker: vi.fn(),
   claimReplyNote: vi.fn(),
   postInternalNote: vi.fn(),
+  // 🏷️ etiquetas: vi.fn para conferir que a etiqueta mal fechada (revisão 2,
+  // 02/10) foi de fato aplicada.
+  applyTagsByName: vi.fn(),
   // 🙋 encerramento (perda/troca de funil decide pausa × desliga) e aviso ao dono.
   applyCloseActions: vi.fn(),
   sendOwnerAlert: vi.fn(),
@@ -119,7 +122,7 @@ vi.mock('@/lib/flows/meta-send', () => ({ engineSendText: h.engineSendText }))
 // Ações do agente (Fase 1/2): no-op nos testes de elegibilidade do auto-reply.
 vi.mock('./close-actions', () => ({
   listAccountTagNames: async () => [],
-  applyTagsByName: async () => [],
+  applyTagsByName: h.applyTagsByName,
   loadDealCloseContext: async () => null,
   applyCloseActions: h.applyCloseActions,
   postInternalNote: h.postInternalNote,
@@ -318,6 +321,8 @@ beforeEach(() => {
   h.claimReplyNote.mockResolvedValue(true)
   h.postInternalNote.mockReset()
   h.postInternalNote.mockResolvedValue(true)
+  h.applyTagsByName.mockReset()
+  h.applyTagsByName.mockResolvedValue([])
   h.applyCloseActions.mockReset()
   h.applyCloseActions.mockResolvedValue({ resolved: false, movedTo: null, lost: false })
   h.sendOwnerAlert.mockReset()
@@ -827,24 +832,56 @@ describe('dispatchInboundToAiReply — ação mal fechada vira nota interna (02/
       .map((c) => c[0])
       .filter((n) => n.text.includes('com o fechamento errado'))
 
-  it('"[[ETIQUETA:Lead quente]" + saudação: a saudação sai e a equipe é avisada uma vez', async () => {
+  // Revisão 2 (02/10): o parser das diretivas lê o fechamento errado — a ação
+  // RODA e não há aviso. O aviso ficou para o que ele não consegue ler.
+  it('"[[ETIQUETA:Lead quente]" + saudação: a etiqueta é APLICADA, a saudação sai, sem aviso', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ tools: ['tag'] } as Partial<AiConfig>))
     h.generateReply.mockResolvedValue({ text: '[[ETIQUETA:Lead quente]\nOlá Maria! Como posso ajudar?', handoff: false })
     await dispatchInboundToAiReply(ARGS)
     expect(enviados()).toEqual(['Olá Maria! Como posso ajudar?'])
-    expect(avisos()).toHaveLength(1)
-    expect(avisos()[0]).toMatchObject({ conversationId: 'conv-1' })
-    expect(avisos()[0].text).toContain('⚠️ A IA escreveu [[ETIQUETA…] ] com o fechamento errado — a ação NÃO foi executada; confira.')
+    expect(h.applyTagsByName).toHaveBeenCalledWith(expect.objectContaining({ tagNames: ['Lead quente'] }))
+    expect(avisos()).toHaveLength(0)
   })
 
-  it('duas ações mal fechadas na mesma resposta: um aviso só', async () => {
+  it('nota "] ]" e agendamento "]" no fim: as duas ações rodam, sem aviso', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ tools: ['private_note', 'schedule'] } as Partial<AiConfig>))
     h.generateReply.mockResolvedValue({
       text: 'Combinado!\n[[NOTA:quer orçamento] ]\n[[AGENDAR:2026-10-08T14:00|Visita]',
       handoff: false,
     })
     await dispatchInboundToAiReply(ARGS)
     expect(enviados()).toEqual(['Combinado!'])
+    expect(h.postInternalNote).toHaveBeenCalledWith(expect.objectContaining({ text: 'quer orçamento' }))
+    expect(h.scheduleEventFromAi).toHaveBeenCalledWith(
+      expect.objectContaining({ startsLocal: '2026-10-08T14:00', title: 'Visita' }),
+    )
+    expect(avisos()).toHaveLength(0)
+  })
+
+  it('ação mal fechada que o parser NÃO lê: a saudação sai e a equipe é avisada uma vez', async () => {
+    h.generateReply.mockResolvedValue({ text: '[[AGENDAR:amanhã às 14h|Visita]\nOlá Maria! Como posso ajudar?', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(enviados()).toEqual(['Olá Maria! Como posso ajudar?'])
+    expect(h.scheduleEventFromAi).not.toHaveBeenCalled()
+    expect(avisos()).toHaveLength(1)
+    expect(avisos()[0]).toMatchObject({ conversationId: 'conv-1' })
+    expect(avisos()[0].text).toContain('⚠️ A IA escreveu [[AGENDAR…] ] com o fechamento errado — a ação NÃO foi executada; confira.')
+  })
+
+  it('duas que não rodaram na mesma resposta: um aviso só, e a que rodou não entra nele', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ tools: ['tag'] } as Partial<AiConfig>))
+    h.generateReply.mockResolvedValue({
+      // NOTA com "]" no MEIO da linha (não é fechamento), AGENDAR sem data
+      // que dê para ler, ETIQUETA com "] ]" (essa o parser lê).
+      text: 'Combinado!\n[[NOTA:quer orçamento] obrigado\n[[AGENDAR:amanhã|Visita] ]\n[[ETIQUETA:Lead quente] ]',
+      handoff: false,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(enviados()).toEqual(['Combinado!'])
+    expect(h.applyTagsByName).toHaveBeenCalledWith(expect.objectContaining({ tagNames: ['Lead quente'] }))
     expect(avisos()).toHaveLength(1)
     expect(avisos()[0].text).toContain('[[NOTA…] ] e [[AGENDAR…] ]')
+    expect(avisos()[0].text).not.toContain('ETIQUETA')
   })
 
   it('marcador desconhecido bem fechado: sai do texto, sem aviso', async () => {

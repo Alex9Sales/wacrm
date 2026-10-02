@@ -102,8 +102,15 @@ const SEM_ARGUMENTO = ['handoff', 'ganho', 'resolver', 'ignorar', 'silent']
  * em várias linhas com um "[Centro]" no fim de uma delas continua indo até o
  * "]]" dele. A mesma regra está no RESUMO de ai/defaults.ts
  * (HANDOFF_SUMMARY_DIRECTIVE), senão a despedida ia parar dentro do resumo.
+ *
+ * Exportados (02/10/2026, revisão 2): os parsers de TODAS as diretivas de ação
+ * em ai/defaults.ts montam o fechamento tolerante com estas duas peças. Uma
+ * regra só — se o parser e esta rede discordassem de onde o marcador acaba, um
+ * pedaço do marcador (ou da resposta) ia parar no lugar errado.
  */
-const FECHA_NO_FIM_DA_LINHA = String.raw`\][ \t]*(?=\n)(?!(?:(?!\[\[)[\s\S])*?\]\s*\](?!\]))`
+/** Não há fechamento válido ("]]", "] ]", "]\n]") mais adiante antes do próximo "[[". */
+export const SEM_FECHO_ADIANTE = String.raw`(?!(?:(?!\[\[)[\s\S])*?\]\s*\](?!\]))`
+export const FECHA_NO_FIM_DA_LINHA = String.raw`\][ \t]*(?=\n)${SEM_FECHO_ADIANTE}`
 
 const MARCADOR_DE_CONTROLE =
   String.raw`\[\[\s*(?:(?:${SEM_ARGUMENTO.join('|')})\s*\](?:\s*\])?|` +
@@ -167,12 +174,19 @@ export function stripInstructionMarkers(raw: string | null | undefined): Strippe
 }
 
 /**
- * Marcadores de AÇÃO: mal fechados, a rede acima os tira do texto e a ação
- * NÃO roda (o parser de cada um, em ai/defaults.ts, só aceita "]]"). Ficam de
- * fora os que não perdem nada: RESUMO e HANDOFF já têm parser tolerante (a
- * ação roda mesmo com "] ]"), SILENT não é ação do atendimento e LEAD é da
- * captura do site. Marcador NOVO da lista acima nasce como ação — na dúvida,
- * avisa.
+ * Marcadores de AÇÃO: o que chega a esta rede mal fechado é o que o parser não
+ * conseguiu ler — e a ação NÃO roda. Ficam de fora os que não perdem nada:
+ * RESUMO e HANDOFF já têm parser tolerante (a ação roda mesmo com "] ]" ou
+ * sem fechar), SILENT não é ação do atendimento e LEAD é da captura do site.
+ * Marcador NOVO da lista acima nasce como ação — na dúvida, avisa.
+ *
+ * 02/10/2026, revisão 2: os parsers das ações (ai/defaults.ts) passaram a
+ * aceitar o MESMO fechamento errado que esta rede reconhece ("] ]", "]\n]",
+ * "]" no fim da linha, sem fechar). Quem chama roda o parseCloseDirectives
+ * ANTES desta rede, e ele tira do texto o que leu e executou; aqui só chega o
+ * que ficou sem ler: argumento fora do formato ("[[AGENDAR:amanhã 14h] ]"),
+ * "]" no meio da linha ("[[ETIQUETA:x] Olá"), ENVIAR/FERRAMENTA (parsers deles
+ * ainda exigem "]]")… Esses, sim, não rodaram — e esses avisam.
  */
 const NOMES_SEM_ACAO_PERDIDA = new Set(['resumo', 'handoff', 'silent', 'lead'])
 const ACAO_NO_INICIO = new RegExp(
@@ -192,6 +206,9 @@ const TRECHO_MAX = 160
  * marcador não roda, e antes ninguém ficava sabendo: o marcador cru no
  * WhatsApp do cliente era feio, mas pelo menos alguém via. Agora a conversa
  * ganha UMA nota por resposta dizendo o que não foi feito.
+ *
+ * Só para o que NÃO rodou (revisão 2): o mal fechado que o parser tolerante
+ * leu já saiu do texto antes desta rede — não chega aqui, não avisa.
  *
  * Recebe o que a rede removeu (StrippedText.removed, ou o que o auto-reply
  * coleta da controlMarkerRegex) e devolve o texto da nota, ou null quando não
