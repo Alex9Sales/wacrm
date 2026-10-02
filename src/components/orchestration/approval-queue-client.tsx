@@ -28,7 +28,9 @@ import {
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { MoneyInput } from '@/components/ui/money-input';
 import { cn } from '@/lib/utils';
+import { formatBrlInput, parseBrlField } from '@/lib/format/parse-brl';
 import {
   getAiBrake,
   revertQueueItem,
@@ -126,7 +128,10 @@ export function ApprovalQueueClient() {
       });
       setValues((prev) => {
         const next = { ...prev };
-        for (const it of q) if (next[it.id] === undefined && it.proposalValue) next[it.id] = String(it.proposalValue);
+        // No formato do campo ("1.028,67"): o "1028.67" cru virava 102867.
+        for (const it of q)
+          if (next[it.id] === undefined && it.proposalValue)
+            next[it.id] = formatBrlInput(Number(it.proposalValue));
         return next;
       });
       setError(null);
@@ -142,15 +147,23 @@ export function ApprovalQueueClient() {
   }, [load]);
 
   const approve = async (it: ApprovalItem) => {
+    // Valor da proposta no formato BR (02/10/2026): tirar TODOS os pontos
+    // fazia "1028.67" virar 102867; texto que não é número agora avisa em vez
+    // de aprovar sem valor.
+    const typedValue = parseBrlField(values[it.id]);
+    if (it.action === 'draft_proposal' && typedValue.invalid) {
+      toast.error(`Não entendi o valor "${(values[it.id] ?? '').trim()}". Use, por exemplo, 1.028,67.`);
+      return;
+    }
     setBusy(it.id);
     try {
-      const parsedValue = Number(String(values[it.id] ?? '').replace(/\./g, '').replace(',', '.'));
+      const parsedValue = typedValue.value;
       const r = await approveQueueItem({
         id: it.id,
         text: it.isMessage ? texts[it.id] ?? it.suggestedText : null,
         conversationId: it.isMessage ? channelSel[it.id] ?? it.defaultConversationId : null,
         proposalValue:
-          it.action === 'draft_proposal' && Number.isFinite(parsedValue) && parsedValue > 0 ? parsedValue : null,
+          it.action === 'draft_proposal' && parsedValue !== null && parsedValue > 0 ? parsedValue : null,
       });
       if (!r.ok) toast.error(r.error);
       else toast.success(it.isMessage ? 'Mensagem enviada.' : `${it.actionLabel}: feito.`);
@@ -528,13 +541,11 @@ export function ApprovalQueueClient() {
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                       <span className="text-muted-foreground">Valor da proposta:</span>
                       <span className="text-muted-foreground">R$</span>
-                      <input
-                        type="text"
-                        inputMode="decimal"
+                      <MoneyInput
                         value={values[it.id] ?? ''}
-                        onChange={(e) => setValues((v) => ({ ...v, [it.id]: e.target.value }))}
+                        onValueChange={(t) => setValues((v) => ({ ...v, [it.id]: t }))}
                         placeholder="0,00"
-                        className="h-7 w-28 rounded-md border border-border bg-background px-2 text-sm text-foreground"
+                        className="h-7 w-28 rounded-md border-border bg-background px-2 text-sm text-foreground dark:bg-background"
                       />
                       <span className="text-muted-foreground">
                         — vira 1 item &quot;{it.deal?.title ?? 'Serviço'}&quot; na proposta. Ajuste antes de aprovar.

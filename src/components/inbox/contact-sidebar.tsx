@@ -102,6 +102,9 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ContactForm } from "@/components/contacts/contact-form";
 import { DealForm } from "@/components/pipelines/deal-form";
+import { LostReasonPicker } from "@/components/pipelines/lost-reason-picker";
+import { MoneyInput } from "@/components/ui/money-input";
+import { formatBrlInput, parseBrlField } from "@/lib/format/parse-brl";
 import { ContactAvatar } from "./contact-avatar";
 import { ContactPhotoDialog } from "./contact-photo-dialog";
 import { EmailBounceBadge } from "./email-bounce-badge";
@@ -578,7 +581,9 @@ export function ContactSidebar({
       }
       setAiProposal({
         title: res.proposal.title,
-        value: res.proposal.value != null ? String(res.proposal.value) : "",
+        // Mostra no formato do campo ("1.028,67"), não "1028.67".
+        value:
+          res.proposal.value != null ? formatBrlInput(Number(res.proposal.value)) : "",
         payment: res.proposal.payment ?? "",
         address: res.proposal.address ?? "",
         summary: res.proposal.summary,
@@ -592,6 +597,13 @@ export function ContactSidebar({
   }, [conversation?.id, aiDealBusy]);
   const handleAiCreateDeal = useCallback(async () => {
     if (!conversation?.id || !aiProposal || aiDealBusy) return;
+    // Valor ajustado à mão no formato BR ("1.028,67"): Number() dava NaN e o
+    // negócio nascia sem valor, calado (02/10/2026).
+    const parsedValue = parseBrlField(aiProposal.value);
+    if (parsedValue.invalid) {
+      toast.error(`Não entendi o valor "${aiProposal.value.trim()}". Use, por exemplo, 1.028,67.`);
+      return;
+    }
     setAiDealBusy(true);
     try {
       const { createDealFromProposal } = await import(
@@ -599,7 +611,7 @@ export function ContactSidebar({
       );
       const res = await createDealFromProposal(conversation.id, {
         title: aiProposal.title,
-        value: aiProposal.value ? Number(aiProposal.value) : null,
+        value: parsedValue.value,
         payment: aiProposal.payment || null,
         address: aiProposal.address || null,
         summary: aiProposal.summary,
@@ -1109,16 +1121,13 @@ export function ContactSidebar({
                     className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground"
                   />
                   <div className="flex gap-2">
-                    <input
+                    <MoneyInput
                       value={aiProposal.value}
-                      onChange={(e) =>
-                        setAiProposal((p) =>
-                          p ? { ...p, value: e.target.value } : p,
-                        )
+                      onValueChange={(t) =>
+                        setAiProposal((p) => (p ? { ...p, value: t } : p))
                       }
                       placeholder="Valor (R$)"
-                      inputMode="decimal"
-                      className="w-24 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground"
+                      className="h-auto w-24 rounded-md border-border bg-background px-2 py-1.5 text-xs text-foreground md:text-xs dark:bg-background"
                     />
                     <input
                       value={aiProposal.payment}
@@ -1286,46 +1295,22 @@ export function ContactSidebar({
                             )}
                           </div>
                         </div>
-                        {/* Motivo da perda (mesmos chips do detalhe do negócio). */}
+                        {/* Motivo da perda — o mesmo seletor do detalhe do
+                            negócio (busca + lista com rolagem própria, 02/10/2026:
+                            com muitos motivos os chips esticavam o card). */}
                         {lostPanelDealId === deal.id && deal.status !== "lost" && (
                           <div className="space-y-2 border-t border-red-500/30 bg-red-500/5 px-3 py-2">
                             <p className="text-[11px] font-medium text-muted-foreground">
                               Por que este negócio foi perdido?
                             </p>
-                            {lostReasonOptions.length > 0 && (
-                              <div className="flex flex-wrap gap-1">
-                                {lostReasonOptions.map((r) => (
-                                  <button
-                                    key={r}
-                                    type="button"
-                                    onClick={() => setLostReasonText(r)}
-                                    className={cn(
-                                      "rounded-full border px-2 py-0.5 text-[10px] transition-colors",
-                                      lostReasonText === r
-                                        ? "border-red-500 bg-red-500/20 text-red-500"
-                                        : "border-border text-muted-foreground hover:bg-muted",
-                                    )}
-                                  >
-                                    {r}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                            {lostReasonsLocked &&
-                              lostReasonOptions.length === 0 && (
-                                <p className="text-[10px] text-muted-foreground">
-                                  Lista de motivos fechada e vazia — cadastre
-                                  em <strong>Configurações → Negócios</strong>.
-                                </p>
-                              )}
-                            {!lostReasonsLocked && (
-                              <input
-                                value={lostReasonText}
-                                onChange={(e) => setLostReasonText(e.target.value)}
-                                placeholder="Ou escreva um motivo novo"
-                                className="h-7 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-red-400"
-                              />
-                            )}
+                            <LostReasonPicker
+                              size="sm"
+                              reasons={lostReasonOptions}
+                              locked={lostReasonsLocked}
+                              loading={!lostReasonsLoaded}
+                              value={lostReasonText}
+                              onChange={setLostReasonText}
+                            />
                             <div className="flex items-center gap-1.5">
                               <button
                                 type="button"

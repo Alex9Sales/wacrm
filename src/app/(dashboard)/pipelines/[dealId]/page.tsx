@@ -120,6 +120,9 @@ import {
   saveContactCustomValues,
 } from "@/app/(dashboard)/contacts/actions";
 import { CustomFieldInput } from "@/components/contacts/custom-field-input";
+import { MoneyInput } from "@/components/ui/money-input";
+import { LostReasonPicker } from "@/components/pipelines/lost-reason-picker";
+import { formatBrlInput, parseBrl, parseBrlField } from "@/lib/format/parse-brl";
 import { DealAskAI } from "@/components/pipelines/deal-ask-ai";
 import { DealAISuggestions } from "@/components/pipelines/deal-ai-suggestions";
 
@@ -361,7 +364,15 @@ export default function DealDetailPage() {
     setEmailThread(emThread);
     setEmailChannelAvail(emAvail);
     if (pp.data) {
-      setPropDiscount(pp.data.fields.discount ? String(pp.data.fields.discount) : "");
+      // No formato do campo ("1.028,67" / "12,5"), não "1028.67".
+      setPropDiscount(
+        pp.data.fields.discount
+          ? formatBrlInput(
+              Number(pp.data.fields.discount),
+              pp.data.fields.discountType === "percent" ? 0 : 2,
+            )
+          : "",
+      );
       setPropDiscountType(pp.data.fields.discountType);
       setPropValidUntil(pp.data.fields.validUntil ?? "");
       setPropTerms(pp.data.fields.terms ?? "");
@@ -500,7 +511,8 @@ export default function DealDetailPage() {
           unitPrice: p.unit_price,
           subtotal: p.quantity * p.unit_price,
         })),
-        parseFloat(propDiscount) || 0,
+        // Formato BR ("1.028,67"): parseFloat lia 1.028 (02/10/2026).
+        parseBrl(propDiscount) ?? 0,
         propDiscountType,
       ),
     [products, propDiscount, propDiscountType],
@@ -508,10 +520,17 @@ export default function DealDetailPage() {
 
   const saveProposal = useCallback(async (): Promise<string | null> => {
     if (!dealId) return null;
+    // Desconto que não é número trava com aviso (antes virava 0 calado e a
+    // proposta saía sem o desconto combinado).
+    const disc = parseBrlField(propDiscount);
+    if (disc.invalid) {
+      toast.error(`Não entendi o desconto "${propDiscount.trim()}". Use, por exemplo, 150,00 ou 12,5.`);
+      return null;
+    }
     const wasNew = !propUrl;
     setSavingProp(true);
     const res = await saveDealProposal(dealId, {
-      discount: parseFloat(propDiscount) || 0,
+      discount: disc.value ?? 0,
       discountType: propDiscountType,
       validUntil: propValidUntil || null,
       terms: propTerms || null,
@@ -585,11 +604,18 @@ export default function DealDetailPage() {
     if (!deal || addingProduct) return;
     const name = prodName.trim();
     if (!name) return;
+    // Preço no formato BR ("1.028,67"); texto que não é número avisa em vez
+    // de entrar como R$ 0 (02/10/2026).
+    const price = parseBrlField(prodPrice);
+    if (price.invalid) {
+      toast.error(`Não entendi o preço "${prodPrice.trim()}". Use, por exemplo, 1.028,67.`);
+      return;
+    }
     setAddingProduct(true);
     const { error } = await addDealProduct(deal.id, {
       name,
       quantity: parseFloat(prodQty) || 1,
-      unit_price: parseFloat(prodPrice) || 0,
+      unit_price: price.value ?? 0,
     });
     if (error) toast.error(error);
     else {
@@ -762,8 +788,8 @@ export default function DealDetailPage() {
   // Motivo de perda (estilo RD): "Marcar perda" abre o campo do porquê.
   const [lostOpen, setLostOpen] = useState(false);
   const [lostReason, setLostReason] = useState("");
-  // Chips = motivos da CONTA. Com a lista FECHADA (Config→Negócios), o
-  // texto livre some e é obrigatório escolher um chip.
+  // Motivos da CONTA (LostReasonPicker). Com a lista FECHADA
+  // (Config→Negócios), o texto livre some e é obrigatório escolher um.
   const [reasonOptions, setReasonOptions] = useState<string[]>([]);
   const [reasonsLocked, setReasonsLocked] = useState(false);
   const [reasonsLoaded, setReasonsLoaded] = useState(false);
@@ -1022,44 +1048,26 @@ export default function DealDetailPage() {
         </div>
       </header>
 
-      {/* Motivo da perda (estilo RD) — aparece ao clicar "Marcar perda". */}
+      {/* Motivo da perda (estilo RD) — aparece ao clicar "Marcar perda".
+          Busca + lista com rolagem própria (02/10/2026): com muitos motivos
+          os chips empurravam o "Confirmar perda" pra baixo da dobra. */}
       {lostOpen && status !== "lost" && (
         <div className="space-y-2 border-b border-red-500/30 bg-red-500/5 px-4 py-3">
           <p className="text-xs font-medium text-muted-foreground">
             Por que este negócio foi perdido?
           </p>
-          <div className="flex flex-wrap gap-1.5">
-            {reasonOptions.map((r) => (
-              <button
-                key={r}
-                type="button"
-                onClick={() => setLostReason(r)}
-                className={cn(
-                  "rounded-full border px-2.5 py-0.5 text-xs transition-colors",
-                  lostReason === r
-                    ? "border-red-500 bg-red-500/20 text-red-500"
-                    : "border-border text-muted-foreground hover:bg-muted",
-                )}
-              >
-                {r}
-              </button>
-            ))}
+          <div className="max-w-xl">
+            <LostReasonPicker
+              reasons={reasonOptions}
+              locked={reasonsLocked}
+              loading={!reasonsLoaded}
+              value={lostReason}
+              onChange={setLostReason}
+              freeTextPlaceholder="Ou escreva um motivo novo — ele vira opção pra próxima"
+              autoFocus
+            />
           </div>
-          {reasonsLocked && reasonOptions.length === 0 && (
-            <p className="text-xs text-muted-foreground">
-              A lista de motivos está fechada e vazia — cadastre os motivos em{" "}
-              <strong>Configurações → Negócios</strong>.
-            </p>
-          )}
           <div className="flex items-center gap-2">
-            {!reasonsLocked && (
-              <Input
-                value={lostReason}
-                onChange={(e) => setLostReason(e.target.value)}
-                placeholder="Ou escreva um motivo novo — ele vira opção pra próxima"
-                className="h-8 flex-1 border-border bg-background text-sm"
-              />
-            )}
             <Button
               size="sm"
               disabled={busy || (reasonsLocked && !lostReason)}
@@ -1502,7 +1510,7 @@ export default function DealDetailPage() {
                           onMouseDown={(e) => {
                             e.preventDefault();
                             setProdName(c.name);
-                            setProdPrice(c.unit_price ? String(c.unit_price) : "");
+                            setProdPrice(c.unit_price ? formatBrlInput(c.unit_price) : "");
                             setShowCatalog(false);
                           }}
                           className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
@@ -1526,14 +1534,12 @@ export default function DealDetailPage() {
                 placeholder="Qtd"
                 className="w-16 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
               />
-              <input
+              {/* Texto + teclado decimal: aceita "1.028,67" (02/10/2026). */}
+              <MoneyInput
                 value={prodPrice}
-                onChange={(e) => setProdPrice(e.target.value)}
-                type="number"
-                min="0"
-                step="0.01"
+                onValueChange={setProdPrice}
                 placeholder="Preço un."
-                className="w-24 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
+                className="h-auto w-24 rounded-lg border-border bg-background px-2.5 py-1.5 text-sm text-foreground focus-visible:border-primary/50 focus-visible:ring-0 dark:bg-background"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") void submitProduct();
                 }}
@@ -1828,15 +1834,14 @@ export default function DealDetailPage() {
                         Desconto
                       </label>
                       <div className="mt-1 flex items-stretch gap-1">
-                        <Input
-                          type="number"
-                          min={0}
-                          step="0.01"
-                          inputMode="decimal"
+                        {/* Texto + teclado decimal: aceita "150,00" e "12,5"
+                            (o type="number" recusava a vírgula). */}
+                        <MoneyInput
                           placeholder="0"
                           value={propDiscount}
-                          onChange={(e) => {
-                            setPropDiscount(e.target.value);
+                          minFractionDigits={propDiscountType === "percent" ? 0 : 2}
+                          onValueChange={(t) => {
+                            setPropDiscount(t);
                             setPropDirty(true);
                           }}
                           className="flex-1"
@@ -1907,7 +1912,7 @@ export default function DealDetailPage() {
                         <span>
                           Desconto
                           {propDiscountType === "percent"
-                            ? ` (${parseFloat(propDiscount) || 0}%)`
+                            ? ` (${formatBrlInput(parseBrl(propDiscount) ?? 0, 0)}%)`
                             : ""}
                         </span>
                         <span>

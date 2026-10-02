@@ -45,3 +45,19 @@ export function sortReasons(reasons: string[]): string[] {
     return a.localeCompare(b, 'pt-BR', { sensitivity: 'base' })
   })
 }
+
+/**
+ * Filtro da busca do seletor de motivos (02/10/2026, Rafael: conta com muitos
+ * motivos, a fila de "chips" fazia o "Confirmar perda" crescer até sumir da
+ * tela). Sem caixa e sem acento ("nao" acha "Não responde"); cada palavra da
+ * busca tem que aparecer, em qualquer ordem ("inc cad" acha "Cadastro
+ * incompleto"). Mantém a ORDEM recebida — a lista já chega em `sortReasons`.
+ */
+export function filterReasons(reasons: string[], query: string): string[] {
+  const words = canonReason(query).split(/\s+/).filter(Boolean)
+  if (words.length === 0) return reasons
+  return reasons.filter((r) => {
+    const c = canonReason(r)
+    return words.every((w) => c.includes(w))
+  })
+}

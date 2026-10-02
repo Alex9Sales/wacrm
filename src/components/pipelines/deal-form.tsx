@@ -42,6 +42,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { MoneyInput } from "@/components/ui/money-input";
+import { LostReasonPicker } from "@/components/pipelines/lost-reason-picker";
+import { formatBrlInput, parseBrlField } from "@/lib/format/parse-brl";
 import {
   Check,
   X,
@@ -164,8 +167,8 @@ export function DealForm({
   // Motivo de perda (estilo RD): ao marcar perda, pede o porquê.
   const [lostReasonOpen, setLostReasonOpen] = useState(false);
   const [lostReason, setLostReason] = useState("");
-  // Chips = motivos da CONTA. Lista FECHADA (Config→Negócios) = sem texto
-  // livre, chip obrigatório.
+  // Motivos da CONTA (LostReasonPicker). Lista FECHADA (Config→Negócios) =
+  // sem texto livre, motivo obrigatório.
   const [reasonOptions, setReasonOptions] = useState<string[]>([]);
   const [reasonsLocked, setReasonsLocked] = useState(false);
   const [reasonsLoaded, setReasonsLoaded] = useState(false);
@@ -238,7 +241,8 @@ export function DealForm({
     setOtherStages(null);
     if (deal) {
       setTitle(deal.title);
-      setValue(String(deal.value ?? ""));
+      // Já abre no formato que o campo mostra ("1.028,67"), não "1028.67".
+      setValue(deal.value ? formatBrlInput(Number(deal.value)) : "");
       setCurrency(deal.currency || defaultCurrency);
       // contact_id is nullable when the contact has been deleted
       // (migration 004: ON DELETE SET NULL). "" means "no selection".
@@ -339,11 +343,19 @@ export function DealForm({
       toast.error("Título, contato e etapa são obrigatórios");
       return;
     }
+    // Valor no formato brasileiro (02/10/2026): parseFloat lia "1.028,67"
+    // como 1.028 e gravava errado sem avisar. Texto que não é número agora
+    // trava o salvar com aviso, em vez de virar 0 calado.
+    const parsedValue = parseBrlField(value);
+    if (parsedValue.invalid) {
+      toast.error(`Não entendi o valor "${value.trim()}". Use, por exemplo, 1.028,67.`);
+      return;
+    }
     setSaving(true);
 
     const payload = {
       title: title.trim(),
-      value: parseFloat(value) || 0,
+      value: parsedValue.value ?? 0,
       currency,
       contact_id: contactId,
       pipeline_id: formPipelineId,
@@ -576,7 +588,9 @@ export function DealForm({
                                   onMouseDown={(e) => {
                                     e.preventDefault();
                                     setValue(
-                                      p.unit_price ? String(p.unit_price) : "",
+                                      p.unit_price
+                                        ? formatBrlInput(p.unit_price)
+                                        : "",
                                     );
                                     if (!title.trim()) setTitle(p.name);
                                     setProdQuery(p.name);
@@ -611,11 +625,11 @@ export function DealForm({
                 <Label className="text-muted-foreground">Valor</Label>
                 <div className="relative">
                   <DollarSign className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    type="number"
+                  {/* Texto + teclado decimal: aceita "1.028,67" colado. */}
+                  <MoneyInput
                     value={value}
-                    onChange={(e) => setValue(e.target.value)}
-                    placeholder="0"
+                    onValueChange={setValue}
+                    placeholder="0,00"
                     className="border-border bg-muted pl-7 text-foreground"
                   />
                 </div>
@@ -904,42 +918,23 @@ export function DealForm({
                   </Button>
                 </div>
 
-                {/* Motivo da perda (estilo RD) — aparece ao clicar "perdido". */}
+                {/* Motivo da perda (estilo RD) — aparece ao clicar "perdido".
+                    Busca + lista com rolagem própria (02/10/2026): com muitos
+                    motivos os chips esticavam o painel. */}
                 {lostReasonOpen && (
                   <div className="space-y-2 rounded-md border border-red-500/30 bg-red-500/5 p-2.5">
                     <Label className="text-xs text-muted-foreground">
                       Motivo da perda
                     </Label>
-                    <div className="flex flex-wrap gap-1.5">
-                      {reasonOptions.map((r) => (
-                        <button
-                          key={r}
-                          type="button"
-                          onClick={() => setLostReason(r)}
-                          className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
-                            lostReason === r
-                              ? "border-red-500 bg-red-500/20 text-red-300"
-                              : "border-border text-muted-foreground hover:bg-muted"
-                          }`}
-                        >
-                          {r}
-                        </button>
-                      ))}
-                    </div>
-                    {reasonsLocked && reasonOptions.length === 0 && (
-                      <p className="text-xs text-muted-foreground">
-                        Lista de motivos fechada e vazia — cadastre em{" "}
-                        <strong>Configurações → Negócios</strong>.
-                      </p>
-                    )}
-                    {!reasonsLocked && (
-                      <Input
-                        value={lostReason}
-                        onChange={(e) => setLostReason(e.target.value)}
-                        placeholder="Ou escreva o motivo…"
-                        className="h-8 border-border bg-muted text-sm text-foreground"
-                      />
-                    )}
+                    <LostReasonPicker
+                      reasons={reasonOptions}
+                      locked={reasonsLocked}
+                      loading={!reasonsLoaded}
+                      value={lostReason}
+                      onChange={setLostReason}
+                      freeTextPlaceholder="Ou escreva o motivo…"
+                      autoFocus
+                    />
                     <Button
                       type="button"
                       onClick={() => handleStatusChange("lost", lostReason)}
